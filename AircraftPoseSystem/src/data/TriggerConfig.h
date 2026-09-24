@@ -1,0 +1,58 @@
+#pragma once
+
+// ============================================================================
+//  src/data/TriggerConfig.h
+//
+//  依据：ENG-09 §4.1、§6.4（类型定义冻结）、§2.5（时间戳）
+//        SYS-08 §7.5（触发降级）、SYS-09 §13（同步）
+//
+//  作用：三相机同步触发的配置。本系统的多相机闭环测量**要求三路图像
+//  属于同一时刻**（MultiCameraFrame 的语义前提），触发配置就是兑现
+//  这个前提的手段。
+//
+//  ⚠ source 冻结为 std::string 而非枚举：取值 "hardware" | "virtual"，
+//  与 TurntableConfig::protocol 同理，加载时必须白名单校验。
+//
+//  ⚠ 硬触发失效的处理（SYS-08 §7.5，冻结）：
+//  降级为软触发并置 kErrTriggerDegraded(3001)，**继续测量**而不是失败。
+//  代价是同步精度下降 —— 软触发下三路时间戳的散布会显著大于硬触发，
+//  因此 syncToleranceNs 的判据在降级后可能频繁不满足。
+//  这一权衡是有意的：宁可给出精度下降的结果并明确标记（degraded），
+//  也不因为一个可控的硬件问题让整个任务失败。
+// ============================================================================
+
+#include <cstdint>
+#include <string>
+
+namespace aircraft
+{
+namespace data
+{
+
+/// 触发配置（ENG-09 §6.4）。
+struct TriggerConfig
+{
+    /// 触发源："hardware" | "virtual"。
+    std::string source;
+
+    /// 触发周期，单位 **ms**（ENG-09 §6.4 冻结为 ms，注意与
+    /// 时间戳字段的 ns 不同 —— 本结构体内混用两种时间单位，
+    /// 是有意的：周期是人对硬件的设定值，ns 是内核时钟的读数）。
+    double periodMs = 0.0;
+
+    /// 三相机时间戳允许的最大偏差，单位 **ns**（主机 CLOCK_MONOTONIC）。
+    ///
+    /// 判据：max(timestampNs) − min(timestampNs) <= syncToleranceNs。
+    /// 超差时本轮多相机帧**不可用于测量**（三个视角不是同一时刻的，
+    /// 合成的姿态会含有一个虚假的角速度贡献）。
+    ///
+    /// ⚠ 必须用 CLOCK_MONOTONIC 而非墙钟（ENG-09 §2.5）：
+    /// 墙钟在 NTP 校正时会发生阶跃，一次校正就能制造出数十秒的
+    /// 假偏差，使本来同步良好的帧被判为不同步；更糟的是
+    /// 反向情形——两次分别校时的读取可能恰好抵消，
+    /// 让真正不同步的帧通过判据。
+    uint64_t syncToleranceNs = 0;
+};
+
+}  // namespace data
+}  // namespace aircraft

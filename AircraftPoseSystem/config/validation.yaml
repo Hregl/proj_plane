@@ -1,0 +1,37 @@
+%YAML:1.0
+# ============================================================================
+#  config/validation.yaml  —— 结果验证阈值（VALIDATE 状态的判据）
+#
+#  依据：SYS-04 §6.4（ValidationConfig 的阈值直接决定"结果是否有效"，
+#        故必须随结果包快照保存）、ValidationConfig.h、SYS-15（误差预算）
+#
+#  ⚠ 这四个阈值的作用与评分权重不同：它们是**判定**（有效/无效），
+#    不是加权项。判据形式（PoseValidator）：
+#       reprojectionError <= max_reprojection_error
+#       inlierRatio       >= min_inlier_ratio
+#       confidence        >= min_confidence
+#       yaw ∈ [yaw_min, yaw_max]
+#
+#  ⚠ 越界即启动失败（ENG-10 §5.3）：
+#    max_reprojection_error = 0 → 判据 `error <= 0` 对任何实际解算恒假；
+#    min_* 超出 [0,1] → 判据恒真或恒假。两者都会让 VALIDATE 变成一个
+#    与图像质量无关的常数，而 FAILED 的错误码会指向算法而非配置。
+#
+#  ⚠ 数值**占位**：SYS-15 §4 的误差合成（1 角分指标，合成余量 3%）
+#    给出的是分量级预算，未直接冻结这四个阈值。当前取值偏松，
+#    目的是先让 M1 闭环能走到 COMPLETE；与实测标定一同收紧。
+# ============================================================================
+
+---
+validation:
+   # 重投影误差上限（pixel）。判据：<=
+   max_reprojection_error: 2.0
+   # 内点比例下限，[0,1]。判据：>=
+   min_inlier_ratio: 0.3
+   # 验证置信度下限，[0,1]。判据：>=
+   min_confidence: 0.3
+   # Yaw 允许区间（deg）。判据：∈ [min, max]
+   # 取 ±5°：本项验证的是"解算没有跑到明显错误的姿态上"，
+   # 不是精度指标 —— 精度由 SYS-15 的误差预算约束。
+   yaw_min: -5.0
+   yaw_max: 5.0

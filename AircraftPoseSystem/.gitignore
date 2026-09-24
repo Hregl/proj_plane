@@ -1,0 +1,114 @@
+# ============================================================================
+#  .gitignore —— AircraftPoseSystem V2.1
+#
+#  依据：ENG-03 §18（编译流程：mkdir build / cd build / cmake ..）、
+#        ENG-01 §16（deploy 目录）、ENG-07（Git 版本管理规范）
+#
+#  原则：只忽略**可由源码重新生成**的东西，以及**体积大且机器相关**的产物。
+#        标定数据（calibration/）与目标模型（models/）**不忽略**——它们是
+#        五元组基线中"标定版本""模型版本"的载体（ENG-09 §6.8），必须随
+#        代码一起版本化，否则测出的姿态无法复现。
+# ============================================================================
+
+# ---------- 构建产物 ----------
+build/
+build-*/
+cmake-build-*/
+install_check/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+Makefile
+*.make
+compile_commands.json
+
+# ---------- 安装/交付产物（ENG-03 §17：由 cmake --install 生成）----------
+deploy/bin/
+deploy/lib/
+deploy/logs/
+doc/html/
+
+# ---------- 编译中间件 ----------
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.d
+*.gch
+*.pch
+*.lo
+*.la
+.libs/
+
+# ---------- 可执行文件（无扩展名，按名字排除）----------
+AircraftPoseSystem
+
+# ---------- Qt ----------
+*.moc
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.qmlc
+*.jsc
+.qmake.stash
+
+# ---------- 测试与覆盖率 ----------
+test_detail.xml
+*.gcda
+*.gcno
+*.gcov
+coveralls/
+coverage/
+
+# ---------- 编辑器 / IDE ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cache/
+.clangd/
+
+# ---------- 操作系统 ----------
+.DS_Store
+Thumbs.db
+
+# ---------- 日志与临时文件 ----------
+*.log
+logs/
+*.tmp
+*~
+core
+core.*
+
+# ---------- 第三方设备 SDK（评审 2026-09-23 裁决：不入源码版本管理）----------
+#
+# 只忽略 **SDK 解包树本身**（third_party/imvsdk/），**不忽略** third_party/ 下的
+# 其它内容 —— 特别是 third_party/README.md：它记录 SDK 的名称/版本/来源/安装方式/
+# 校验信息，是**必须随代码版本化**的台账（评审原话："保留 third_party/README.md"）。
+#
+# 理由（评审原话）："SDK 通常涉及：授权；厂商文件；平台绑定。"
+# 因此 third_party/imvsdk/ 只作为**本机开发环境**存在，由开发者按下述命令
+# 自行解包（**不执行**厂商 install.sh）：
+#     sh MVviewer_Ver2.7.0.1_Linux_x86_Build20260709.run --noexec --nochown \
+#        --target third_party/imvsdk \
+#        --exclude='./lib/m64x86/Qt' ./include ./lib/m64x86 ./module ./share/C ./license
+# 解包与核验结论见 third_party/README.md 与 cmake/FindImvSdk.cmake 的文件头。
+third_party/imvsdk/
+
+# ---------- 运行期统计（ENG-10 §4.1：runtime/match_stats.yaml）----------
+#
+# 刻意忽略：该文件是**运行过程中增长**的统计量，不是配置。
+#   · 它记录历史匹配成功率（36 桶的 attempts/successes），随每次任务变化；
+#   · 提交它会把"某台机器上跑过多少次"混进版本库，且与
+#     ENG-09 §6.8"配置任务内冻结"的语义冲突（ENG-01 §11 已说明它为什么
+#     不能放进 config/）；
+#   · 它的**内容**通过 config_snapshot 随每次测量结果一起归档
+#     （ENG-10 §4.4），因此可复现性不依赖版本库中的这份副本。
+runtime/
+match_stats.yaml

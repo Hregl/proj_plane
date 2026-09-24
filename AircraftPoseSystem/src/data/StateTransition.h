@@ -1,0 +1,64 @@
+#pragma once
+
+// ============================================================================
+//  src/data/StateTransition.h
+//
+//  依据：裁决 C-007（V2.1-C01_架构裁决变更说明.md §C-007，2026-09-23 已批准）
+//        SYS-08 §4（状态定义）、§7.6（迁移出口）
+//        ENG-09 §5.8（MeasurementState）
+//
+//  作用：状态机**一次迁移**的记录，是 FailureTrace::history 的元素。
+//
+//  ⚠ 为什么需要它（而不是只记一个终态）：
+//  现场最需要回答的问题**不是**"最后报了什么错"，而是"**过程走到哪一步、按什么
+//  顺序走的**"。例如同一个 9002（回退预算用尽）终态，可能来自
+//      SEARCH → TARGET_FOUND → POSE_SOLVE → CAPTURE → MEASURE_SELECT → FAILED
+//  也可能来自
+//      SEARCH → FAILED
+//  两者的**处置方向完全相反**（前者是算法/模型问题，后者是搜索阶段就没找到）。
+//  只记终态时这两次故障在日志里长得一模一样。
+//
+//  ⚠ 为什么不存字符串（如 "SEARCH -> TARGET_FOUND"）：
+//  ENG-09 §5.27 对错误码的禁令同理由 —— 字符串是**人读**格式，机读逻辑一旦
+//  依赖它，格式微调（空格、大小写、改名）就会静默改变判定结果，且编译器
+//  不会报错。结构化字段 + 具名枚举让这类改动变成编译期可见的差异。
+//
+//  ⚠ error 字段在**正常前进时为 0**（code == 0 即"未设置"，ENG-09 §5.27）。
+//  把它记为失败专属而非"每次迁移都塞一个码"，是为了让 history 里
+//  "哪一次迁移是失败引起的"无需靠相邻元素推断。
+// ============================================================================
+
+#include <cstdint>
+
+#include "data/ErrorInfo.h"
+#include "data/MeasurementState.h"
+
+namespace aircraft
+{
+namespace data
+{
+
+/// 状态机的一次迁移记录（裁决 C-007）。
+struct StateTransition
+{
+    /// 迁移前的状态。
+    MeasurementState from = MeasurementState::IDLE;
+
+    /// 迁移后的状态。
+    MeasurementState to = MeasurementState::IDLE;
+
+    /// 迁移发生时刻，单位 ns，主机 CLOCK_MONOTONIC（ENG-09 §2.5）。
+    /// **禁止使用墙钟**：墙钟受 NTP 校时影响，会让迁移间隔出现负值或跳跃，
+    /// 而这里的用途恰恰是还原**耗时分布**（哪个状态反复重入、每次停留多久）。
+    uint64_t timestampNs = 0;
+
+    /// 触发本次迁移的错误；正常前进时为 0（code == 0）。
+    ///
+    /// 注意它**不是**"进入 to 状态时已知的错误"，而是"导致这次迁移的错误"：
+    /// 例如 CAPTURE → MEASURE_SELECT 的回退迁移，error 记的是 CAPTURE
+    /// 失败的原因，而非 MEASURE_SELECT 的任何属性。
+    ErrorInfo error;
+};
+
+}  // namespace data
+}  // namespace aircraft

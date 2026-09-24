@@ -1,0 +1,53 @@
+# ============================================================================
+#  仓库根 .gitignore —— proj_plane/
+#
+#  依据：ENG-07《Git版本管理规范》§2（Git管理原则）、§3（Git管理对象）、§18（涉密环境管理）
+#
+#  本仓库根 = proj_plane/，含两个顶层目录：
+#      AircraftPoseSystem/     工程源码（其内部另有自己的 .gitignore，见下）
+#      项目文档/               冻结设计文档（ENG-* / SYS-*）
+#
+#  ⚠ 本文件只处理**仓库根这一层**的东西。`AircraftPoseSystem/` 子树由
+#    `AircraftPoseSystem/.gitignore` 负责（build/、third_party/imvsdk/、logs/ 等），
+#    git 会自动读取嵌套的 .gitignore，两处不重复。
+# ============================================================================
+
+# ---------- 厂商 SDK 分发物（ENG-07 §3 / 评审 2026-09-23 裁决）----------
+#
+# ⚠ 排除理由与 `third_party/imvsdk/` 完全相同：**授权；厂商文件；平台绑定**。
+#   评审原话："SDK 通常涉及：授权；厂商文件；平台绑定。"
+#
+# 这里装的是华睿 MVviewer 客户端**安装包本体**（81 MB Makeself 自解压包）
+# 与随包的 4 份 docx 手册 —— 都是厂商分发物，既不该进版本库，也不该外传。
+# 开发者自行向厂商获取后按 `AircraftPoseSystem/third_party/README.md` §1.3
+# 解包到 `AircraftPoseSystem/third_party/imvsdk/`（该目录同样已被忽略）。
+sdk/
+
+# ---------- 文档归档副本 ----------
+#
+# `项目文档/` 已按"一文件一版"纳入版本管理，这份 .7z 是它的压缩副本。
+# 二者内容重叠且 7z 是二进制，无法 diff / 无法审阅，留在库里只会产生
+# "哪一份才是当前版本"的歧义。故排除。
+项目文档.7z
+
+# ---------- 编辑器状态 ----------
+#
+# `AircraftPoseSystem/.gitignore` 已排除工程内的 .vscode/；根这一层同理。
+# ⚠ 附带理由：本目录的 `.vscode/settings.json` 含**本机绝对路径**
+#   （`cmake.sourceDirectory`），属于机器相关配置，本就不应入库。
+.vscode/
+.idea/
+*.swp
+*.swo
+.cache/
+.clangd/
+
+# ---------- 操作系统 ----------
+.DS_Store
+Thumbs.db
+
+# ---------- 临时文件 ----------
+*.tmp
+*~
+core
+core.*

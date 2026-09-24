@@ -1,0 +1,110 @@
+%YAML:1.0
+# ============================================================================
+#  config/measurement.yaml  —— 测量策略、评分权重与重试预算
+#
+#  依据：SYS-08 §7（重试与超时，唯一数据源）、ENG-09 §6.5（captureFrameCount
+#        约定范围）、ENG-10 §3（评分式）、§4（历史匹配率分桶）、
+#        MeasurementConfig.h（字段、单位与各值的来源）
+#
+#  ⚠ 本文件里**超时与重试次数是冻结值**（SYS-08 §7.2/§7.3），
+#    不是可随意调的参数：三级时限必须保持
+#        T_task(60 s) > T_state > T_device
+#    ConfigManager 逐项校验"每个状态超时 < task_timeout_ns"，违反即启动
+#    失败 —— 因为某个状态超时 ≥ T_task 时它的超时永远不会触发，
+#    任务会先撞 T_task 并以 9001 结束，该状态专属错误码
+#    （如 2003 对准重试耗尽）永远无法产生。
+#
+#  ⚠ 书写：ns 一律科学计数法（见 system.yaml 的书写约定）。
+#    朴素整数 60000000000 会被截断为 -129542144 且不报错。
+#
+#  ⚠ **本文件中标注"占位"的项尚未标定**，不影响启动（合法性校验通过），
+#    但会使测量结果不具精度意义：评分权重 w1~w4 与门槛值须由
+#    Golden 数据标定（ENG-10 §3.5），sigma_a/b/c 须离线拟合。
+#    未标定的后果在 result.json 的 predictedErrorCalibrated 字段中可见。
+# ============================================================================
+
+---
+measurement:
+   # ---- 评分权重（ENG-10 §3）：Score = w1·Q + w2·F + w3·M − w4·E ----
+   # 四分量加权前各自归一化到 [0,1]（ENG-10 §3.6）。
+   # **占位值**：ENG-10 要求权重"必须由 measurement.yaml 提供"，
+   # 但未冻结具体数值。此处取和为 1 的一组，作为 M1 闭环的可用初值；
+   # 标定后替换。全为 0 会被判为越界（评分恒 0 → 退化为永远选第一个候选）。
+   w1: 0.35
+   w2: 0.25
+   w3: 0.20
+   w4: 0.20
+   # ---- 候选硬门槛（SYS-14 §6）：不满足者不进入评分 ----
+   # 这三项是 gating，不是加权项。**占位值**（宽松，先保证闭环能走通）。
+   # min_sharpness 的单位是 Laplacian 方差（ImageQuality::sharpness 的
+   # 注释允许"Laplacian 方差或梯度能量"），冻结文档未给出具体界值。
+   min_sharpness: 1.0
+   # 目标像素尺寸下限（pixel），对应 TargetScaleEstimate::targetPixelSize
+   min_target_pixel_size: 8.0
+   # 特征点数量下限（门槛）。注意与 n_ref 的区别：这个是"不够就淘汰"。
+   min_feature_count: 8
+   # 匹配比例下限，[0,1]
+   min_match_ratio: 0.05
+   # ---- CAPTURE 阶段采集帧数（ENG-09 §6.5 约定 5~10）----
+   # 多帧用于随机误差平均（1/√N）。5 → 10 可再降约 30%。
+   capture_frame_count: 5
+   # ---- 任务级时限 T_task（SYS-08 §7.1/§7.2，冻结）----
+   task_timeout_ns: 6.0e10        # 60 s
+   # ---- 各状态时限（SYS-08 §7.2，冻结）----
+   search_timeout_ns: 5.0e8       # 0.5 s  （SEARCH 重试不设上限，仅由 T_task 约束）
+   target_found_timeout_ns: 2.0e8 # 0.2 s
+   align_timeout_ns: 2.5e9        # 2.5 s  （对准是耗时最长的状态：转台物理运动）
+   stabilize_timeout_ns: 3.0e9    # 3.0 s  （等转台静止与振动衰减，衰减时间由结构决定）
+   select_timeout_ns: 3.0e8       # 0.3 s
+   capture_timeout_ns: 1.5e9      # 1.5 s  （含 capture_frame_count 帧采集）
+   solve_timeout_ns: 3.0e9        # 3.0 s
+   validate_timeout_ns: 1.0e8     # 0.1 s
+   save_timeout_ns: 1.0e9         # 1.0 s  （含图像写入与 match_stats 落盘）
+   # ---- 各状态最大尝试次数（SYS-08 §7.3，冻结）----
+   # 非 SEARCH 状态合计 37.8 s < T_task 60 s（SYS-08 §7.2 预算）。
+   # ALIGN 次数是**唯一数据源**（裁决 C-20：原 TurntableConfig::maxIterations
+   # 已删除，改由本字段承担）。
+   max_align_attempts: 8
+   max_solve_attempts: 2
+   max_validate_attempts: 2     # 上限受相机数量约束：VAL-2 重试需切换备用相机
+   max_select_attempts: 3
+   max_capture_attempts: 3
+   max_save_attempts: 3
+   # ---- 回退预算（SYS-08 §7.4，冻结）----
+   # 两个预算并存：只留 total 时回退可在两状态间反复弹跳（A→B→A→B），
+   # 每次都消耗总量且看起来都在"前进"；每边上限把振荡在第二次切断。
+   max_rollback_total: 4
+   max_rollback_per_edge: 2
+   # ---- E 项 predictor 系数（ENG-10 §3.2/§3.5）----
+   #   σ_px_est = a + b·(1/S) + c·(1/C)，S=清晰度 C=对比度
+   # a,b,c 须由 Golden 数据离线标定。**全 0 = 未标定**（当前状态）：
+   # 此时 E 恒为 0、eNorm 恒为 1，评分只看 Q/F/M，
+   # MeasurementCandidate::predictedErrorCalibrated 置 false，
+   # 启动时会打出 WARN 并在 result.json 中体现。
+   sigma_a: 0.0
+   sigma_b: 0.0
+   sigma_c: 0.0
+   # 未标定时的保守回退值（pixel）。取偏大值是有意的：E 是减分项，
+   # σ_px 偏大 → E 偏大 → 得分偏低 → 候选被系统性低估；
+   # 反过来会让"实际定位很差"的候选被选中，代价不对称。
+   sigma_px_fallback: 0.5
+   # ---- 评分归一化参考值（ENG-10 §3.6）----
+   # F = min(1, nDetect/nRef)。100 是满足 0.20 角分所需特征点数的校核值
+   # （SYS-15 §4.5），即"再多也没有边际收益"的饱和点。
+   n_ref: 100.0
+   # ---- 历史匹配成功率分桶（ENG-10 §4.2，边界冻结）----
+   # 结构：按 model_id 分组，每组 3 角色 × 4 距离带 × 3 光照带 = 36 桶。
+   # N_min 是收缩估计的样本数门槛（非硬截断，避免第 9/10 次观测间跳变）。
+   match_stats_min_samples: 10
+   # 空表先验。取 0.5 使冷启动时 M 分项对所有候选等价 ——
+   # 既然不知道哪台相机历史上匹配得好，就不应让它影响决策。
+   match_stats_cold_start_prior: 0.5
+   # 距离带边界（m，共 3 个边界界定 4 个带）：
+   #   [0,80) / [80,150) / [150,220) / [220,300+)
+   # 与 40~300 m 工作范围对应，边界取在量程约 1/4、1/2、3/4 处。
+   distance_band_edges: [ 80.0, 150.0, 220.0 ]
+   # 光照带边界（共 2 个边界界定 3 个带）。
+   # ⚠ 当前为 0/0 = **未标定**（ENG-09 §6.5 要求与实际曝光设置一同标定）。
+   #   所有光照条件落入同一桶，M_hist 的光照维度暂不可用；启动时 WARN。
+   #   标定后填成递增的两个正数，例如 [ 0.30, 0.60 ]。
+   illum_band_edges: [ 0.0, 0.0 ]

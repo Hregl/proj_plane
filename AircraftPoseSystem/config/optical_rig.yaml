@@ -1,0 +1,35 @@
+%YAML:1.0
+# ============================================================================
+#  config/optical_rig.yaml  —— 光机刚体与标定配置
+#
+#  依据：ENG-01 §3.3（calibration/ 目录）、SYS-11（光机刚体标定）
+#        OpticalRigConfig.h（字段与约束）、ENG-10 §5.3
+#
+#  ⚠ calibration_id 不得写 "latest"（OpticalRigConfig.h 明确禁止）：
+#    结果包必须能追溯到一份**确定的**标定，而 latest 会随目录内容变化，
+#    三个月后回放同一批图像时无法知道当时到底用的哪份内参。
+#    规范写法是标定日期或标定批次号。
+#
+#  ⚠ calibration_mode 决定标定文件缺失时的行为：
+#      "file"      —— 缺失即**启动失败**（ENG-10 §5.3 的第一类）。
+#                     这是现场交付应保持的取值。
+#      "synthetic" —— 退回 CalibrationManager::loadDefaults() 的合成内参。
+#                     **结果不具测量意义**，仅用于 M1 合成闭环（11.md §六
+#                     把"默认矩阵标定"列为显式 mock）。此时启动日志会
+#                     打出 WARN，且 calibration_id 须写成可识别的合成标记。
+#
+#  该字段不在 data::OpticalRigConfig 的冻结字段表内，由 ConfigManager
+#  作为"加载策略"单独持有（见 ConfigManager.h 的说明）。
+# ============================================================================
+
+---
+optical_rig:
+   # 标定数据目录（ENG-01 §3.3）：cam25|50|100.yaml + cam*_to_rig.yaml
+   # + rig_to_ship.yaml，共 7 个文件。
+   calibration_dir: "calibration"
+   # 本次测量所依据的标定版本，写入结果包（SYS-04 §6.4 的 calibration_id）。
+   # 不是 "latest"：见文件头说明。
+   calibration_id: "synthetic-m1"
+   # file | synthetic，见文件头说明。
+   # M1（合成闭环）期间为 synthetic；Sprint 2 拿到实测标定后改回 file。
+   calibration_mode: "synthetic"

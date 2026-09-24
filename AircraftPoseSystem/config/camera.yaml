@@ -1,0 +1,55 @@
+%YAML:1.0
+# ============================================================================
+#  config/camera.yaml  —— 三相机通道配置
+#
+#  依据：ENG-09 §6.1（CameraConfig 字段与单位）、§2.3（focalLength 单位）
+#        SYS-06 §5（三焦段相机）、SYS-04 §6.5（IF-FILE-01）
+#
+#  ⚠ focal_length 的单位是**米**（ENG-09 §2.3 专门提示）：
+#    25 mm 镜头写 0.025，100 mm 镜头写 0.1。
+#    写成 25.0 / 100.0 不会有任何编译或运行错误，只会让 SYS-14 §10 的
+#    距离估计式 Z = f·L/(l·s) 偏大 1000 倍，进而选错焦段。
+#    ConfigManager 对焦距做了量级校验（(0.001, 0.5] m），越界即启动失败。
+#
+#  ⚠ exposure_time 的单位是**秒**（ENG-09 §6.1 冻结为 s，不是 ms/µs）。
+#  ⚠ gain 的单位是 dB。trigger_mode: 1 = 硬触发，0 = 软触发。
+#
+#  ⚠ 以下 width/height/exposure_time/gain 是**虚拟阶段的占位值**（与
+#    VirtualCameraBackend 在未配置时的回退尺寸一致，使虚拟图像尺寸稳定，
+#    便于比对）。Sprint 2 拿到真实相机后必须逐项替换为实测值 ——
+#    分辨率尤其重要：它与标定的主点绑定（见 CameraCalibration.h），
+#    换了分辨率而不换标定，主点会整体平移而不报错。
+#    替换分辨率时须同步更新 calibration/ 下的标定文件。
+# ============================================================================
+
+---
+cameras:
+   -
+      # 与 CameraChannel::cameraId 对应；真实后端下即相机序列号。
+      id: "cam25"
+      # 焦段角色：CAM25 / CAM50 / CAM100（ENG-09 §4.1 冻结的三个取值）
+      role: "CAM25"
+      width: 1280
+      height: 1024
+      exposure_time: 0.005
+      gain: 6.0
+      trigger_mode: 1
+      focal_length: 0.025
+   -
+      id: "cam50"
+      role: "CAM50"
+      width: 1280
+      height: 1024
+      exposure_time: 0.003
+      gain: 6.0
+      trigger_mode: 1
+      focal_length: 0.05
+   -
+      id: "cam100"
+      role: "CAM100"
+      width: 1280
+      height: 1024
+      exposure_time: 0.002
+      gain: 6.0
+      trigger_mode: 1
+      focal_length: 0.1
