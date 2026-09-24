@@ -110,5 +110,14 @@ third_party/imvsdk/
 #     不能放进 config/）；
 #   · 它的**内容**通过 config_snapshot 随每次测量结果一起归档
 #     （ENG-10 §4.4），因此可复现性不依赖版本库中的这份副本。
-runtime/
+#
+# ⚠ **前导斜杠是必需的，不是风格问题。** 运行期目录在**本文件所在目录**下
+#   （`SystemInitializer.cpp:433` 写的是 `joinPath("runtime", "match_stats.yaml")`，
+#   相对进程 CWD），即 `AircraftPoseSystem/runtime/`。
+#   若写成不带斜杠的 `runtime/`，该模式会匹配**任意深度**的同名目录，
+#   连 `src/runtime/`（ENG-01 §4/§12 的模块，内含 CMakeLists.txt）一起忽略 ——
+#   结果是干净克隆后 `src/CMakeLists.txt:224` 的 `add_subdirectory(runtime)`
+#   找不到目录、配置直接失败，而开发机上因为文件早就在那儿、编译照样通过。
+#   实测过：`git check-ignore -v src/runtime/CMakeLists.txt` 返回本行。
+/runtime/
 match_stats.yaml
