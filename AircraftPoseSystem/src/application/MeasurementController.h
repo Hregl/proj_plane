@@ -398,6 +398,30 @@ private:
     /// 直接进入 FAILED 并记录错误（error.timestampNs 由本函数补齐）。
     void failWith(data::ErrorInfo error, uint64_t nowNs);
 
+    /// handleFailure() 的入口段：补时间戳 → `lastError_` → `pendingCause_`
+    /// →（首次失败时）记入 `failureTrace_.firstFailedState/firstError`。
+    ///
+    /// ⚠ 抽出来的原因是本类有**两条**失败收口：一条经恢复策略
+    /// （handleFailure → applyRecovery），一条**不经**（failTerminal，
+    /// 见其说明）。两条都必须留下同样的根因证据，故共用本函数 ——
+    /// 复制一份的写法会在其中一处改动时让两边的失败证据悄悄分叉。
+    void recordFailureCause(const data::ErrorInfo& deviceError, uint64_t nowNs);
+
+    /// 契约违背专用：记录原因后**直接**进入 FAILED，不经过恢复策略。
+    ///
+    /// ⚠ 为什么不复用 handleFailure：§7.2 的三分类（TRANSIENT / HARDWARE /
+    /// CAPABILITY）描述的是**设备与运行条件**——它们默认"实现是对的，
+    /// 环境不对"，故重试或回退是有意义的动作。契约违背（同一接口的返回值
+    /// 与它写入的输出互相矛盾）是**实现缺陷**：
+    ///   · 重试 = 再调一次同一个坏实现；
+    ///   · 回退 = 用一份自相矛盾的实现继续跑完测量，产出一个来源可疑的结果。
+    /// 两者都正是"不得静默按任一方继续"（见 stepValidate 的对账分支）要防的事。
+    ///
+    /// 且实测过：走 handleFailure(TRANSIENT) 时违约**不必然**表现为 FAILED
+    /// ——VALIDATE 的 TRANSIENT 处置是回退，只有在回退预算被耗尽后才失败。
+    /// C-013 要求的"控制器必须**可见地 FAILED**"因此并未真正满足。
+    void failTerminal(const data::ErrorInfo& deviceError, uint64_t nowNs);
+
     /// @param kind 为 §7.2 的分类；deviceError 由设备层或算法层提供。
     void handleFailure(FailureKind kind,
                        const data::ErrorInfo& deviceError,

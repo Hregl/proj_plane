@@ -717,9 +717,18 @@ bool SystemInitializer::tick(uint64_t nowNs)
     // 1) 推进状态机。返回值 = 本次是否改变了状态。
     const bool stateAdvanced = ctx_.controller->tick(nowNs);
 
-    // 2) 空闲态补帧（见文件头说明）。测量进行中**不得**在此采集：
-    //    controller 每拍自己采集并提交预览，重复采集会让帧序号跳变、
-    //    把丢帧计数刷高，而这意味着界面上的时延读数失去意义。
+    // 2) 空闲态补帧（见文件头说明）。规则两条：
+    //    ① 空闲与否按**推进后**的状态判定 —— 本拍刚转入终态时，
+    //       画面正是操作者最需要看到的那一帧；
+    //    ② **本拍推进了状态就不补帧**（R04 收尾）：`stateAdvanced` 为真
+    //       意味着这一拍内控制器已经跑过活动态采集并提交了帧
+    //       （acquire() 是活动态预览的唯一生产者），此时再补一次就是
+    //       同一拍两次 capture()。下一拍状态不再推进，空闲预览自然恢复。
+    //
+    //    ⚠ ② 挡的是一条**真实可达**的边界，不是假想：
+    //    "活动态采集成功、当拍转入终态"就发生在 ALIGN ——
+    //    采集成功 → 检测 → 对准命令越程（2002）→ 能力边界不重试 →
+    //    当拍 FAILED。去掉这一条，那一拍会采集两次。
     const data::MeasurementState st = ctx_.controller->state();
     const bool idle = (st == data::MeasurementState::IDLE ||
                        st == data::MeasurementState::COMPLETE ||
@@ -730,8 +739,14 @@ bool SystemInitializer::tick(uint64_t nowNs)
     {
         // 空闲态下 controller 不推进状态，故由本类负责让预览的 AUTO
         // 映射跟上（它自己只在状态迁移时通知）。
+        // ⚠ setMeasurementState() 与补帧**分开**判断：AUTO 映射必须跟上
+        //   推进后的状态（否则失败画面会被映射到旧焦段），而补帧要看
+        //   本拍有没有推进。
         ctx_.preview->setMeasurementState(st);
-        idleSubmitted = pumpIdlePreview(nowNs);
+        if (!stateAdvanced)
+        {
+            idleSubmitted = pumpIdlePreview(nowNs);
+        }
     }
 
     // 3) 状态变化 → 界面必须刷新（含进入终止态那一次）。

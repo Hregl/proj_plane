@@ -59,10 +59,11 @@
 各模块目录为空时构建脚本会打印"暂无源文件，跳过生成"，这是设计行为而非故障
 ——见 §4。
 
-> **当前测试基线（2026-09-23，C-006 / C-007 / C-008 / C-009 + 死接口清理全部完成后）**：
-> **10 个套件 242 个用例，0 失败断言 / 0 异常** —— `flowtest` 32 · `RecorderPackageTest` 7 ·
-> `RecorderAdapterTest` 7 · `StateMachineTest` 27 · `AlgorithmStageTest` 22 · `PipelineTest` 28 ·
-> `DeviceLayerTest` 21 · `OpticalLayerTest` 38 · `PreviewLayerTest` 39 · `AlignmentControllerTest` 21。
+> **当前测试基线（2026-09-24，R02 / R04 / R05 / R06 收尾批后）**：
+> **11 个套件 250 个用例，0 失败断言 / 0 异常** —— `flowtest` 37 · `RecorderPackageTest` 7 ·
+> `RecorderAdapterTest` 7 · `StateMachineTest` 27 · `AlgorithmStageTest` 23 · `PipelineTest` 28 ·
+> `DeviceLayerTest` 21 · `OpticalLayerTest` 38 · `PreviewLayerTest` 39 · `AlignmentControllerTest` 21 ·
+> `sysinittest` 2。
 > 上表按**阶段**记录的是各阶段当时的数字（application 67 / algorithm 45 等），
 > 两者不矛盾：阶段数字是"那一阶段验证了什么"，此处是"当前全部用例的总数"。
 > 其中 `RecorderPackageTest` 是 C-02 Step 5 新建的套件（结果包落盘的**解析级**验证，
@@ -71,16 +72,27 @@
 > `RecorderAdapterTest` 是 C-009 新建的套件（`RecorderSinkAdapter` 这一层：它补齐的
 > 三个外部事实**是否覆盖**而不是透传、测量事实**有没有被改坏**、`config_snapshot/`
 > 里**到底有几个文件**——见 §8.5）。
+> `sysinittest` 是 R04 收尾批新建的套件（`tests/integration/SystemInitializerTest.cpp`）：
+> 把**真实 `SystemInitializer.cpp`** 编进目标、真实装配、**零桩**，用真实单调时钟逐拍驱动，
+> 覆盖"按状态/分支的采集归属"与"ALIGN 越程 ⇒ 同拍 FAILED 的终态切换边界"（见 §6 第 92 行）。
 >
-> ⚠ **"242 个用例通过"的适用范围（2026-09-24 补充，与 §1 一致）**：这是
-> **临时 GTest 垫片下的运行结果**（`GoogleTest` 未安装，见 §3.6），
-> **正式 GoogleTest／CTest 验证待完成**。因此该数字证明的是"逻辑在当前夹具下自洽"，
+> ⚠ **"250 个用例通过"的适用范围（2026-09-24 收尾批更正，与 §1 一致）**：
+> 数字与执行路径必须**分开记账**，一句话说"全部实跑通过"是过宽的：
+
+| 验证内容 | 实际执行路径 |
+|---|---|
+| 上表 11 套件 / 250 用例 | **GTest 垫片**（`GoogleTest` 未安装，见 §3.6；`/tmp/gtshim/build_tests.sh`） |
+| 两条安装自检（`install_check` / `install_launch_check`） | **CTest**，真跑（干净前缀 + 四条启动判据，见 §4.6） |
+| 新增 `test_system_initializer` 的**原生 GoogleTest／CMake 目标** | **未验证** —— 缺 `GoogleTest` 时 `tests/CMakeLists.txt` 直接 `return()`，任何测试目标都不生成（与既有 10 个目标同命运） |
+
+> 因此该数字证明的是"逻辑在当前夹具下自洽"，
 > **不等于**"在正式测试框架下通过"，也不等于"应用级全流程验收通过"——
 > 单元测试中的成功保存、第二次测量通过等证据属**测试夹具验证**，
 > 不能直接替代真实应用全流程验收（见 §7）。
 > 它已按 `aps_add_test` 登记进 `tests/integration/CMakeLists.txt`，
 > 并在 007/008 用过的那个 `/tmp` 桩 GTest 包下实跑确认：**10 个测试目标**
-> 全部生成、链接、运行。
+> 全部生成、链接、运行（该次针对的是 007/008 那批目标；`sysinittest` 的
+> CMake 目标路径**尚未**以同样方式走过，原因见上表第三行）。
 > ⚠ 该次 `ctest` 只报告 `install_check` —— 垫片的 `gtest.h` 不实现
 > `--gtest_list_tests`，而 `gtest_discover_tests` 用 `PRE_TEST` 在 ctest 期枚举用例，
 > 故各套件需**直接运行**可执行文件（007/008 亦如此）。装上真实 GoogleTest 后此限自动消失。
@@ -333,6 +345,34 @@ R02（2026-09-24 审查报告）发现全工程 `install(TARGETS ...)` 实体 **
 `APS_INSTALLED_LIBRARY_TARGETS` 生成，故**以后新增模块自动纳入断言**，
 不必回来改这里。
 
+**R02 收尾（2026-09-24 复审）加的两条约定 —— 都不是洁癖，各有一条实测证据：**
+
+3. **`install_check` 先清空自检前缀再安装。** 上一版只跑 `cmake --install`，
+   而该前缀在多次运行之间**留存**，于是"本次运行什么都没装出来"完全可能被
+   **上一轮的陈旧产物**掩盖。**已实测复现**：把 `src/app` 的整段 R02 安装规则
+   整体停用（`install(TARGETS)` 与随之的 `install(CODE ...)` 断言一起停用），
+   前缀里留着上一轮的 `bin/AircraftPoseSystem` 与 `logs/`，两条自检**依旧全绿**
+   （`install_check` 0.01 s、`install_launch_check` 3.00 s 通过）—— 而一次全新
+   安装的产物里**根本没有主程序**。加强后同一处变异立即转红
+   （`install_launch_check` 报"退出码 127：没有那个文件或目录"，并把本次日志
+   `cat` 出来）。清空只针对自检前缀 `${CMAKE_BINARY_DIR}/install_check`，
+   **不碰 `deploy/`**（见下一条与 Q-C7）。
+4. **`install_launch_check` 判四条，且日志落在本次运行的文件里。**
+   判据是：① 退出码 `124`；② 日志含 `启动完成`；③ 日志含首拍标记
+   `APP_FIRST_TICK_COMPLETED`；④ 日志**不含**`启动失败`。任一条不满足则
+   `cat` 出 `${前缀}/launch_check.log` 后退出非零 —— 失败原因可见。
+   · **为什么 ① 单独不够**：`timeout 3` 把进程杀掉只说明"跑满 3 秒仍存活"，
+     而**初始化过程里卡死**同样满足 124；那种情况下窗口从未显示、状态机从未
+     推进一拍，却能让自检通过。
+   · 首拍标记 `APP_FIRST_TICK_COMPLETED` 由 `main.cpp` 的**真实定时器回调**
+     在**正常走完之后**打一次（不是 `SystemInitializer::tick()` 的入口 ——
+     入口只证明"进入了该函数"）。它使验收口径从"进程活着"精确到
+     **"初始化完成，事件循环至少完成了一次应用定时回调"**。持续响应与长期
+     稳定性仍归后续测试（本批**不**扩到 8 小时框架）。
+   · **预览线程一并被验**：该回调走完意味着 `PreviewWorker` 已启动且未死锁，
+     进程能被 `timeout` 杀掉则说明它的析构**会 join**（实测：用例结束时
+     `ApplicationContext` 正常析构，进程不挂）。
+
 ---
 
 ## 5 依赖状态与待办
@@ -354,7 +394,7 @@ $ cmake ..
 |---|---|---|
 | Qt5 5.15.8 | ✅ | — |
 | OpenCV 4.6.0 | ✅ | — |
-| GoogleTest | ❌ 未安装 | `sudo apt install libgtest-dev`，装后重跑 `cmake ..` 即自动启用。⚠ 当前 242 个用例是**临时 GTest 垫片**下跑的，正式 GoogleTest／CTest 验证待完成（见 §1） |
+| GoogleTest | ❌ 未安装 | `sudo apt install libgtest-dev`，装后重跑 `cmake ..` 即自动启用。⚠ 当前 250 个用例是**临时 GTest 垫片**下跑的，正式 GoogleTest／CTest 验证待完成（见 §1） |
 | ImvSdk | ⚠ **已解包到工程开发目录**（`third_party/imvsdk/`），**查找、链接及版本调用通过**；**尚未完成实机采集验收** | 见 [核验报告](V2.1-011A0.1_ImvSDK环境核验报告.md)（§6.3 端到端探针）。实机采集属 **011-A1**；`VirtualCameraBackend` 仍是当前装配的实际件 |
 | TurntableSdk | ❌ 未安装 | ENG-08 §11：第一阶段不实现 Peko_D，属预期状态；真实转台受 PH-01 阶段归属待裁决约束 |
 
@@ -767,10 +807,10 @@ R03 / R08 / R09 / R10 / R11 与 A1 契约、验收清单补正留待后续阶段
 
 | # | 报告原文 / 声称 | 实际执行 | 依据 / 落点 |
 |---|---|---|---|
-| 91 | **R02**：全工程 `install(TARGETS ...)` 实体 **0 处**（7 处 `install(` 全是 `install(DIRECTORY`），故 `deploy/` 只有空的 config/models/calibration，**没有 bin/、没有 lib/**；而 `install_check` 只跑 `cmake --install`、不校验任何产物，所以该缺陷不被任何检查覆盖 | `install(TARGETS)` 写进 `src/CMakeLists.txt` 的 `aps_add_module_library()`（**10 个模块库**）与 `src/app/CMakeLists.txt`（可执行文件）；并在**同文件、紧随其后**加 `install(CODE ...)` 断言（bin/ 有可执行文件且可执行、lib/ 下每个模块库都在）；新增 `install_launch_check`。约定写进 §4.6。**裁决条文：C-014** | 见 §4.6 的三方分工与两个陷阱。**分工修正**：`cmake/InstallRules.cmake` 原文写"各模块 → 各自的 `install(TARGETS ...)`"，描述的是一个**从未实现的约定** —— 约定写了不等于做了，故该段现在只描述代码里**实际存在**的分工。落点：`ctest -R 'install_check\|install_launch_check'`，自检打印 `…/lib 下 10 个模块库齐备` 与 `安装自检通过：…/bin/AircraftPoseSystem`；变异（注释掉 `src/app` 的 `install(TARGETS ...)`）后 `install_check` 必转红 |
-| 92 | **R04**：`MeasurementController` 持有 `preview_` 却**从未调用 `submitFrom()`**；生产代码里唯一的调用点在 `SystemInitializer::pumpIdlePreview()`，而它只在 IDLE/COMPLETE/FAILED 执行 ⇒ **测量期间画面空白**。（`SystemInitializer` 的注释声称"controller 每拍自己采集并提交预览"—— 该假设自写下来就从未实现） | 在 `acquire()` 内 `capture()` 成功之后、`updateDegradation()` **之前**投递预览，抽 `submitPreview()` 让"唯一投递点"成为一个可 grep 的符号 | **为什么在 `updateDegradation()` 之前**：降级越界会就地 FAILED，补帧若排在后面，**导致任务终止的那一帧永远到不了屏幕**，而那一刻画面正是唯一的现场证据。**与空闲路径的双重采集不存在且可证**：`MeasurementController::tick()` 对 IDLE/COMPLETE/FAILED 早返回，而 `SystemInitializer::tick()` 只在这三个状态调 `pumpIdlePreview()` —— 两个状态集**恰好互补**（12 = 3 + 9）⇒ 任一 tick 至多一次 `capture()`。落点：`R04_测量期间预览必须有生产者`（断言帧号**严格递增**、且提交的角色等于**当时**的显示源）、`R04_未注入预览时不崩` |
-| 93 | **R05**：`stepValidate` 把 `validate()` 的 `false` 读成"验证过程失败" → `handleFailure` → **提前 return**，使 `validationResult_ = validation` 与 `strategy_.excludeCamera(...)` **两步都执行不到**。真实 `PoseValidator` 判不合格就返回 false ⇒ 生产路径必然踩中；而测试桩**恒 `return true`**，所以这条断点从未在任何测试里出现过 | 契约统一为 **`bool ≡ out.valid ≡ "是否通过全部判据"`**（不是"过程是否执行成功"）；加**对账分支**（返回值与 `out.valid` 不一致 = 违背契约 ⇒ **可见地 FAILED**，不静默按任一方继续）；`validationResult_ = validation` 提到整段**最前**；`IPosePipeline::validate` 补 `@return` 注释（该接口原本**没有任何** `@return`，是歧义的源头）；测试桩改为 `return out.valid` —— **必须与控制器同批落地**，否则旧桩会命中新对账分支。**裁决条文：C-013** | **对称性**：`solvePose` 的 `false` = 没算出结果，`validate` 的 `false` = 算出来了但不合格，两者语义不同，故各自写明。⚠ **实施中更正了设计稿的一处**：设计稿说"把 `validationResult_ = validation;` 提到**分支之前**"，照字面放在**对账分支之后**会在新的失败通路上**原样复现 R05 要修的缺陷**，故位置钉死为**整段最前**（详见 C-01 §C-013）。落点：`R05_验证契约被违背时必须可见失败且详情仍留存`（用**故意自相矛盾**的桩逼出对账分支，并内建因果对照 —— 撤掉那个谎之后必须走完 COMPLETE）、`用例3_回退预算_VALIDATE恒不通过时的有界性` 判据四（`valid == false` + `0.42 / 0.91 / 0.88` 三个**来自桩**的实测值，即"细节不再丢失"） |
-| 94 | **R06**：`MeasurementController.h` 的成员 `selection_` **从未被赋真实值**，全文件只有 reset 置空与 `record.selectedScore = selection_.score` 两处引用；两处 `selectCamera()` 调用都写进**局部变量** ⇒ **"选了哪台"对、"得分"恒 0**，又一个"字段合法但语义不成立" | 抽 `adoptSelection()` 私有助手，把 `selectedCamera_` / `selection_` / `setAutoCamera()` 三件事**收口到一处**，两个调用点各换一行 | **为什么必须成对写回**：分开赋时将来任一处被单独改动，就会得到"新角色 + 旧得分"—— 两个值都合法、都不报错，正是 D-C02-5 换个位置复现。修复后可给出穷尽式论证：`selectedCamera_` 全仓只有 3 个赋值点。落点：`R06_记录里的选中得分必须来自选择结论`、`R06_换机路径的得分也必须写回`（后者覆盖失败包一侧；`1.0` 由测试**自己的桩**给出 ⇒ 输入侧预言机，读回实现成员无法伪装） |
+| 91 | **R02**：全工程 `install(TARGETS ...)` 实体 **0 处**（7 处 `install(` 全是 `install(DIRECTORY`），故 `deploy/` 只有空的 config/models/calibration，**没有 bin/、没有 lib/**；而 `install_check` 只跑 `cmake --install`、不校验任何产物，所以该缺陷不被任何检查覆盖 | `install(TARGETS)` 写进 `src/CMakeLists.txt` 的 `aps_add_module_library()`（**10 个模块库**）与 `src/app/CMakeLists.txt`（可执行文件）；并在**同文件、紧随其后**加 `install(CODE ...)` 断言（bin/ 有可执行文件且可执行、lib/ 下每个模块库都在）；新增 `install_launch_check`。约定写进 §4.6。**裁决条文：C-014** | 见 §4.6 的三方分工与两个陷阱。**分工修正**：`cmake/InstallRules.cmake` 原文写"各模块 → 各自的 `install(TARGETS ...)`"，描述的是一个**从未实现的约定** —— 约定写了不等于做了，故该段现在只描述代码里**实际存在**的分工。落点：`ctest -R 'install_check\|install_launch_check'`，自检打印 `…/lib 下 10 个模块库齐备` 与 `安装自检通过：…/bin/AircraftPoseSystem`；变异（注释掉 `src/app` 的 `install(TARGETS ...)`）后 `install_check` 必转红。**⚠ R04 收尾加强（2026-09-24 复审）**：`install_check` 先 `cmake -E rm -rf` 清空自检前缀再安装（"本次运行全新安装"），`install_launch_check` 判**四条**（124 + `启动完成` + 首拍标记 `APP_FIRST_TICK_COMPLETED` + 无 `启动失败`）并把日志留在 `${前缀}/launch_check.log`，失败即 `cat`。依据是一次**实测复现的假通过**：停用整段 R02 安装规则、保留陈旧前缀 ⇒ 两条自检仍全绿（0.01 s / 3.00 s），而全新安装根本没有主程序；加强后同一变异立即转红（退出码 127）。两条约定见 §4.6 第 3、4 条 |
+| 92 | **R04**：`MeasurementController` 持有 `preview_` 却**从未调用 `submitFrom()`**；生产代码里唯一的调用点在 `SystemInitializer::pumpIdlePreview()`，而它只在 IDLE/COMPLETE/FAILED 执行 ⇒ **测量期间画面空白**。（`SystemInitializer` 的注释声称"controller 每拍自己采集并提交预览"—— 该假设自写下来就从未实现） | 在 `acquire()` 内 `capture()` 成功之后、`updateDegradation()` **之前**投递预览，抽 `submitPreview()` 让"唯一投递点"成为一个可 grep 的符号 | **为什么在 `updateDegradation()` 之前**：降级越界会就地 FAILED，补帧若排在后面，**导致任务终止的那一帧永远到不了屏幕**，而那一刻画面正是唯一的现场证据。**⚠ 双重采集的判据已更正（R04 收尾，2026-09-24 复审），原论证作废**：本行原写"两个状态集**恰好互补**（12 = 3 + 9）⇒ 任一 tick 至多一次 `capture()`"，两处错 —— ① **前提不成立**：`stepCapture` 本来就一拍内连采 `captureFrameCount`（默认 5）帧，"至多一次 `capture()`"从来不是系统的不变量；② **推理越界**：控制器对空闲态早返回、app 只在空闲态补帧，这两条只能推出"空闲补帧不与活动态采集同拍"，**推不出**"活动态采集不可能当拍转入终态"—— 后者才是重复采集真正的入口。**真实可达路径**：ALIGN 的对准命令**越程**（`AlignmentController::calculate()` 在 `azimuth` 超出 `azimuthMax` 时置 `commandValid_ = false`、码 2002）⇒ `handleFailure(CAPABILITY)` ⇒ `makeFail` 不重试 ⇒ **同拍 FAILED**，而这一拍**已经采集成功**。故现行规则是两条：空闲与否按**推进后**状态判定（AUTO 映射必须跟上），但**本拍推进了状态就不补帧**（`!stateAdvanced`）—— 即"转入终态当拍不补帧，下一拍恢复"。**采集归属按状态与分支列账**（不再用状态集互补去推；实测值）：IDLE/COMPLETE/FAILED **1**（本拍未推进时）、SEARCH **1**、TARGET_FOUND **0**（复用 `lastFrame_`）、ALIGN **1**（等待到位/超时分支 0）、STABILIZE **1**（MOVING/超时分支 0）、MEASURE_SELECT **1**、CAPTURE **`captureFrameCount`**（默认 5）、POSE_SOLVE/VALIDATE/SAVE **0**。落点：原有 `R04_测量期间预览必须有生产者`（断言帧号**严格递增**、且提交的角色等于**当时**的显示源）、`R04_未注入预览时不崩`；**新增** `tests/integration/SystemInitializerTest.cpp`（**真实装配、零桩、真实单调时钟**，两个用例）—— 场景 A 逐状态核对上表的增量，场景 B 用 `ctx.turntable->setInitialAngles(azimuthMax, 0)` 与 CAM50 `setTargetPixelOffset(居中阈值 + 50 px)` 摆出越程，断言**终止当拍**三路增量 == 1 且 `idleFrames` 不变、**下一拍**三路 +1 且 `idleFrames` +1；撤掉 `!stateAdvanced` 后该拍增量变 2 ⇒ 用例转红（实测：5 条断言同时红，场景 A 的终态拍另红 1 条） |
+| 93 | **R05**：`stepValidate` 把 `validate()` 的 `false` 读成"验证过程失败" → `handleFailure` → **提前 return**，使 `validationResult_ = validation` 与 `strategy_.excludeCamera(...)` **两步都执行不到**。真实 `PoseValidator` 判不合格就返回 false ⇒ 生产路径必然踩中；而测试桩**恒 `return true`**，所以这条断点从未在任何测试里出现过 | 契约统一为 **`bool ≡ out.valid ≡ "是否通过全部判据"`**（不是"过程是否执行成功"）；加**对账分支**（返回值与 `out.valid` 不一致 = 违背契约 ⇒ **可见地 FAILED**，不静默按任一方继续）；`validationResult_ = validation` 提到整段**最前**；`IPosePipeline::validate` 补 `@return` 注释（该接口原本**没有任何** `@return`，是歧义的源头）；测试桩改为 `return out.valid` —— **必须与控制器同批落地**，否则旧桩会命中新对账分支。**裁决条文：C-013** | **对称性**：`solvePose` 的 `false` = 没算出结果，`validate` 的 `false` = 算出来了但不合格，两者语义不同，故各自写明。⚠ **实施中更正了设计稿的一处**：设计稿说"把 `validationResult_ = validation;` 提到**分支之前**"，照字面放在**对账分支之后**会在新的失败通路上**原样复现 R05 要修的缺陷**，故位置钉死为**整段最前**（详见 C-01 §C-013）。落点：`R05_验证契约被违背时必须可见失败且详情仍留存`（用**故意自相矛盾**的桩逼出对账分支，并内建因果对照 —— 撤掉那个谎之后必须走完 COMPLETE）、`用例3_回退预算_VALIDATE恒不通过时的有界性` 判据四（`valid == false` + `0.42 / 0.91 / 0.88` 三个**来自桩**的实测值，即"细节不再丢失"）。**⚠ R05 收尾（2026-09-24 复审）**：对账分支原实现走 `handleFailure(TRANSIENT, ...)`，那是**实现偏离了裁决** —— C-013 第 2 条原文是"控制器必须**可见地** FAILED"，而 VALIDATE 的 TRANSIENT 处置是**回退**，违约与失败之间隔着若干次重试与回退，期间状态机在用一份自相矛盾的实现继续跑（原用例用**持续违约**的桩，靠回退预算耗尽才失败，证明的是"迟早失败"而非"当次 FAILED"）。现改为新增私有 `failTerminal()`（= `recordFailureCause()` + `failWith()`），并在注释里写明为什么不套 §7.2 的三分类：那三类描述的是**设备与运行条件**，而契约违背是**实现缺陷**，重试只是再调一次同一个坏实现、回退则是用自相矛盾的实现跑完测量。用例相应改为**逐拍驱动**并断言违约那**一刻**即为 FAILED、`rollbackCount() == 0`；桩由"持续违约"改为**只违约一次**（回退语义下它会恢复并跑完 COMPLETE，故能区分"当次终止"与"迟早失败"）。变异（换回 `handleFailure(TRANSIENT)`）→ 3 条断言转红 |
+| 94 | **R06**：`MeasurementController.h` 的成员 `selection_` **从未被赋真实值**，全文件只有 reset 置空与 `record.selectedScore = selection_.score` 两处引用；两处 `selectCamera()` 调用都写进**局部变量** ⇒ **"选了哪台"对、"得分"恒 0**，又一个"字段合法但语义不成立" | 抽 `adoptSelection()` 私有助手，把 `selectedCamera_` / `selection_` / `setAutoCamera()` 三件事**收口到一处**，两个调用点各换一行 | **为什么必须成对写回**：分开赋时将来任一处被单独改动，就会得到"新角色 + 旧得分"—— 两个值都合法、都不报错，正是 D-C02-5 换个位置复现。修复后可给出穷尽式论证：`selectedCamera_` 全仓只有 3 个赋值点。落点：`R06_记录里的选中得分必须来自选择结论`、`R06_换机路径的得分也必须写回`（后者覆盖失败包一侧；得分由测试**自己的桩**给出 ⇒ 输入侧预言机，读回实现成员无法伪装）。**⚠ R06 收尾（2026-09-24 复审）**：桩原先给**所有**通道同一个 `1.0`，故"新角色配旧得分"照样能过 —— 预言机分辨不出通道。现改为按通道取分（CAM25 = 0.31 / CAM50 = 0.72 / CAM100 = 0.90），并新增 `solveFailTimes`（前 N 次 `solvePose` 失败）以构造"首次 PnP 失败 → 换机后成功"这条路径，断言 `selectedCamera == CAM50` 且 `selectedScore == 0.72`（旧得分会是 0.31）；两条既有用例的期望值也改为 `scoreOf(record.selectedCamera)`（与角色交叉校验）。变异（换机处只写角色、不写 `selection_`，即 D-C02-5 的原形）→ 得分断言转红 |
 | 95 | **R07**：`σ_px / W` 是**比值**（两者同为 pixel）⇒ `predictedError` 的量纲是**弧度**，而注释与冻结文档都写"单位角分"，差 `180/π×60 ≈ 3437.7468` 倍。后果：`eRatio ≈ 0`、`eNorm ≈ 1`，E 分项**退化为常数**，通道排序被改变 | 补回换算因子（`kRadToArcmin`，含推导注释），使算式与**它自己那一页的表格**同量纲；冻结文档同步升版为 **ENG-09 V2.2 / ENG-10 V2.2**（旧版 `cp -p` 归档进 `archive/`，见下） | **是"把公式对齐到表格"，不是改表格** —— `ENG-10 §2.1` 的数值（W=1930→0.19、W=386→0.93 角分）自 V2.1 起一直是对的，错的是算式，**同页自相矛盾正是该缺陷的形态**。落点：`MeasurementSelector.EFollowsEng10Formula`（期望值取自 §2.1 表格，**不是**抄实现）、`PredictedErrorIsArcminNotRadians`（量纲回归，删掉换算因子即以 ≈3437.75 倍当场转红）。⚠ **本次修复只重建了单位一致性，不证明整个误差模型已通过实机标定** —— 见下方 Q-C5 |
 
 **回归面（逐条确认过，不是推断）**：R04/R05/R06 三项都在 `MeasurementController.cpp`
@@ -792,10 +832,12 @@ R03 / R08 / R09 / R10 / R11 与 A1 契约、验收清单补正留待后续阶段
 | Q-C1 | `SYS-15 §4.5` 悬空引用 —— 比"该节不存在"更强：**该误差模型在 SYS-15 里整份不存在**（`√12`/`σ_θ`/`σ_px` 零命中），而引用它的有 11 处以上含生产代码。**附带**：SYS-15 文件名写 V1.0、H1 写 V1.2 |
 | Q-C2 | `validate()` **没有**表达"验证过程执行失败"的通道（契约部分 ✅ **已冻结 → C-013**；补通道要动 `IPosePipeline` 签名，须与 IF-SW-02 一并处置） |
 | Q-C3 | `selectedScore == 0.0` 与"未选择"不可区分（`MeasurementSelectionResult` 按 ENG-09 §5.17 冻结为**两字段**，加 `valid` 标志须另行裁决） |
-| Q-C4 | CAPTURE 期间 `droppedCount()` **合法**上升 —— 将来加积压断言**不得**写成 `EXPECT_EQ(droppedCount(), 0)`（当前 `droppedCount` 在 `tests/` 零出现，趁还没有错误基线先记下） |
+| Q-C4 | CAPTURE 期间 `droppedCount()` **合法**上升 —— 将来加积压断言**不得**写成 `EXPECT_EQ(droppedCount(), 0)`。⚠ 原附注"当前 `droppedCount` 在 `tests/` 零出现"**已更正**（见 Q-C8）：`PreviewLayerTest.cpp` 里本就有队列层的丢旧保新断言，缺的是"CAPTURE 期间"这一层 |
 | Q-C5 | R07 修复后 E 分项在 `W ≤ ≈595 px` 处**饱和为 0**（默认 σ=0.5、N=100 时 `E = 595.4/W` 角分）。饱和是 §3.6 的**本意**，但对最小目标/退化展布降低了区分度。⚠ 标定落地后（σ≈0.3）饱和点移到 `W ≤ 357 px`，区分区间**反而变宽** |
 | Q-C6 | ENG-10 §10 跨文档义务表的**状态列不可信**（SYS-05 那行错了两版都没被发现，正因为"已改"从不被回查）。已在 V2.2 就地加警告 |
 | Q-C7 | `deploy/` 交付树至今**从未被真实填充** —— 机制部分 ✅ **已冻结 → C-014**，"能装出正确的树"≠"交付树已就位"。⚠ 现在跑 `cmake --install` 只会得到一个有 bin/lib 而配置与模型皆空的包，**比空目录更容易让人误以为已可交付**，故本轮**刻意不跑** |
+| Q-C8 | 断言基线的现状更正：`idleFrames` 现已有基线断言（app 层用例的四条：空闲拍 +1 / 活动拍 0 / 转入终态当拍 0 / 下一拍 +1）；`droppedCount` 的"零出现"表述有误（队列层早有），缺的是"CAPTURE 期间"那一层 |
+| Q-C9 | ❌ **已撤销**（2026-09-24）：原拟登记"app 层空闲补帧边界无法自动化验证、需新增注入槽"。前提不成立 —— `ApplicationContext` 由调用方构造，测试用真实设备的**既有**公开 API 即可摆出场景，本批已落地并做变异，**无缺口可登记** |
 
 > ⚠ **Q-C5 的限定句不得省略**：R07 关掉的是"算式与文档差 3437.75 倍"这一条，
 > **不是**"误差模型正确"这一条。`σ_px = 0.5` 仍是**回落值**而非实测值

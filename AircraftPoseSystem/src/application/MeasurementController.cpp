@@ -1015,16 +1015,23 @@ void MeasurementController::stepValidate(uint64_t nowNs)
     //   处置与本工程其它契约违背同构（评分器返回已被排除的通道、
     //   最佳帧索引越界）：必须**可见地**失败，不得静默按任一方继续。
     //   真实实现恒等，故本分支只在实现坏掉时可达。
+    //
+    // ⚠ 处置是 failTerminal()（**当拍直接 FAILED**），不是 handleFailure()。
+    //   本行原写作 handleFailure(TRANSIENT,...)，那是**实现偏离了裁决**：
+    //   C-013 第 2 条的原文是"控制器必须**可见地** FAILED"，而 VALIDATE 的
+    //   TRANSIENT 处置是**回退**——只有在回退预算耗尽之后才失败，
+    //   于是"违约"这一事实与"失败"之间隔着若干次重试与回退，
+    //   期间状态机在用一份自相矛盾的实现继续跑。理由详见
+    //   failTerminal() 的说明（设备/运行条件 vs 实现缺陷）。
     if (verifyReturned != validation.valid)
     {
-        handleFailure(FailureKind::TRANSIENT,
-                      data::ErrorInfo{data::kErrStateFailure,
-                                      std::string("验证契约违背：validate() 返回 ")
-                                          + (verifyReturned ? "true" : "false")
-                                          + " 而 out.valid="
-                                          + (validation.valid ? "true" : "false"),
-                                      nowNs},
-                      nowNs);
+        failTerminal(data::ErrorInfo{data::kErrStateFailure,
+                                     std::string("验证契约违背：validate() 返回 ")
+                                         + (verifyReturned ? "true" : "false")
+                                         + " 而 out.valid="
+                                         + (validation.valid ? "true" : "false"),
+                                     nowNs},
+                     nowNs);
         return;
     }
 
@@ -1641,9 +1648,8 @@ uint64_t MeasurementController::stateTimeout(data::MeasurementState state) const
 // 失败处置
 // ---------------------------------------------------------------------------
 
-void MeasurementController::handleFailure(FailureKind kind,
-                                          const data::ErrorInfo& deviceError,
-                                          uint64_t nowNs)
+void MeasurementController::recordFailureCause(const data::ErrorInfo& deviceError,
+                                               uint64_t nowNs)
 {
     // ⚠ 先把原因记进 lastError_，再决定恢复动作。
     //
@@ -1679,9 +1685,26 @@ void MeasurementController::handleFailure(FailureKind kind,
         failureTrace_.firstFailedState = stateMachine_.state();
         failureTrace_.firstError       = recorded;
     }
+}
 
+void MeasurementController::handleFailure(FailureKind kind,
+                                          const data::ErrorInfo& deviceError,
+                                          uint64_t nowNs)
+{
+    recordFailureCause(deviceError, nowNs);
+
+    // 恢复策略按**原始入参**决策：recoveryFor() 需要 kind，而 deviceError
+    // 里的码/消息用于构造终态错误。补过时间戳的副本只用于留痕，
+    // 不改动这两个入参。
     applyRecovery(strategy_.recoveryFor(stateMachine_.state(), kind, deviceError),
                   nowNs);
+}
+
+void MeasurementController::failTerminal(const data::ErrorInfo& deviceError,
+                                         uint64_t nowNs)
+{
+    recordFailureCause(deviceError, nowNs);
+    failWith(deviceError, nowNs);
 }
 
 void MeasurementController::applyRecovery(const Recovery& recovery,

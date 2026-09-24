@@ -181,20 +181,46 @@ endif()
 #                           （R02，2026-09-24 审查报告）
 # ----------------------------------------------------------------------------
 if(BUILD_TESTING)
+    # ⚠ 先**清空自检前缀**再安装（R02 收尾，2026-09-24 审查报告）。
+    #
+    # 这一步不是洁癖，是必需的：本前缀在多次运行之间**留存**，而上一版自检
+    # 只跑 `cmake --install`，于是"本次安装什么都没装出来"完全可以被**上一次
+    # 的陈旧产物**掩盖。已实测复现：把 src/app 的整段 R02 安装规则停用
+    # （install(TARGETS) 与 install(CODE) 断言一起停用），前缀里留着上一轮
+    # 的 bin/AircraftPoseSystem 与 logs/，两条自检**依旧全绿**（install_check
+    # 0.01 s、install_launch_check 3.00 s 通过）—— 而一次全新安装的产物里
+    # 根本没有主程序。判据必须建立在"本次运行装出来的东西"上。
+    #
+    # 清空只针对自检前缀（${CMAKE_BINARY_DIR}/install_check），不碰 deploy/：
+    # 后者是真实交付树，自检指向它会让一次 ctest 覆盖交付内容。
+    # （.gitignore 已忽略 install_check，故它不会污染工作区状态。）
+    #
     # 不写 COMMENT：CMake 的 add_test() 会把它并入命令参数，导致
     # `cmake --install` 报 "Unknown argument COMMENT"（已在 3.31 复现）。
     # 测试名本身已说明用途，无需额外注释字段。
     add_test(NAME install_check
-        COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}"
-                --prefix "${CMAKE_BINARY_DIR}/install_check")
+        COMMAND sh -c
+            "${CMAKE_COMMAND} -E rm -rf '${CMAKE_BINARY_DIR}/install_check' && ${CMAKE_COMMAND} --install '${CMAKE_BINARY_DIR}' --prefix '${CMAKE_BINARY_DIR}/install_check'")
 
     # 自检前缀固定为 ${CMAKE_BINARY_DIR}/install_check，**不是 deploy/**：
     # 后者是真实交付树，若自检指向它，一次 ctest 就会覆盖交付内容。
     # （.gitignore 已忽略 install_check，故它不会污染工作区状态。）
 
-    # 从安装目录真的启动一次。判据是**退出码 124** —— `timeout 3` 把它杀掉
-    # 说明进程跑满 3 秒仍存活，即 Qt 事件循环已经起来了（README §1 的 010
-    # 实测口径就是这个）。崩溃 / 立即退出 / 找不到动态库都会得到别的退出码。
+    # 从安装目录真的启动一次，并核对**四条**判据（R02 收尾）：
+    #   ① 退出码 124；② 日志里有"启动完成"；
+    #   ③ 日志里有首拍标记 APP_FIRST_TICK_COMPLETED；④ 日志里**没有**"启动失败"。
+    #
+    # ⚠ 为什么 ① 单独一条不够：`timeout 3` 把进程杀掉只能说明"跑满 3 秒仍存活"，
+    #   而**初始化过程里卡死**同样满足 124 —— 那种情况下窗口从未显示、状态机从未
+    #   推进一拍，而这恰恰是最需要被发现的一类缺陷（它表现为"界面一直不出来"，
+    #   却能让自检通过）。②③ 把判据从"进程活着"推进到"启动走完了、且事件循环
+    #   至少完成了一次应用定时回调"；④ 挡的是另一侧：程序打印了"启动失败"却
+    #   因为没退出而活满 3 秒（例如失败后仍进入了事件循环）。
+    #
+    # ⚠ 输出必须落到**本次运行**的文件：旧版把输出扔进 /dev/null，出问题时
+    #   只有一行"退出码不对"，既看不到程序打印了什么，也无法区分"缺动态库"
+    #   与"初始化失败"。日志写在前缀内（本次运行刚装出来的那棵树里），
+    #   失败时 cat 出来再退出非零。
     #
     # ⚠ **WORKING_DIRECTORY 必须显式设为安装前缀**，不能用 ctest 的默认值。
     #    本程序**默认按当前工作目录**解析配置目录（`main.cpp`：configDir 初值
@@ -224,7 +250,7 @@ if(BUILD_TESTING)
     #    `ctest -R install_launch_check` 也会被自动带上，DEPENDS 不会。
     add_test(NAME install_launch_check
         COMMAND sh -c
-            "QT_QPA_PLATFORM=offscreen timeout 3 '${CMAKE_BINARY_DIR}/install_check/${CMAKE_INSTALL_BINDIR}/AircraftPoseSystem' >/dev/null 2>&1; test \$? -eq 124")
+            "cd '${CMAKE_BINARY_DIR}/install_check' || exit 2; LOG='${CMAKE_BINARY_DIR}/install_check/launch_check.log'; QT_QPA_PLATFORM=offscreen timeout 3 './${CMAKE_INSTALL_BINDIR}/AircraftPoseSystem' >\"\$LOG\" 2>&1; RC=\$?; if [ \$RC -ne 124 ]; then echo \"[APS] 启动自检失败：退出码 \$RC（期望 124=被 timeout 杀掉，即事件循环已起来）\"; cat \"\$LOG\"; exit 1; fi; if ! grep -q '启动完成' \"\$LOG\"; then echo '[APS] 启动自检失败：日志中无\"启动完成\"'; cat \"\$LOG\"; exit 1; fi; if ! grep -q 'APP_FIRST_TICK_COMPLETED' \"\$LOG\"; then echo '[APS] 启动自检失败：无首拍标记 APP_FIRST_TICK_COMPLETED（初始化完成但事件循环未完成一次应用定时回调）'; cat \"\$LOG\"; exit 1; fi; if grep -q '启动失败' \"\$LOG\"; then echo '[APS] 启动自检失败：日志中出现\"启动失败\"'; cat \"\$LOG\"; exit 1; fi; echo '[APS] 启动自检通过：退出码 124 + 启动完成 + 首拍标记，且无启动失败'")
 
     set_tests_properties(install_check PROPERTIES
         FIXTURES_SETUP aps_install)

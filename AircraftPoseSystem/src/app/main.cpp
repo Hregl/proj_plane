@@ -137,7 +137,20 @@ int main(int argc, char* argv[])
                      [&init]() { init.stopMeasurement(); });
 
     QTimer ticker;
-    QObject::connect(&ticker, &QTimer::timeout, [&init, &window]() {
+
+    // 首拍标记（R02 收尾，2026-09-24 审查报告）。
+    //
+    // 一次性，写在**真实定时器回调**的最后，而不是 `SystemInitializer::tick()`
+    // 的入口。理由：入口只能证明"进入了这个函数"，排除不了卡在首拍内部
+    // （预览线程没起来、采集阻塞、界面刷新里死锁）；只有写在回调**正常
+    // 走完**之后，它才等价于"初始化完成，且事件循环至少完成了一次应用
+    // 定时回调" —— 这正是安装自检 install_launch_check 要断言的事情
+    // （只判退出码 124 是不够的：初始化里卡死同样满足 124，见
+    //  cmake/InstallRules.cmake 的说明）。
+    bool firstTickLogged = false;
+
+    QObject::connect(&ticker, &QTimer::timeout,
+                     [&init, &window, &ctx, &firstTickLogged]() {
         const uint64_t nowNs = aircraft::data::monotonicNowNs();
 
         const bool changed = init.tick(nowNs);
@@ -151,6 +164,23 @@ int main(int argc, char* argv[])
         if (changed)
         {
             window.setMeasurementView(init.view());
+        }
+
+        if (!firstTickLogged)
+        {
+            firstTickLogged = true;
+
+            // 走日志通道（终端与日志文件都留下痕迹）。logger 未就绪时
+            // 退化为 stderr —— 与 SystemInitializer::log() 的回落写法同构，
+            // 使"该有的痕迹一行都不能少"这件事不依赖日志子系统是否起来。
+            if (ctx.logger)
+            {
+                ctx.logger->info("app", "APP_FIRST_TICK_COMPLETED");
+            }
+            else
+            {
+                std::fprintf(stderr, "APP_FIRST_TICK_COMPLETED\n");
+            }
         }
     });
     ticker.start(kTickIntervalMs);

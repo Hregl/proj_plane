@@ -381,13 +381,31 @@ public:
     /// PnP 恒失败（用例 4）。
     bool solveFails = false;
 
+    /// **前 N 次** solvePose 失败，之后成功（R06 收尾：换机场景）。
+    /// 与 solveFails 的区别正是"可区分第几次":恒失败只能证明"最终会失败",
+    /// 而本项让第 1 次失败、第 2 次成功 ⇒ 能证明"第 2 次真的换了一台相机、
+    /// 且新通道的解算结果被采用"。
+    int solveFailTimes = 0;
+
     /// 验证恒不通过（用例 3）。
     bool validateFails = false;
 
     /// 验证**契约违背**（R05）：返回值与 out.valid 相反。
     /// 这是"坏掉的实现"的替身，用于逼出控制器的对账分支 —— 正确的实现下
     /// 该分支永不可达。详见 validate() 内的说明。
-    bool validateLies = false;
+    ///
+    /// 计数式（`validateLieTimes` = **前 N 次**调用违约）。为什么不是
+    /// 一个恒真的 bool：恒违约在两种实现下都"最终失败"——
+    ///   · 当拍终止（C-013 要求的处置）：第 1 拍即 FAILED；
+    ///   · 先回退（原实现）：回退预算耗尽后同样 FAILED。
+    /// 两者不可区分。只违约一次则把二者分开：回退语义下第 2 次验证
+    /// 不再违约 ⇒ 任务会**回退后恢复并走完 COMPLETE**，而当拍终止语义下
+    /// 违约那一拍就是终态。故只需一个计数就能同时钉住"当次 FAILED"
+    /// 与"未消耗回退预算"两条。
+    int validateLieTimes = 0;
+
+    /// 实际发生的违约次数（可观测），供用例定位"违约发生在哪一拍"。
+    int validateLieUsed = 0;
 
     /// 通道评分恒返回候选集的第一个。
     /// 因为调用方传入的 allowed 已排除失败过的通道，故"次优"自然体现为
@@ -528,6 +546,24 @@ public:
         return out.targetPixelSize > 0.0;
     }
 
+    /// 按**通道**取分的预言机（R06 收尾）。
+    ///
+    /// ⚠ 原实现写死 `out.score = 1.0`，与通道无关 ⇒ 全部通道同分。
+    /// 后果：换机后**保留旧得分**与**正确写回新得分**在测试里完全等价，
+    /// R06 的两条用例因此只钉住了"角色"，钉不住"分数"——
+    /// 而"新角色 + 旧得分"正是 R06 要修的那类缺陷（两个值都合法、都不报错）。
+    /// 取值本身任意，唯一要求是**两两不同**，使分数能反推出通道。
+    static double scoreOf(CameraRole role)
+    {
+        switch (role)
+        {
+        case CameraRole::CAM25:  return 0.31;
+        case CameraRole::CAM50:  return 0.72;
+        case CameraRole::CAM100: return 0.90;
+        }
+        return 0.0;
+    }
+
     bool selectCamera(const aircraft::data::MultiCameraFrame&,
                       const std::vector<CameraRole>& allowed,
                       aircraft::data::MeasurementSelectionResult& out) override
@@ -537,7 +573,7 @@ public:
             return false;
         }
         out.selectedCamera = allowed.front();
-        out.score = 1.0;
+        out.score = scoreOf(out.selectedCamera);
         return true;
     }
 
@@ -578,7 +614,9 @@ public:
         publish();
 
         // 标定必须可用：与本文件外的 AlignmentController 用例同一条要求。
-        if (calib.cameraMatrix.empty() || solveFails)
+        // solveFailTimes：前 N 次失败（`solveCalls` 已自增，故第 1 次调用
+        // 落在 solveFailTimes = 1 的范围内）。
+        if (calib.cameraMatrix.empty() || solveFails || solveCalls <= solveFailTimes)
         {
             out = aircraft::data::ShipPoseResult{};
             return false;
@@ -611,7 +649,7 @@ public:
         //   "不排除相机、不记录验证详情"的缺陷从未在任何测试里出现过。
         //   桩变得**忠实**，而不是被控制器迁就。
         //
-        // validateLies：**故意自相矛盾**的注入，让返回值与 out.valid 相反。
+        // validateLieTimes：**故意自相矛盾**的注入，让返回值与 out.valid 相反。
         //
         // 为什么要造一个"坏掉的桩"：控制器的对账分支（契约违背 ⇒ 可见失败）
         // 在正确的实现下**永不可达**。本工程对同类断言的一贯做法是造一个
@@ -620,8 +658,10 @@ public:
         // 所以这个自相矛盾的桩是"本接口下真正无法执行的错误"唯一可测的替身。
         // 它同时是对契约文本的**负向固化**：若有人日后把契约改成
         // "bool = 执行是否成功"，本用例会立刻转红。
-        if (validateLies)
+        if (validateLieTimes > 0)
         {
+            --validateLieTimes;
+            ++validateLieUsed;
             return !out.valid;
         }
         return out.valid;
@@ -1131,37 +1171,93 @@ TEST(MeasurementFlowTest, 用例3_回退预算_VALIDATE恒不通过时的有界�
 //  R05 契约违背：validate() 的返回值与它写入的 out.valid 不一致
 // ---------------------------------------------------------------------------
 
-TEST(MeasurementFlowTest, R05_验证契约被违背时必须可见失败且详情仍留存)
+TEST(MeasurementFlowTest, R05_验证契约被违背时必须在当拍直接终止且详情仍留存)
 {
-    // 契约（本批裁决）：`validate()` 的 bool ≡ `out.valid` ≡ "是否通过全部判据"，
+    // 契约：`validate()` 的 bool ≡ `out.valid` ≡ "是否通过全部判据"，
     // **不是**"验证过程是否执行成功"。真实 PoseValidator 的每个返回点都满足该恒等，
-    // 故控制器的对账分支在正确实现下**永不可达** —— 桩的 `validateLies`
+    // 故控制器的对账分支在正确实现下**永不可达** —— 桩的 `validateLieTimes`
     // 就是"实现坏掉"的替身，也是本接口下唯一可测的错误形态。
     //
-    // 要证三件事：
+    // 要证四件事：
     //   ① 必须**失败**，不得静默按任一方继续；
-    //   ② 失败必须**可见地指出不一致**（两个值都出现在消息里）；
-    //   ③ 验证详情**仍然留存** —— 否则等于在新的通路上原样复现 R05 要修的缺陷
+    //   ② 必须是**当拍** FAILED —— C-013 第 2 条的"可见地 FAILED"；
+    //   ③ 失败必须**可见地指出不一致**（两个值都出现在消息里）；
+    //   ④ 验证详情**仍然留存** —— 否则等于在新的通路上原样复现 R05 要修的缺陷
     //      （"验证过程出问题时，验证详情反而最不可得"）。
+    //
+    // ⚠ ②是本用例相对上一版**新增**的、也是本轮评审指出的那处：
+    //   上一版让桩**持续**违约，于是"当拍终止"与"先回退、预算耗尽后失败"
+    //   两条路径都会以 FAILED 收场，用例分辨不了 —— 而实现当时走的正是
+    //   后者（handleFailure(TRANSIENT)）。现在桩**只违约一次**：
+    //   回退语义下第 2 次验证不再违约 ⇒ 任务会回退后恢复并**走完 COMPLETE**，
+    //   只有"当拍终止"的实现才会在违约那一拍进入 FAILED。
     Harness h;
     h.turntableConfig_ = configuredTurntable();
     h.turntable_.gain  = 0.5;
-    h.pipeline_.validateLies = true;
+    h.pipeline_.validateLieTimes = 1;   // 只违约一次
     h.build();
 
-    ASSERT_GE(h.run(0, 400), 0) << "未在给定 tick 内终止";
-    EXPECT_EQ(h.controller_->state(), S::FAILED);
+    // 逐拍驱动（不再 h.run()）：要断言的是"**违约的那一拍**就是 FAILED"，
+    // 故必须能指认是哪一拍违约 —— 用桩自己记的 validateLieUsed 增量定位，
+    // 而不是靠猜拍号。
+    const uint64_t now0 = 0;
+    h.controller_->startMeasurement(now0);
 
-    // 作"根因"来读，而不是读 lastError()：后续 tick 还会因回退/重试写入别的记录，
-    // lastError() 会被后来的症状覆盖。分工与 C-007 一致 —— 首次失败记根因。
+    int    lyingTick      = -1;
+    int    ticksRun       = 0;
+    uint64_t now          = now0;
+    for (; ticksRun < 400; ++ticksRun)
+    {
+        if (h.finished())
+        {
+            break;
+        }
+        const int usedBefore = h.pipeline_.validateLieUsed;
+        h.controller_->tick(now);
+        if (h.pipeline_.validateLieUsed > usedBefore)
+        {
+            lyingTick = ticksRun;
+            // ① + ②：违约**这一拍**必须已经是 FAILED，不需要任何后续拍。
+            EXPECT_EQ(h.controller_->state(), S::FAILED)
+                << "违约发生在第 " << lyingTick
+                << " 拍，但该拍结束时状态是 "
+                << static_cast<int>(h.controller_->state())
+                << " —— 契约违背被当成了可恢复的瞬态，C-013 要求的"
+                   "「可见地 FAILED」没有在违约当拍成立";
+        }
+        now += kStepNs;
+    }
+    ASSERT_GE(ticksRun, 0);
+    EXPECT_EQ(h.pipeline_.validateLieUsed, 1) << "桩只应违约一次";
+
+    // ③ 未消耗任何回退预算。
+    //
+    // ⚠ 上一版此处刻意**不**断言 0，并写明"实测该值非零，而这是正确的：
+    //   handleFailure(TRANSIENT) 走标准瞬态恢复（回退到 MEASURE_SELECT）"。
+    //   那条注释描述的是**实现当时的处置**，而 C-013 要的处置本来就不是
+    //   回退 —— 现在对账分支改为 failTerminal()（不经恢复策略），
+    //   回退预算因此必须是 0。它同时是"没有走回退"这一事实的独立证据。
+    //
+    // ⚠ 位置刻意放在 ASSERT_* **之前**：垫片里 ASSERT_* 是致命断言
+    //   （抛 AbortTest），若排在后面，一旦前面的断言之红就会整条跳过。
+    //   把它放前面，变异时能看到"既没当拍 FAILED、又确实走了回退"两条并存。
+    EXPECT_EQ(h.controller_->rollbackCount(), 0)
+        << "契约违背消耗了回退预算 —— 说明它仍走在恢复策略上";
+
+    ASSERT_LT(ticksRun, 400) << "未在给定 tick 内终止";
+    ASSERT_EQ(lyingTick, ticksRun - 1)
+        << "违约没有发生在终止前那一拍（lyingTick=" << lyingTick
+        << "，终止于第 " << ticksRun << " 拍）—— 失败另有来源";
+
+    // 作"根因"来读，而不是读 lastError()：lastError() 会被后来的记录覆盖。
+    // 分工与 C-007 一致 —— 首次失败记根因。
     const aircraft::data::FailureTrace& f = h.recorder_.lastRecord.failure;
 
-    // ① 可见失败
     EXPECT_EQ(f.firstError.code, aircraft::data::kErrStateFailure)
         << "首次失败的码是 " << f.firstError.code << "，消息：" << f.firstError.message;
 
-    // ② 消息点出不一致 —— 只说"验证失败"是不够的：那正是把契约违背
-    //    与"判不合格"混为一谈的写法，也正是原实现读错返回值的那一步。
+    // 消息点出不一致 —— 只说"验证失败"是不够的：那正是把契约违背
+    // 与"判不合格"混为一谈的写法，也正是原实现读错返回值的那一步。
     EXPECT_NE(f.firstError.message.find("验证契约违背"), std::string::npos)
         << "消息未点出契约违背，实际：" << f.firstError.message;
     EXPECT_NE(f.firstError.message.find("out.valid"), std::string::npos)
@@ -1169,8 +1265,11 @@ TEST(MeasurementFlowTest, R05_验证契约被违背时必须可见失败且详�
 
     // 它必须发生在 VALIDATE —— 若这条记录出现在别处，说明失败另有来源。
     EXPECT_EQ(f.firstFailedState, S::VALIDATE);
+    EXPECT_EQ(f.finalFailedState, S::VALIDATE)
+        << "终止发生在 " << static_cast<int>(f.finalFailedState)
+        << "，而不是违约所在的 VALIDATE";
 
-    // ③ 详情留存。桩的这次调用写入的是 out.valid = true（pose.success 为真、
+    // ④ 详情留存。桩的这次调用写入的是 out.valid = true（pose.success 为真、
     //    未置 validateFails），却返回 false —— 于是"权威值"与"返回值"
     //    正好相反，两条断言各自钉住一侧：消息说返回 false、详情说 out.valid 为真。
     EXPECT_TRUE(h.controller_->validationResult().valid)
@@ -1179,25 +1278,21 @@ TEST(MeasurementFlowTest, R05_验证契约被违背时必须可见失败且详�
     EXPECT_NEAR(h.controller_->validationResult().inlierRatio, 0.91, 1e-9);
     EXPECT_NEAR(h.controller_->validationResult().confidence, 0.88, 1e-9);
 
-    // ④ 因果对照：**同一条装配路径**，只把那个谎撤掉，任务应当正常走完。
+    // 终止发生在换机**之前**：记录里的选中通道仍是 MEASURE_SELECT 选出的那台。
+    // 这条把"失败于 VALIDATE"与"失败于换机之后"分开 —— 后者也会携带
+    // 一份 VALIDATE 的验证详情。
+    EXPECT_EQ(h.recorder_.lastRecord.selectedCamera,
+              aircraft::data::CameraRole::CAM25);
+
+    // ⑤ 因果对照：**同一条装配路径**，只把那个谎撤掉，任务应当正常走完。
     //
     //    这一条是"先红后绿"的内建版：它排除"H 组装配本身有问题"这一解释
     //    （否则上面的 FAILED 可能来自夹具，而不是来自被违背的契约），
-    //    把失败的原因**唯一地**钉在 validateLies 上。
-    //
-    // ⚠ 本用例**不**断言 `rollbackCount() == 0`，虽然"契约违背不应被当成判不合格"
-    //   会让人想这么写。实测该值非零，而这是**正确的**：
-    //   `handleFailure(TRANSIENT)` 走的是本工程标准的瞬态恢复（回退到
-    //   MEASURE_SELECT），`rollbackCount()` 数的是**回退迁移次数**，
-    //   与"有没有排除通道"是两件事 —— 对账分支本身在 `handleFailure` 之后
-    //   立即 return，**没有**调用 `excludeCamera`（处置动作留在
-    //   `if (!validation.valid)` 分支里，见代码）。
-    //   把它写成 0 是在断言一个设计从未承诺的性质；这条注释留在原处，
-    //   免得后来者又想把它加回去。
+    //    把失败的原因**唯一地**钉在 validateLieTimes 上。
     Harness c;
     c.turntableConfig_ = configuredTurntable();
     c.turntable_.gain  = 0.5;
-    c.pipeline_.validateLies = false;   // 唯一的差异
+    c.pipeline_.validateLieTimes = 0;   // 唯一的差异
     c.build();
 
     ASSERT_GE(c.run(0, 400), 0) << "对照组未在给定 tick 内终止";
@@ -1661,8 +1756,15 @@ TEST(MeasurementFlowTest, R04_未注入预览时不崩)
 //  于是记录里"选了哪台"对（selectedCamera 取的是成员）、"得分"恒 0，
 //  两个字段都合法、都不报错（C-02 §1.5 的 D-C02-5）。
 //
-//  ⚠ 期望值 1.0 来自**测试自己的桩**（StubPipeline::selectCamera 写死
-//    out.score = 1.0），不是读回实现成员 ⇒ 输入侧预言机，无法伪装。
+//  ⚠ 期望值来自**测试自己的桩**（`StubPipeline::scoreOf` 按通道给分：
+//    CAM25 → 0.31 / CAM50 → 0.72 / CAM100 → 0.90），不是读回实现成员
+//    ⇒ 输入侧预言机，无法伪装。
+//
+//  ⚠ 为什么必须**按通道**给分（本轮评审指出的第二处）：原先写死 `1.0` 时
+//    全部通道同分，于是"换机后保留旧得分"与"正确写回新得分"完全等价，
+//    得分断言形同虚设。按通道给分后，**分数本身能反推出通道** ——
+//    断言 `score == scoreOf(record.selectedCamera)` 就同时钉住了
+//    "角色与得分同源"这一不变量：只写角色不写分数时它必红。
 // ===========================================================================
 
 TEST(MeasurementFlowTest, R06_记录里的选中得分必须来自选择结论)
@@ -1677,42 +1779,67 @@ TEST(MeasurementFlowTest, R06_记录里的选中得分必须来自选择结论)
     ASSERT_EQ(h.controller_->state(), S::COMPLETE);
     ASSERT_EQ(h.recorder_.saveCalls, 1);
 
-    // 判据一：得分不再恒 0。修复前这里是 0.0（selection_ 从未被赋值）。
-    EXPECT_DOUBLE_EQ(h.recorder_.lastRecord.selectedScore, 1.0)
-        << "selectedScore 恒为 0：选择结论落在了局部变量里（R06）";
+    // 判据一：得分不再恒 0，且**必须与角色对得上**。修复前这里恒为 0.0
+    //（selection_ 从未被赋值）；而"保留旧得分"那类缺陷在这里也会红 ——
+    // 记录得分取自实现、期望得分由角色经桩的映射算出，二者不同源即失败。
+    EXPECT_DOUBLE_EQ(h.recorder_.lastRecord.selectedScore,
+                     StubPipeline::scoreOf(h.recorder_.lastRecord.selectedCamera))
+        << "记录得分 " << h.recorder_.lastRecord.selectedScore
+        << " 与角色（" << static_cast<int>(h.recorder_.lastRecord.selectedCamera)
+        << " → 应为 " << StubPipeline::scoreOf(h.recorder_.lastRecord.selectedCamera)
+        << "）不一致：选择结论落在了局部变量里，或角色与得分未同时写回（R06）";
 
-    // 判据二：得分与角色**同源**。二者必须同时写回，
-    //   否则会出现"新角色 + 旧得分"—— 两个值都合法、都不报错。
+    // 判据二：记录里的角色与控制器成员一致（同源）。
+    //   ⚠ 不额外断言"记录得分 == 控制器成员得分" —— 那需要给
+    //   MeasurementController 加一个公开访问器，而它的公开面受
+    //   SYS-04 §4.5 冻结（本批不动）。判据一已经用**输入侧**预言机
+    //   锁住了"得分与角色同源"这一不变量，比"两处成员相等"更强：
+    //   后者在两个成员被一起写错时同样通过。
     EXPECT_EQ(h.recorder_.lastRecord.selectedCamera,
               h.controller_->selectedCamera());
-    // ⚠ 不额外断言"记录得分 == 控制器成员得分" —— 那需要给
-    //   MeasurementController 加一个公开访问器，而它的公开面受
-    //   SYS-04 §4.5 冻结（本批不动）。上面的角色一致性加上"得分非 0"
-    //   已足以锁定"两个字段同源"这一不变量：只改角色不改得分时，
-    //   第 1 条断言（得分 1.0）就会红。
 }
 
 TEST(MeasurementFlowTest, R06_换机路径的得分也必须写回)
 {
     // 上一条覆盖 stepMeasureSelect；本用例覆盖**另一个**调用点
     // switchToNextCamera（§7.3 升级规则第 2 条）。两处若只改一处，
-    // 换机之后记录里的得分就会退回 0 —— 而"选了哪台"仍是对的，
+    // 换机之后记录里的得分就会退回旧通道的分 —— 而"选了哪台"仍是对的，
     // 所以只看角色是发现不了的。
+    //
+    // 场景（评审建议）：**首次 PnP 失败、换机后成功**。
+    //   solveFailTimes = 1 ⇒ POSE_SOLVE 第 1 次尝试用 CAM25(0.31) 失败
+    //   → RETRY_IN_STATE → 第 2 次尝试换机（switchToNextCamera）
+    //   → 排除 CAM25、选中 CAM50(0.72) → 第 2 次 solvePose 成功 → COMPLETE。
+    //
+    // ⚠ 为什么这个场景能分辨新旧得分：CAM25 与 CAM50 的桩得分不同
+    //   （0.31 vs 0.72）。若换机处只写角色不写得分，记录里会是
+    //   "CAM50 + 0.31" —— 断言立刻转红。原先桩给所有相机 1.0，
+    //   这一条**永远**不会红（本轮评审指出的第二处）。
     Harness h;
     h.turntableConfig_ = configuredTurntable();
     h.turntable_.gain = 0.5;
-    h.pipeline_.validateFails = true;   // 驱动回退 → 换机
+    h.pipeline_.solveFailTimes = 1;   // 首次 PnP 失败
     h.build();
 
     const int ticks = h.run(0, 400);
     ASSERT_GE(ticks, 0);
-    ASSERT_EQ(h.controller_->state(), S::FAILED);
+    ASSERT_EQ(h.controller_->state(), S::COMPLETE);
 
-    // 失败包同样要落盘（裁决 C-007），故 lastRecord 有效。
+    // 换机确实发生了：两次解算落在两个不同的通道上，且次序是 CAM25 → CAM50。
+    ASSERT_EQ(h.pipeline_.solveCameras.size(), 2u)
+        << "solvePose 调用次数 = " << h.pipeline_.solveCameras.size()
+        << "，换机场景应当恰好解算两次";
+    EXPECT_EQ(h.pipeline_.solveCameras[0], aircraft::data::CameraRole::CAM25);
+    EXPECT_EQ(h.pipeline_.solveCameras[1], aircraft::data::CameraRole::CAM50);
+
     ASSERT_EQ(h.recorder_.saveCalls, 1);
-
-    EXPECT_DOUBLE_EQ(h.recorder_.lastRecord.selectedScore, 1.0)
-        << "换机后得分退回 0：switchToNextCamera 的写回与角色脱节（R06）";
+    EXPECT_EQ(h.recorder_.lastRecord.selectedCamera,
+              aircraft::data::CameraRole::CAM50)
+        << "换机后角色不对：换机没有真正写回选中通道";
+    EXPECT_DOUBLE_EQ(h.recorder_.lastRecord.selectedScore, 0.72)
+        << "换机后得分是 " << h.recorder_.lastRecord.selectedScore
+        << "，应为 CAM50 的 0.72（0.31 即 CAM25 的旧分）—— "
+           "switchToNextCamera 的写回与角色脱节（R06）";
     EXPECT_EQ(h.recorder_.lastRecord.selectedCamera,
               h.controller_->selectedCamera());
 }
