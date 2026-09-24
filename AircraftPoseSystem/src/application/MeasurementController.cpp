@@ -779,11 +779,9 @@ void MeasurementController::stepMeasureSelect(uint64_t nowNs)
         return;
     }
 
-    selectedCamera_ = selection.selectedCamera;
-    if (preview_ != nullptr)
-    {
-        preview_->setAutoCamera(selectedCamera_);
-    }
+    // R06：角色 + 得分 + 自动显示源**同时**写回（此前只写角色，
+    // 完整结论落在局部变量里 → buildRecord 的 selectedScore 恒为 0）。
+    adoptSelection(selection);
 
     transitionTo(MeasurementState::CAPTURE, nowNs);
 }
@@ -982,15 +980,53 @@ void MeasurementController::stepValidate(uint64_t nowNs)
     }
 
     data::PoseValidationResult validation;
-    if (!pipeline_.validate(poseResult_, validation))
+
+    // ⚠ 返回值**不参与控制流**（R05，2026-09-24 审查报告）。
+    //
+    // 契约（IPosePipeline::validate 的 @return，由本批裁决统一）：
+    //     `validate()` 的 bool  ≡  `out.valid`  ≡  "是否通过全部判据"
+    // 它**不是**"验证过程是否执行成功" —— 本接口没有表达执行失败的通道。
+    // 真实 PoseValidator 的每一个返回点都满足该恒等（见 PoseValidator.h:70）。
+    //
+    // 此前此处写作 `if (!pipeline_.validate(poseResult_, validation))`，
+    // 把"判不合格"读成"验证过程失败"，于是紧接着的两步
+    // —— `validationResult_ = validation` 与 `strategy_.excludeCamera(...)`
+    // —— **都执行不到**：真实验证器判不合格时返回 false ⇒ 生产路径必然踩中
+    // （不排除相机、不记录验证详情，而是直接以 9004 报"过程失败"）。
+    // 测试桩当时恒 `return true`，所以这条断点在所有测试里都看不见。
+    const bool verifyReturned = pipeline_.validate(poseResult_, validation);
+
+    // 不论合格与否、**甚至不论契约是否被违背**，本次验证的**详情**都要留存：
+    // SAVE 落盘要它，失败包要它（saveFailurePackage），SystemInitializer 读
+    // confidence / inlierRatio 也要它。这正是原实现提前 return 丢掉的东西。
+    //
+    // ⚠ 赋值点**必须在对账分支之前**（本条是 R05 修复的一部分，不是随手的位置）：
+    //   对账分支同样是"提前 return"，若把赋值放在它后面，就等于在新的失败通路上
+    //   原样复现了 R05 要修的那个缺陷 —— "验证过程出问题时，验证详情反而最不可得"。
+    //   而在契约被违背时，实现到底报了什么（reprojectionError / inlierRatio /
+    //   confidence）**正是定位该实现哪里坏了的唯一线索**，丢掉它会让对账分支
+    //   只剩一句"true ≠ false"，无法判断是哪个字段伴随而来的。
+    //   此处只**存**不**用**：下面的分支仍以 out.valid 之外无任何动作为前提，
+    //   故把一个自相矛盾实现写出的结果留存下来不会污染任何控制流。
+    validationResult_ = validation;
+
+    // 对账：实现返回的 bool 与它写入的 out.valid 不一致 = 违背契约。
+    //   `out.valid` 为**权威**，返回值只作对账。
+    //   处置与本工程其它契约违背同构（评分器返回已被排除的通道、
+    //   最佳帧索引越界）：必须**可见地**失败，不得静默按任一方继续。
+    //   真实实现恒等，故本分支只在实现坏掉时可达。
+    if (verifyReturned != validation.valid)
     {
         handleFailure(FailureKind::TRANSIENT,
-                      data::ErrorInfo{data::kErrStateFailure, "结果验证过程失败", nowNs},
+                      data::ErrorInfo{data::kErrStateFailure,
+                                      std::string("验证契约违背：validate() 返回 ")
+                                          + (verifyReturned ? "true" : "false")
+                                          + " 而 out.valid="
+                                          + (validation.valid ? "true" : "false"),
+                                      nowNs},
                       nowNs);
         return;
     }
-
-    validationResult_ = validation;
 
     if (!validation.valid)
     {
@@ -1189,7 +1225,48 @@ bool MeasurementController::acquire(data::MultiCameraFrame& frame,
         return false;
     }
 
+    // R04：测量进行中预览的**唯一**生产者。
+    //
+    // 位置理由：acquire() 是活动态全部采集的汇聚点（SEARCH / ALIGN /
+    // STABILIZE / TARGET_FOUND / MEASURE_SELECT / CAPTURE 循环全经它），
+    // 故补帧只写这一处即覆盖全部活动态，且**不新增任何 capture() 调用**。
+    //
+    // ⚠ 放在 updateDegradation() **之前**（而不是它的 true 分支里）：
+    //   降级越界（可用 ≤1 路）会就地 FAILED，若补帧排在后面，
+    //   **导致任务终止的那一帧永远到不了屏幕** —— 而那一刻画面正是唯一的
+    //   现场证据。放在前面则最后一次采集总会显示；显示源那一路本帧为空时
+    //   submitFrom() 自己返回 false 不提交、画面保留上一帧（这正是它不肯
+    //   提交空帧的用意），降级情形自然退化正确。
+    //
+    // 顺序读法：acquire（设备事实）→ 预览（显示事实）→ 降级（策略）。
+    submitPreview(frame);
+
     return updateDegradation(frame, nowNs);
+}
+
+void MeasurementController::submitPreview(const data::MultiCameraFrame& frame)
+{
+    if (preview_ == nullptr)
+    {
+        return;   // 未注入预览（大量单测）——与 setAutoCamera 的判空同构
+    }
+
+    // 返回 false = 当前显示源那一路本帧为空，**不是错误**
+    // （相机降级 / 本轮未采）。故丢弃返回值，而不是记一个假的失败。
+    //
+    // ⚠ CAPTURE 会连采 5~10 帧，此处**逐帧全投递**，不做"只投最佳帧"的
+    //   特殊处理。三条理由：
+    //     ① acquire() 在原理上不知道哪一帧最好 —— 最佳帧由循环**之后**的
+    //        selectBestFrame 对选定焦段的视图算出；"只投最佳帧"会让这个
+    //        服务全部活动态的修复反向依赖 CAPTURE 的内部结构。
+    //     ② 队列的冻结策略已把突发处理完（容量夹取 [3,5]、push 非阻塞、
+    //        满载丢旧保新），突发后留下的正是"此刻相机看到了什么"的如实
+    //        答案；中间帧也不是静默丢失，droppedCount() 精确计数。
+    //     ③ "每拍只投一帧"需要一条并不存在的规则（投第几帧？），
+    //        且会让预览滞后一整个突发。
+    //   副作用（不是缺陷）：CAPTURE 期间 droppedCount() 会合法上升。
+    //   别把它读成故障。
+    (void)preview_->submitFrom(frame);
 }
 
 bool MeasurementController::updateDegradation(const data::MultiCameraFrame& frame,
@@ -1362,17 +1439,35 @@ bool MeasurementController::switchToNextCamera(const data::MultiCameraFrame& fra
         return false;
     }
 
-    selectedCamera_ = selection.selectedCamera;
-    if (preview_ != nullptr)
-    {
-        preview_->setAutoCamera(selectedCamera_);
-    }
+    // R06：与 stepMeasureSelect 走同一个收口，保证两处写回永远成对。
+    adoptSelection(selection);
     return true;
 }
 
 // ---------------------------------------------------------------------------
 // 转换与副作用
 // ---------------------------------------------------------------------------
+
+void MeasurementController::adoptSelection(
+    const data::MeasurementSelectionResult& selection)
+{
+    // R06（2026-09-24 审查报告）：角色与得分必须**同时**写回。
+    //
+    // 不变量：`selection_` 恒描述 `selectedCamera_`。分成两处赋值时，将来
+    // 任一处被单独改动（例如换机路径只改角色），record 里就会是"新角色 +
+    // 旧得分"—— 两个值都合法、都不报错、都"看起来正常"，正是 D-C02-5
+    // 换个位置复现。
+    //
+    // 附带消除一处既有重复：原两个调用点各自写了 preview_->setAutoCamera，
+    // 现收进本函数一处。
+    selectedCamera_ = selection.selectedCamera;
+    selection_      = selection;
+
+    if (preview_ != nullptr)
+    {
+        preview_->setAutoCamera(selectedCamera_);
+    }
+}
 
 bool MeasurementController::transitionTo(data::MeasurementState next,
                                          uint64_t nowNs)

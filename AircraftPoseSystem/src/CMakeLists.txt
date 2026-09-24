@@ -130,6 +130,36 @@ function(aps_add_module_library target)
     # 登记，供 app/CMakeLists.txt 汇总与后续审计使用
     set_property(GLOBAL APPEND PROPERTY APS_CREATED_MODULES ${target})
 
+    # (3) 安装规则（R02，2026-09-24 审查报告）
+    #
+    # 为什么写在这里而不是各模块自己的 CMakeLists.txt：
+    # **本函数是唯一知道"这个 target 是否存在"的地方** —— 上面第 (1) 步对空模块
+    # 直接 return()，那时 add_library 根本没执行。若写在各模块文件里，每个都要
+    # 自己再判一次 if(TARGET ...)，漏一个就是配置期直接报
+    #   install TARGETS given target "data" which does not exist
+    # 把"这个模块还没写"变成"整个工程配置不过" —— 正是第 (1) 步要避免的事。
+    #
+    # 也不违反 cmake/InstallRules.cmake 文件头那句"不集中写 install(TARGETS)"的
+    # **理由**（那里担心的是"本文件依赖加载顺序"）：include(InstallRules) 在顶
+    # CMakeLists 中早于 add_subdirectory(src)，那时无任何 target；
+    # 而本函数恰好在 target 刚建立之后执行。
+    #
+    # 三种 DESTINATION 全给：对 STATIC/SHARED 用同一份规则，避免"某一种库型
+    # 静默不安装"。不写 INCLUDES DESTINATION —— 它只在 EXPORT 时起作用，
+    # 而 ENG-03 §17 的冻结布局里没有 include/。
+    install(TARGETS ${target}
+            ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+            LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+            RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+
+    # 登记"会产生库产物、且已安装"的目标，供 src/app 的安装断言逐个核对。
+    #
+    # ⚠ 与上面的 APS_CREATED_MODULES **刻意分开**：那个属性还含聚合模块
+    #   （aps_add_aggregate_module 也往里 APPEND），而聚合模块是 INTERFACE 库、
+    #   **没有产物**，混在一起会让断言去找不存在的 lib<聚合名>.a。
+    #   本属性只在真正执行过 add_library 的路径上追加，故恰好是"应当存在文件"的集合。
+    set_property(GLOBAL APPEND PROPERTY APS_INSTALLED_LIBRARY_TARGETS ${target})
+
     list(LENGTH _sources _n)
     message(STATUS "[APS] 模块 ${target}：${_n} 个源文件")
 endfunction()

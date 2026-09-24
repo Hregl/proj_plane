@@ -761,6 +761,9 @@ bool PosePipeline::validate(const data::ShipPoseResult& result,
     //    inlierRatio = 0 → 置信度 0 → 除非 `minInlierRatio`/`minConfidence`
     //    都是 0，否则判不合格。这是**有意的**：没有解算就没有可验证的对象，
     //    "验证一个没算出来的姿态"在语义上不成立。
+    //
+    // R05：本层**原样透传** PoseValidator 的返回值，不做任何加工，
+    // 故本层的 bool 与 `out.valid` 同样恒等（契约见 IPosePipeline::validate）。
     return validator_.validate(result, lastPnpStats_.inlierRatio,
                                lastPnpStats_.inlierCount, out);
 }

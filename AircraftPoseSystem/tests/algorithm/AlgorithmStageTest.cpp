@@ -146,7 +146,12 @@ TEST(MeasurementSelector, EFollowsEng10Formula)
 {
     // ENG-10 §3.2：σ_px_est = a + b·(1/S) + c·(1/C)，S = 清晰度、C = 对比度。
     // ENG-10 §3.3：N_est = M_hist × N_detect。
-    // ENG-10 §3.2：E = σ_px_est·√12/(W·√N_est)   ——单位**角分**。
+    // ENG-10 §3.2：E = σ_px_est·√12/(W·√N_est)×(180/π×60)   ——单位**角分**。
+    //
+    // ⚠ 本用例覆盖**已标定**的 σ_px_est 支路（a,b,c 皆非 0）—— 全仓唯一覆盖
+    //   该式的地方，故保留。E 的**换算因子**由
+    //   `PredictedErrorIsArcminNotRadians` 用文档表格值独立钉住；
+    //   本处只钉住 a + b/S + c/C 这条关系式与 E 的完整算式。
     MeasurementConfig cfg = configuredConfig();
     cfg.sigmaA = 0.1;
     cfg.sigmaB = 50.0;
@@ -174,18 +179,19 @@ TEST(MeasurementSelector, EFollowsEng10Formula)
     // 手算（不引用实现的常量，逐项写出）：
     const double expectedSigma = 0.1 + 50.0 / 100.0 + 5.0 / 0.5;   // = 10.6
     const double expectedNEst = 0.5 * 200.0;                        // 冷启动先验 0.5
-    const double expectedE =
-        expectedSigma * std::sqrt(12.0) / (400.0 * std::sqrt(expectedNEst));
 
     EXPECT_NEAR(scored.sigmaPxEst, expectedSigma, 1e-9);
     EXPECT_NEAR(scored.nEst, expectedNEst, 1e-9);
-    EXPECT_NEAR(scored.predictedError, expectedE, 1e-9);
     EXPECT_TRUE(scored.predictedErrorCalibrated);
+
+    // E 按 R07 的完整算式（**含**弧度→角分因子）独立算得：
+    //   10.6 × √12 / (400 × √100) × 3437.7467707849396 = 31.558065973943375 角分
+    EXPECT_NEAR(scored.predictedError, 31.558065973943375, 1e-9);
 
     // E_ref = 1 角分（见 MeasurementSelector.cpp 的详细说明：冻结配置里
     // 没有以角分表达的误差容许字段，实现取系统自身的 Yaw 指标）。
-    const double expectedENorm = 1.0 - std::min(1.0, expectedE / 1.0);
-    EXPECT_NEAR(scored.eNorm, expectedENorm, 1e-9);
+    // 31.56 角分 ≫ 1 ⇒ 饱和为 0。饱和是 §3.6 的**本意**，不是异常。
+    EXPECT_DOUBLE_EQ(scored.eNorm, 0.0);
 
     // Q 的三项均值：清晰度分项取门槛值作饱和点 → 100/10 → clamp 1。
     const double expectedQ = (1.0 + 0.8 + 0.5) / 3.0;
@@ -196,8 +202,78 @@ TEST(MeasurementSelector, EFollowsEng10Formula)
     //   见 MeasurementSelector.cpp 中关于 SYS-14 §6.2 与 §8.2 冲突的说明：
     //   按字面取 "− w4·eNorm" 会让"预测误差最小"的候选得分最低。
     const double expectedScore =
-        1.0 * expectedQ + 1.0 * 1.0 + 1.0 * 0.5 + 1.0 * expectedENorm;
+        1.0 * expectedQ + 1.0 * 1.0 + 1.0 * 0.5 + 1.0 * 0.0;   // E 分项饱和 → 0
     EXPECT_NEAR(scored.score, expectedScore, 1e-9);
+}
+
+TEST(MeasurementSelector, PredictedErrorIsArcminNotRadians)
+{
+    // ⚠ R07（2026-09-24 全仓审查报告）：本用例是**独立预言机**，不是自比较。
+    //
+    // 期望值出自 **ENG-10 §2.1 的表格**，而该表数字在本次实现之前就已印在
+    // 冻结基线里 —— 它不可能由实现反推得到。
+    //
+    // 为什么必须重写成这样：原先把实现里那个漏了换算因子的表达式
+    // （`σ·√12/(W·√N)`）**照抄一遍**当期望值，于是"实现错、用例照样绿"。
+    // 这正是报告所说"测试也复写了错误公式"的形态。
+    // 新期望值不满足该性质：删掉 MeasurementSelector.cpp 的 kRadToArcmin 后，
+    // 下面两个断言会以约 **3437.75 倍**的差距当场转红。
+    //
+    // 构造走"未标定回落"路线（a=b=c=0，是 MeasurementConfig 的默认值）
+    // ⇒ σ_px = sigmaPxFallback = 0.3；冷启动 M_hist = 0.5、nDetect = 200
+    // ⇒ N_est = 100。这与表格的前提一致，故两者可直接比对。
+    MeasurementConfig cfg = configuredConfig();
+    cfg.sigmaPxFallback = 0.3;   // a=b=c=0（默认）⇒ 未标定，取此值
+
+    const MeasurementSelector selector(cfg, configuredValidation(), nullptr);
+
+    auto scoreAt = [&](double widthPx) {
+        MeasurementCandidate c;
+        c.camera = CameraRole::CAM100;
+        c.quality.sharpness = 100.0;
+        c.quality.contrast = 0.5;
+        c.quality.exposure = 0.8;
+        c.nDetect = 200;
+        c.featureSpreadPx = widthPx;          // W（§3.2 的展布宽度）
+        c.scale.targetPixelSize = widthPx;
+        c.scale.distance = 150.0;
+        c.scale.confidence = 0.9;
+
+        std::vector<MeasurementCandidate> candidates{c};
+        EXPECT_TRUE(selector.scoreAll(candidates, "aircraft"));
+        EXPECT_EQ(candidates.size(), static_cast<size_t>(1));
+        return candidates.front();
+    };
+
+    // ENG-10 §2.1 表格的两组值（表格只给两位有效数字，此处钉住同一算式的
+    // 更精确值。换算过程本身有独立的文档侧佐证 —— 见 V2.1-C005 测试设计
+    // 说明："0.3×√12/(1930×√100) = 1.851e-4 rad = 0.185 角分"）：
+    //   100 点均匀分布全长   → W ≈ 1930 px → 表格 0.19 角分
+    //   100 点集中在机头 20% → W ≈  386 px → 表格 0.93 角分
+    const MeasurementCandidate wide   = scoreAt(1930.0);
+    const MeasurementCandidate narrow = scoreAt(386.0);
+
+    EXPECT_NEAR(wide.predictedError,   0.18510939079446695, 1e-9);
+    EXPECT_NEAR(narrow.predictedError, 0.9255469539723348,  1e-9);
+    EXPECT_FALSE(wide.predictedErrorCalibrated);    // 未标定 ⇒ 标记必须为 false
+    EXPECT_FALSE(narrow.predictedErrorCalibrated);
+
+    // eNorm = 1 − min(1, E/E_ref)，E_ref = 1 角分。
+    // ⚠ 修复前这两个值都恒为 1.0（E 被低估 3437 倍 ⇒ eRatio ≈ 0）
+    //   —— 那正是"E 分项退化为常数、不再区分候选"的症状。
+    EXPECT_NEAR(wide.eNorm,   0.814890609205533,   1e-9);
+    EXPECT_NEAR(narrow.eNorm, 0.07445304602766523, 1e-9);
+
+    // 第三组：展布窄到使 E **越过**参考值 ⇒ eNorm 必须**归零**（饱和），
+    // 而不是变负或发散。这是 §3.6"预测误差已达容许上限的候选不应被选中"
+    // 的直译，也是"补上因子后 eNorm 不再恒等于 1"的对照点。
+    const MeasurementCandidate saturated = scoreAt(100.0);
+    EXPECT_NEAR(saturated.predictedError, 3.572611242333212, 1e-9);
+    EXPECT_DOUBLE_EQ(saturated.eNorm, 0.0);
+
+    // ⚠ 本用例只证明 **E 的换算与归一化**正确，**不证明整个误差模型已经
+    //   通过实机标定**（2026-09-24 审查报告的原话）。σ_px_est 的标定系数
+    //   与 W 的实测口径仍是未闭环项，登记在 README §6。
 }
 
 TEST(MeasurementSelector, UncalibratedSigmasUseFallback)
@@ -445,12 +521,27 @@ TEST(MeasurementSelector, SelectTakesMaximumAndKeepsPriorityOnTies)
         c.quality.contrast = 0.9;
         c.quality.exposure = 0.9;
         c.nDetect = 200;
-        c.featureSpreadPx = spread;       // 展布越大 → E 越小 → 得分越高
+        c.featureSpreadPx = spread;
         c.scale.targetPixelSize = spread;
         c.scale.distance = 150.0;
         c.scale.confidence = 0.9;
         return c;
     };
+
+    // ⚠ R07 之后，本用例**仍然通过，但通过的原因变了**，如实记下 ——
+    //   否则下一个人会以为"E 在三个候选之间起了区分作用"，而实际不是。
+    //
+    //   默认未标定 σ = sigmaPxFallback = 0.5，N_est = 100，于是
+    //       E = 0.5·√12/(W·10)×3437.7468 = 595.435 / W   角分
+    //   E_ref = 1 角分 ⇒ **W < 595.4 px 时 eNorm 恒为 0（饱和）**：
+    //       W = 100 → E = 5.954 → eNorm = 0
+    //       W = 400 → E = 1.489 → eNorm = 0      ← 与 W=100 **不可区分**
+    //       W = 800 → E = 0.744 → eNorm = 0.2557 ← 唯一有梯度者
+    //
+    //   故本用例里 CAM100 胜出靠的是 eNorm，而下面那对 400/400 的并列
+    //   本来就靠"保留先出现者"。饱和是 §3.6 的**本意**（"误差已达容许
+    //   上限的候选不应被选中"），但对展布退化的候选降低了区分度 ——
+    //   这条性质已登记在 README §6，将来若要改 E_ref 须先看这里。
 
     std::vector<MeasurementCandidate> candidates{
         make(CameraRole::CAM25, 100.0),

@@ -25,6 +25,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -383,6 +384,11 @@ public:
     /// 验证恒不通过（用例 3）。
     bool validateFails = false;
 
+    /// 验证**契约违背**（R05）：返回值与 out.valid 相反。
+    /// 这是"坏掉的实现"的替身，用于逼出控制器的对账分支 —— 正确的实现下
+    /// 该分支永不可达。详见 validate() 内的说明。
+    bool validateLies = false;
+
     /// 通道评分恒返回候选集的第一个。
     /// 因为调用方传入的 allowed 已排除失败过的通道，故"次优"自然体现为
     /// 候选集顺序的下一个 —— 这正是 §7.3 升级规则第 2 条要的行为。
@@ -595,7 +601,30 @@ public:
         out.reprojectionError = pose.reprojectionError;
         out.inlierRatio = 0.91;
         out.confidence = 0.88;
-        return true;
+
+        // R05（2026-09-24 审查报告）：返回真实的 bool ≡ out.valid，
+        // 与真实验证器一致（PoseValidator.cpp 的每个返回点都满足该恒等）。
+        //
+        // ⚠ 原实现恒 `return true`，于是"不合格"只体现在 out.valid 上 ——
+        //   桩与真实实现的这处语义差异，恰好把控制器那条断点藏了起来：
+        //   真实路径取 `!validate(...)` 分支、桩永远不走，所以
+        //   "不排除相机、不记录验证详情"的缺陷从未在任何测试里出现过。
+        //   桩变得**忠实**，而不是被控制器迁就。
+        //
+        // validateLies：**故意自相矛盾**的注入，让返回值与 out.valid 相反。
+        //
+        // 为什么要造一个"坏掉的桩"：控制器的对账分支（契约违背 ⇒ 可见失败）
+        // 在正确的实现下**永不可达**。本工程对同类断言的一贯做法是造一个
+        // 只坏一处的替身把它逼出来（见 C-006 兜底码、C-02 评分器越界的用例）。
+        // 而"真实实现坏掉"这件事本身在这里**无法用真实验证器表达** ——
+        // 所以这个自相矛盾的桩是"本接口下真正无法执行的错误"唯一可测的替身。
+        // 它同时是对契约文本的**负向固化**：若有人日后把契约改成
+        // "bool = 执行是否成功"，本用例会立刻转红。
+        if (validateLies)
+        {
+            return !out.valid;
+        }
+        return out.valid;
     }
 };
 
@@ -1043,6 +1072,22 @@ TEST(MeasurementFlowTest, 用例3_回退预算_VALIDATE恒不通过时的有界�
     // 判据三：以 FAILED 终止且错误可定位（消息必须点出状态名）。
     EXPECT_FALSE(h.controller_->lastError().message.empty());
 
+    // 判据四（R05，2026-09-24 审查报告）：**验证详情必须留存**。
+    //
+    // 这正是原实现提前 return 丢掉的东西：`!validate(...)` 为真时直接
+    // handleFailure 返回，于是 `validationResult_ = validation` 永不执行。
+    // 上面三条判据在这个缺陷下**全都照旧成立**（回退次数只会更少，
+    // 消息非空、码仍是 9004），所以没有本条时，缺陷只能被
+    // `totalBackwardTransitions() == rollbackCount()` 间接撞到 ——
+    // 那条信号说的是"计数对不上"，说不清是"验证详情丢了"。
+    //
+    // 本条的期望值来自**测试自己的桩**（0.42 / 0.91 / 0.88），
+    // 不是读回实现成员，故无法伪装。
+    EXPECT_FALSE(h.controller_->validationResult().valid);
+    EXPECT_NEAR(h.controller_->validationResult().reprojectionError, 0.42, 1e-9);
+    EXPECT_NEAR(h.controller_->validationResult().inlierRatio, 0.91, 1e-9);
+    EXPECT_NEAR(h.controller_->validationResult().confidence, 0.88, 1e-9);
+
     // ⚠ 与 SYS-08 §10 的**一处已知偏离**，如实记录而不迁就。
     //
     // 文档期望本用例以 9002（回退预算耗尽）结束，实测不是。逐 tick 追踪
@@ -1080,6 +1125,84 @@ TEST(MeasurementFlowTest, 用例3_回退预算_VALIDATE恒不通过时的有界�
     EXPECT_TRUE(code == aircraft::data::kErrRollbackExhausted
                 || code == aircraft::data::kErrStateFailure)
         << "实际码 " << code << "，消息：" << h.controller_->lastError().message;
+}
+
+// ---------------------------------------------------------------------------
+//  R05 契约违背：validate() 的返回值与它写入的 out.valid 不一致
+// ---------------------------------------------------------------------------
+
+TEST(MeasurementFlowTest, R05_验证契约被违背时必须可见失败且详情仍留存)
+{
+    // 契约（本批裁决）：`validate()` 的 bool ≡ `out.valid` ≡ "是否通过全部判据"，
+    // **不是**"验证过程是否执行成功"。真实 PoseValidator 的每个返回点都满足该恒等，
+    // 故控制器的对账分支在正确实现下**永不可达** —— 桩的 `validateLies`
+    // 就是"实现坏掉"的替身，也是本接口下唯一可测的错误形态。
+    //
+    // 要证三件事：
+    //   ① 必须**失败**，不得静默按任一方继续；
+    //   ② 失败必须**可见地指出不一致**（两个值都出现在消息里）；
+    //   ③ 验证详情**仍然留存** —— 否则等于在新的通路上原样复现 R05 要修的缺陷
+    //      （"验证过程出问题时，验证详情反而最不可得"）。
+    Harness h;
+    h.turntableConfig_ = configuredTurntable();
+    h.turntable_.gain  = 0.5;
+    h.pipeline_.validateLies = true;
+    h.build();
+
+    ASSERT_GE(h.run(0, 400), 0) << "未在给定 tick 内终止";
+    EXPECT_EQ(h.controller_->state(), S::FAILED);
+
+    // 作"根因"来读，而不是读 lastError()：后续 tick 还会因回退/重试写入别的记录，
+    // lastError() 会被后来的症状覆盖。分工与 C-007 一致 —— 首次失败记根因。
+    const aircraft::data::FailureTrace& f = h.recorder_.lastRecord.failure;
+
+    // ① 可见失败
+    EXPECT_EQ(f.firstError.code, aircraft::data::kErrStateFailure)
+        << "首次失败的码是 " << f.firstError.code << "，消息：" << f.firstError.message;
+
+    // ② 消息点出不一致 —— 只说"验证失败"是不够的：那正是把契约违背
+    //    与"判不合格"混为一谈的写法，也正是原实现读错返回值的那一步。
+    EXPECT_NE(f.firstError.message.find("验证契约违背"), std::string::npos)
+        << "消息未点出契约违背，实际：" << f.firstError.message;
+    EXPECT_NE(f.firstError.message.find("out.valid"), std::string::npos)
+        << "消息未给出被违背的那个字段，实际：" << f.firstError.message;
+
+    // 它必须发生在 VALIDATE —— 若这条记录出现在别处，说明失败另有来源。
+    EXPECT_EQ(f.firstFailedState, S::VALIDATE);
+
+    // ③ 详情留存。桩的这次调用写入的是 out.valid = true（pose.success 为真、
+    //    未置 validateFails），却返回 false —— 于是"权威值"与"返回值"
+    //    正好相反，两条断言各自钉住一侧：消息说返回 false、详情说 out.valid 为真。
+    EXPECT_TRUE(h.controller_->validationResult().valid)
+        << "对账分支把 out.valid 一并丢了 —— 那正是 R05 要修的缺陷形态";
+    EXPECT_NEAR(h.controller_->validationResult().reprojectionError, 0.42, 1e-9);
+    EXPECT_NEAR(h.controller_->validationResult().inlierRatio, 0.91, 1e-9);
+    EXPECT_NEAR(h.controller_->validationResult().confidence, 0.88, 1e-9);
+
+    // ④ 因果对照：**同一条装配路径**，只把那个谎撤掉，任务应当正常走完。
+    //
+    //    这一条是"先红后绿"的内建版：它排除"H 组装配本身有问题"这一解释
+    //    （否则上面的 FAILED 可能来自夹具，而不是来自被违背的契约），
+    //    把失败的原因**唯一地**钉在 validateLies 上。
+    //
+    // ⚠ 本用例**不**断言 `rollbackCount() == 0`，虽然"契约违背不应被当成判不合格"
+    //   会让人想这么写。实测该值非零，而这是**正确的**：
+    //   `handleFailure(TRANSIENT)` 走的是本工程标准的瞬态恢复（回退到
+    //   MEASURE_SELECT），`rollbackCount()` 数的是**回退迁移次数**，
+    //   与"有没有排除通道"是两件事 —— 对账分支本身在 `handleFailure` 之后
+    //   立即 return，**没有**调用 `excludeCamera`（处置动作留在
+    //   `if (!validation.valid)` 分支里，见代码）。
+    //   把它写成 0 是在断言一个设计从未承诺的性质；这条注释留在原处，
+    //   免得后来者又想把它加回去。
+    Harness c;
+    c.turntableConfig_ = configuredTurntable();
+    c.turntable_.gain  = 0.5;
+    c.pipeline_.validateLies = false;   // 唯一的差异
+    c.build();
+
+    ASSERT_GE(c.run(0, 400), 0) << "对照组未在给定 tick 内终止";
+    EXPECT_EQ(c.controller_->state(), S::COMPLETE)
+        << "撤掉那个谎之后任务仍不成功 —— 那么上面的 FAILED 不能归因于契约违背";
 }
 
 // ===========================================================================
@@ -1409,6 +1532,189 @@ TEST(MeasurementFlowTest, 状态变化应通知PreviewManager按SYS08_8切换显
     EXPECT_EQ(preview.measurementState(), S::COMPLETE);
     EXPECT_EQ(preview.autoCamera(), h.controller_->selectedCamera())
         << "§8 的 MEASURE → Selected Camera 一行需要控制器把选中焦段一起告知";
+}
+
+// ===========================================================================
+//  R04（2026-09-24 全仓审查报告）：测量期间的预览生产者
+//
+//  背景：MeasurementController 持有 preview_，却只调用 setAutoCamera 与
+//  setMeasurementState，**从未调用 submitFrom**；而 SystemInitializer 的注释
+//  声称"测量进行中 controller 每拍自己采集并提交预览"—— 该假设自写下来就
+//  未实现。生产代码里唯一的 submitFrom 调用点在 SystemInitializer 的**空闲**
+//  路径（pumpIdlePreview，只在 IDLE/COMPLETE/FAILED 执行）⇒ 测量期间画面空白。
+//
+//  ⚠ 本用例**不**走 submitFrom 的模块单测（那个早已存在于
+//    tests/preview/PreviewLayerTest.cpp，而调用链照样是断的 —— 正是报告警惕的
+//    "单测已有、链路仍断"形态）。它从控制器 tick() 出发、经 acquire() 才到达
+//    预览，这才是本次修复的那条路径。
+// ===========================================================================
+
+TEST(MeasurementFlowTest, R04_测量期间预览必须有生产者)
+{
+    Harness h;
+    h.turntableConfig_ = configuredTurntable();
+    h.turntable_.gain = 0.5;
+    h.build();
+
+    aircraft::preview::PreviewManager preview({}, &h.rig_);
+    h.preview_ = &preview;
+    h.build();   // 重建控制器以带上 preview
+
+    // 自己驱动 tick 而不复用 h.run()，因为要**逐 tick 排空队列**：
+    // 队列容量只有 3~5 且满载丢旧保新，CAPTURE 会连采 5 次，
+    // 不逐 tick 排空的话前面的帧会被挤掉，"帧号严格递增"就只能在队尾验证。
+    h.controller_->startMeasurement(0);
+    uint64_t now = 0;
+
+    std::vector<uint64_t> ids;
+    std::vector<aircraft::data::CameraRole> roles;
+    std::vector<aircraft::data::CameraRole> expectedRoles;
+    std::vector<S> states;
+
+    for (int i = 0; i < 200 && !h.finished(); ++i)
+    {
+        if (h.controller_->state() == S::CAPTURE)
+        {
+            h.cameras_.armCapturePhase();
+        }
+
+        // 提交发生在本 tick 的 acquire() 内，而显示源是由**上一次**迁移
+        // （transitionTo → setMeasurementState）设定的 ⇒ 此刻读到的
+        // displayCamera() 正是本 tick 提交时应写入的角色。
+        const aircraft::data::CameraRole before = preview.displayCamera();
+        const S stateBefore = h.controller_->state();
+
+        h.controller_->tick(now);
+        now += kStepNs;
+
+        aircraft::data::PreviewFrame pf;
+        while (preview.queue().pop(pf))
+        {
+            ids.push_back(pf.frame.frameId);
+            roles.push_back(pf.frame.role);
+            expectedRoles.push_back(before);
+            states.push_back(stateBefore);
+        }
+    }
+
+    ASSERT_EQ(h.controller_->state(), S::COMPLETE);
+
+    // 判据一（决定性的那条）：测量期间**确实有**帧进入预览队列。
+    //   修复前这是本用例唯一会红的断言 —— 测试夹具里没有 SystemInitializer，
+    //   空闲路径也不存在，故队列全程为空。
+    ASSERT_FALSE(ids.empty())
+        << "测量期间没有任何帧被提交给预览：预览的生产者只剩空闲路径（R04）";
+
+    // 判据二：帧号**严格递增**。同一帧被重复投放会在这里被抓住 ——
+    //   那正是"看起来有预览、其实是静止画面"的形态。
+    for (std::size_t i = 1; i < ids.size(); ++i)
+    {
+        EXPECT_GT(ids[i], ids[i - 1])
+            << "第 " << i << " 次提交的帧号 " << ids[i]
+            << " 不大于前一次的 " << ids[i - 1] << "（重复投放或乱序）";
+    }
+
+    // 判据三：提交的那一路就是**当时的显示源**（submitFrom 的职责）。
+    //   若控制器绕过 submitFrom 自己挑通道，这条会红。
+    ASSERT_EQ(roles.size(), expectedRoles.size());
+    for (std::size_t i = 0; i < roles.size(); ++i)
+    {
+        EXPECT_EQ(roles[i], expectedRoles[i])
+            << "第 " << i << " 帧的角色与当时显示源不符";
+    }
+
+    // 判据四：覆盖的是**整条活动链**，不是只有 SEARCH。
+    //   取出现过的状态集合大小 —— 只有 SEARCH 能提交的话这里会退化。
+    std::vector<S> distinctStates = states;
+    std::sort(distinctStates.begin(), distinctStates.end(),
+              [](S a, S b) { return static_cast<int>(a) < static_cast<int>(b); });
+    distinctStates.erase(std::unique(distinctStates.begin(), distinctStates.end()),
+                         distinctStates.end());
+    EXPECT_GE(distinctStates.size(), 3u)
+        << "只在 " << distinctStates.size() << " 个状态里有提交，覆盖不完整";
+
+    // 判据五：CAPTURE 的连采**全部投递**（不缓存、不延后），
+    //   故帧号序列里必然出现同一个状态下的连续多次采集。
+    EXPECT_GE(ids.size(), 5u);
+}
+
+TEST(MeasurementFlowTest, R04_未注入预览时不崩)
+{
+    // 负对照：preview_ == nullptr 是大量单测的常态（Harness 的默认值）。
+    // submitPreview() 必须与 setAutoCamera 的判空同构，否则会新增一片崩溃面。
+    Harness h;
+    h.turntableConfig_ = configuredTurntable();
+    h.turntable_.gain = 0.5;
+    h.build();   // preview_ 保持 nullptr
+
+    ASSERT_EQ(h.preview_, nullptr);
+    const int ticks = h.run(0, 200);
+    ASSERT_GE(ticks, 0);
+    EXPECT_EQ(h.controller_->state(), S::COMPLETE);
+}
+
+// ===========================================================================
+//  R06（2026-09-24 全仓审查报告）：selectedScore 恒为 0
+//
+//  背景：成员 selection_ 声明了、也被 reset() 清过、也被 buildRecord() 读过，
+//  但**从来没有被赋过真实值** —— 两处 selectCamera() 的结果都落在局部变量里。
+//  于是记录里"选了哪台"对（selectedCamera 取的是成员）、"得分"恒 0，
+//  两个字段都合法、都不报错（C-02 §1.5 的 D-C02-5）。
+//
+//  ⚠ 期望值 1.0 来自**测试自己的桩**（StubPipeline::selectCamera 写死
+//    out.score = 1.0），不是读回实现成员 ⇒ 输入侧预言机，无法伪装。
+// ===========================================================================
+
+TEST(MeasurementFlowTest, R06_记录里的选中得分必须来自选择结论)
+{
+    Harness h;
+    h.turntableConfig_ = configuredTurntable();
+    h.turntable_.gain = 0.5;
+    h.build();
+
+    const int ticks = h.run(0, 200);
+    ASSERT_GE(ticks, 0);
+    ASSERT_EQ(h.controller_->state(), S::COMPLETE);
+    ASSERT_EQ(h.recorder_.saveCalls, 1);
+
+    // 判据一：得分不再恒 0。修复前这里是 0.0（selection_ 从未被赋值）。
+    EXPECT_DOUBLE_EQ(h.recorder_.lastRecord.selectedScore, 1.0)
+        << "selectedScore 恒为 0：选择结论落在了局部变量里（R06）";
+
+    // 判据二：得分与角色**同源**。二者必须同时写回，
+    //   否则会出现"新角色 + 旧得分"—— 两个值都合法、都不报错。
+    EXPECT_EQ(h.recorder_.lastRecord.selectedCamera,
+              h.controller_->selectedCamera());
+    // ⚠ 不额外断言"记录得分 == 控制器成员得分" —— 那需要给
+    //   MeasurementController 加一个公开访问器，而它的公开面受
+    //   SYS-04 §4.5 冻结（本批不动）。上面的角色一致性加上"得分非 0"
+    //   已足以锁定"两个字段同源"这一不变量：只改角色不改得分时，
+    //   第 1 条断言（得分 1.0）就会红。
+}
+
+TEST(MeasurementFlowTest, R06_换机路径的得分也必须写回)
+{
+    // 上一条覆盖 stepMeasureSelect；本用例覆盖**另一个**调用点
+    // switchToNextCamera（§7.3 升级规则第 2 条）。两处若只改一处，
+    // 换机之后记录里的得分就会退回 0 —— 而"选了哪台"仍是对的，
+    // 所以只看角色是发现不了的。
+    Harness h;
+    h.turntableConfig_ = configuredTurntable();
+    h.turntable_.gain = 0.5;
+    h.pipeline_.validateFails = true;   // 驱动回退 → 换机
+    h.build();
+
+    const int ticks = h.run(0, 400);
+    ASSERT_GE(ticks, 0);
+    ASSERT_EQ(h.controller_->state(), S::FAILED);
+
+    // 失败包同样要落盘（裁决 C-007），故 lastRecord 有效。
+    ASSERT_EQ(h.recorder_.saveCalls, 1);
+
+    EXPECT_DOUBLE_EQ(h.recorder_.lastRecord.selectedScore, 1.0)
+        << "换机后得分退回 0：switchToNextCamera 的写回与角色脱节（R06）";
+    EXPECT_EQ(h.recorder_.lastRecord.selectedCamera,
+              h.controller_->selectedCamera());
 }
 
 // ===========================================================================

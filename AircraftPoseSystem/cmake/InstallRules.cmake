@@ -8,12 +8,28 @@
 #  职责：定义安装布局，使 `cmake --install build` 产出一个**可直接拷到现场**
 #        的目录树。
 #
-#  分工（重要）：
-#    本文件    → 安装前缀、目录结构、纯数据资产（config/models/calibration）。
-#    各模块    → 各自的 install(TARGETS ...)。**不在此集中写 install(TARGETS)**，
-#                因为目标定义在 src/ 各子目录中，集中书写会让本文件依赖
-#                加载顺序，且每新增一个模块都要回来改这里，正是 ENG-03 §2.1
-#                "模块独立编译"要避免的耦合。
+#  分工（重要，2026-09-24 按 R02 修正为**如实**的三条）：
+#
+#    本文件                → 安装前缀、目录结构、纯数据资产
+#                            （config / models / calibration）、SDK 运行期库，
+#                            以及 §6 的两条安装自检测试。
+#
+#    src/CMakeLists.txt    → **10 个模块库**的 install(TARGETS ...)，写在
+#      的 aps_add_module_library()  那个函数体里。之所以不写在本文件、也不各自
+#                            写在各模块的 CMakeLists.txt 里：该函数是**唯一
+#                            知道 target 是否存在**的地方（它对空模块提前
+#                            return()）。写在各模块文件里就要各自再判一次
+#                            if(TARGET ...)，漏一个就是配置期直接报
+#                            "install TARGETS given target ... does not exist"
+#                            —— 把"这个模块还没写"变成"整个工程配置不过"。
+#
+#    src/app/CMakeLists.txt → **可执行文件**的 install(TARGETS ...)，以及紧随
+#                            其后的 install(CODE ...) 安装断言（见该文件 §5）。
+#
+#  ⚠ 修正说明：本段原文写"各模块 → 各自的 install(TARGETS ...)"，描述的是一个
+#    **从未实现的约定** —— R02 审查发现全工程 install(TARGETS ...) 实体 0 处，
+#    于是 deploy/ 只有空的 config/models/calibration。约定写了不等于做了，
+#    故本段现在只描述**代码里实际存在**的分工。
 # ============================================================================
 
 include(GNUInstallDirs)
@@ -136,10 +152,33 @@ if(DEFINED APS_IMVSDK_RUNTIME_DIRS AND APS_IMVSDK_RUNTIME_DIRS)
 endif()
 
 # ----------------------------------------------------------------------------
-# 5 安装自检
+# 5 安装断言（在 `cmake --install` **内部**执行）
 #
-# 把安装动作本身登记成一条 CTest 测试，使 ENG-03 §20 第 6 条"支持离线部署"
+# ⚠ 断言**不在本文件**，在 `src/app/CMakeLists.txt` 里紧随 install(TARGETS)
+#   之后。这是个必须记住的顺序陷阱，不是笔误：
+#
+#   CMake 生成的 cmake_install.cmake 中，**本目录自己的 install 规则全部排在
+#   各子目录的 include() 之前** —— 与 add_subdirectory() 在 CMakeLists.txt 中
+#   出现的位置无关。所以在这里写 install(CODE) 会在 `src/` 的规则之前执行，
+#   那时 bin/AircraftPoseSystem 还没被拷贝过去，断言**必然失败**。
+#   （已在 3.31 实测：本文件的 CODE 位于 install 脚本第 75~96 行，
+#     而 `include(.../build/src/cmake_install.cmake)` 在第 102 行。）
+#
+#   凡"断言某个 target 已装好"的 CODE，都必须与那条 install(TARGETS ...)
+#   写在同一个 CMakeLists.txt 里、且排在其后。
+# ----------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------
+# 6 安装自检
+#
+# 把安装动作本身登记成两条 CTest 测试，使 ENG-03 §20 第 6 条"支持离线部署"
 # 在 CI 中可自动验证，而不是靠人工记得敲一次 cmake --install。
+#
+# 分工：
+#   install_check        —— 跑得通 `cmake --install`，且产物校验通过
+#                           （产物校验即 §5 所指 src/app 里的 install(CODE ...)）
+#   install_launch_check —— 从**安装目录**真的启动一次，确认它是可运行的
+#                           （R02，2026-09-24 审查报告）
 # ----------------------------------------------------------------------------
 if(BUILD_TESTING)
     # 不写 COMMENT：CMake 的 add_test() 会把它并入命令参数，导致
@@ -148,4 +187,49 @@ if(BUILD_TESTING)
     add_test(NAME install_check
         COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}"
                 --prefix "${CMAKE_BINARY_DIR}/install_check")
+
+    # 自检前缀固定为 ${CMAKE_BINARY_DIR}/install_check，**不是 deploy/**：
+    # 后者是真实交付树，若自检指向它，一次 ctest 就会覆盖交付内容。
+    # （.gitignore 已忽略 install_check，故它不会污染工作区状态。）
+
+    # 从安装目录真的启动一次。判据是**退出码 124** —— `timeout 3` 把它杀掉
+    # 说明进程跑满 3 秒仍存活，即 Qt 事件循环已经起来了（README §1 的 010
+    # 实测口径就是这个）。崩溃 / 立即退出 / 找不到动态库都会得到别的退出码。
+    #
+    # ⚠ **WORKING_DIRECTORY 必须显式设为安装前缀**，不能用 ctest 的默认值。
+    #    本程序**默认按当前工作目录**解析配置目录（`main.cpp`：configDir 初值
+    #    为 "config"），而 ctest 的默认工作目录是 ${CMAKE_BINARY_DIR}，那里没有
+    #    config/，于是程序以**退出码 1** 打印"找不到配置文件"后退出 ——
+    #    这条测试就会恒红，而失败原因与安装规则毫无关系。
+    #    （实测：cwd=安装根 → 124；cwd=bin/ 或 build/ → 1。）
+    #
+    #    取"cwd=安装根 + 默认配置路径"而不是"用 argv[1] 显式指定配置目录"：
+    #    前者正是现场解包后的动作（`cd deploy && ./bin/AircraftPoseSystem`），
+    #    要测的就是这条默认路径能跑通。
+    #    ⚠ 注意 argv[1] **确实**可以指定配置目录（故程序并非只能从包根启动），
+    #      但 `models/`、`calibration/`、`logs/`、`output/` 仍按 CWD 解析
+    #      （已登记为 Q-B10）。本测试不依赖这些路径 —— 它们缺失只打 WARN，
+    #      不影响事件循环起来。
+    #
+    # ⚠ `\$?` 写成转义形式，但**这不是必需的** —— CMake 只把 `${…}` / `$ENV{…}` /
+    #    `$CACHE{…}` / `$<…>` 当变量引用，裸 `$?` 它会原样输出。
+    #    （已实测：去掉 `\` 后生成的命令逐字节相同。）转义写法只是把
+    #      "这是给 sh 的、不是给 CMake 的"写明白而已。
+    #    ⚠ 本条注释原先断言"不转义会被展开成空串、测试退化为无脑通过"，**那是错的**，
+    #      已改正。真正会咬人的是另一侧：`${CMAKE_INSTALL_BINDIR}` 这类**确实**在
+    #      配置期展开，写错位置就会得到配置期与安装期混拼的怪路径。
+    #
+    # ⚠ 不进 `deploy/`、也不重新安装 —— 依赖 install_check 已经装好。
+    #    用 FIXTURES 而不是 DEPENDS：fixture 的 setup 测试即使做了
+    #    `ctest -R install_launch_check` 也会被自动带上，DEPENDS 不会。
+    add_test(NAME install_launch_check
+        COMMAND sh -c
+            "QT_QPA_PLATFORM=offscreen timeout 3 '${CMAKE_BINARY_DIR}/install_check/${CMAKE_INSTALL_BINDIR}/AircraftPoseSystem' >/dev/null 2>&1; test \$? -eq 124")
+
+    set_tests_properties(install_check PROPERTIES
+        FIXTURES_SETUP aps_install)
+    set_tests_properties(install_launch_check PROPERTIES
+        FIXTURES_REQUIRED aps_install
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/install_check"
+        TIMEOUT 30)
 endif()

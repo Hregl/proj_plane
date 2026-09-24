@@ -339,6 +339,35 @@ private:
     /// 返回 false 表示已达下限（≤1 路），调用方须以 1001 失败。
     bool updateDegradation(const data::MultiCameraFrame& frame, uint64_t nowNs);
 
+    /// 把刚采到的一帧提交给预览（R04，2026-09-24 审查报告）。
+    ///
+    /// ⚠ **本函数是测量期间预览的唯一生产者。** 活动态（SEARCH / ALIGN /
+    ///   STABILIZE / TARGET_FOUND / MEASURE_SELECT / CAPTURE / POSE_SOLVE /
+    ///   VALIDATE / SAVE）全部经 `acquire()` 采集，故投递只写这一处即全覆盖。
+    ///
+    ///   此前 `preview_` 只被用于 `setAutoCamera` / `setMeasurementState`，
+    ///   `submitFrom` **从未被调用**；而 `SystemInitializer` 的注释却声称
+    ///   "controller 每拍自己采集并提交预览" —— 该假设自写下来就未实现，
+    ///   于是测量期间画面一直空白（预览的生产者只剩空闲态的 pumpIdlePreview）。
+    ///
+    /// 抽成具名函数的理由：让"唯一投递点"成为**可 grep 的符号**，与本工程
+    /// 其它单点约定（`viewToAcq` 是唯一允许换算处、`transitionTo` 是迁移
+    /// 唯一收口）同构。
+    void submitPreview(const data::MultiCameraFrame& frame);
+
+    /// 采纳一次通道选择的**完整结论**：角色 + 得分 + 自动显示源（R06）。
+    ///
+    /// ⚠ 三者必须同时写回。此前两个调用点各自只写 `selectedCamera_`，而把
+    ///   `MeasurementSelectionResult` 落在**局部变量**里（C-02 §1.5 的
+    ///   D-C02-5），于是 `buildRecord()` 的 `selectedScore` 恒为 0 ——
+    ///   记录里"选了哪台"对、"得分"却恒 0，两个字段都不报错。
+    ///   分开赋值时将来任一处被单独改动，就会得到"新角色 + 旧得分"——
+    ///   两个值都合法、都不报错、都看起来正常，正是该缺陷换个位置复现。
+    ///
+    /// 不变量：`selection_` 恒描述 `selectedCamera_`。故 `selectedCamera_`
+    /// 只允许在本函数与 `reset()` 两处赋值（全仓可穷尽核对）。
+    void adoptSelection(const data::MeasurementSelectionResult& selection);
+
     /// 在指定焦段上检测目标（§5.2 的 YOLO → DetectionResult）。
     bool detectOn(const data::MultiCameraFrame& frame,
                   data::CameraRole role,

@@ -91,4 +91,109 @@ target_link_libraries(AircraftPoseSystem PRIVATE
     aps::qt5
 )
 
+# ----------------------------------------------------------------------------
+# 4 安装（R02，2026-09-24 审查报告）
+#
+# 模块库的 install(TARGETS ...) 由 src/CMakeLists.txt 的 aps_add_module_library()
+# 统一给出（理由见该处注释）；可执行文件不经过那个函数，故在此单独安装。
+#
+# ⚠ 只写 RUNTIME：可执行文件没有 ARCHIVE/LIBRARY 产物。写成三种全给在这里
+#   不算错，但会让人以为本 target 也可能是库。库与可执行文件的安装规则
+#   分开写、各自只列真正会产生的产物类型，正是为了让"谁装了什么"可读。
+#
+# ⚠ 本行**不可删**：紧随其后的 install(CODE ...) 断言
+#   bin/AircraftPoseSystem 必须存在，删掉这里会让 `cmake --install` 直接失败。
+# ----------------------------------------------------------------------------
+install(TARGETS AircraftPoseSystem
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+
+# ----------------------------------------------------------------------------
+# 5 安装自检断言（在 `cmake --install` **内部**执行）
+#
+# R02（2026-09-24 审查报告）暴露的缺陷：全工程 `install(TARGETS ...)` 实体 0 处，
+# 于是 `deploy/` 只有空的 config/models/calibration，**没有 bin/、没有 lib/**——
+# 一个没有主程序的部署目录。而原 install_check 只跑 `cmake --install`、
+# 不校验任何产物，所以这个缺陷不被任何检查覆盖。
+#
+# 本断言让"装了个没有主程序的目录"**从此不可能成功**，无论谁手工敲安装命令。
+#
+# ⚠ 断言**两件事**：bin/ 里有可执行文件，且 lib/ 里**每一个**已建立的模块库
+#   都在。只断言 bin/ 会漏掉 R02 缺陷的一半 —— 报告原文就是"没有 bin/、没有 lib/"。
+#   这也不与"全静态构建下 lib/ 运行期不需要"矛盾：这里断言的不是"运行需要它"，
+#   而是"我们 created 的每个模块库真的被装了出去"。
+#
+# ⚠ 为什么写在**这里**而不是 cmake/InstallRules.cmake：见该文件 §5 的说明 ——
+#   CMake 生成的 install 脚本中，父目录自己的规则全部早于子目录的 include()，
+#   写在 InstallRules 里的断言会在 bin/ 被拷贝之前执行，必然失败。
+#   凡断言"某个 target 已装好"的 CODE，都要与那条 install(TARGETS ...)
+#   写在同一个文件里、且排在其后。
+#
+# 转义要点（这一步最容易写错）：
+#   ${CMAKE_INSTALL_BINDIR}   —— **配置期**展开（GNUInstallDirs 已定义），不转义；
+#   \${CMAKE_INSTALL_PREFIX}  —— **安装期**读取，必须 `\$` 转义。两者写反了
+#                                会得到一个"配置期的前缀 + 安装期的 bin"的怪路径；
+#   \$ENV{DESTDIR}            —— 安装期读取；DESTDIR 只影响实际落盘位置，
+#                                **不**并入 CMAKE_INSTALL_PREFIX 变量，故须显式前置。
+#
+# 期望的库文件名在**配置期**算好再烘进 CODE：APS_INSTALLED_LIBRARY_TARGETS 是
+# 全局属性，本文件（src/app）在 src/CMakeLists.txt 中最后 add_subdirectory，
+# 故此刻已收齐全部模块 —— 以后新增模块会自动进入这个断言，不必回来改这里。
+# 库前缀/后缀按 APS_LIBRARY_TYPE 取 GNUInstallDirs 的变量，故 STATIC/SHARED 都对。
+# ----------------------------------------------------------------------------
+get_property(_aps_lib_targets GLOBAL PROPERTY APS_INSTALLED_LIBRARY_TARGETS)
+
+if(APS_LIBRARY_TYPE STREQUAL "SHARED")
+    set(_aps_lib_prefix "${CMAKE_SHARED_LIBRARY_PREFIX}")
+    set(_aps_lib_suffix "${CMAKE_SHARED_LIBRARY_SUFFIX}")
+else()
+    set(_aps_lib_prefix "${CMAKE_STATIC_LIBRARY_PREFIX}")
+    set(_aps_lib_suffix "${CMAKE_STATIC_LIBRARY_SUFFIX}")
+endif()
+
+set(_aps_expected_libs "")
+foreach(_aps_t IN LISTS _aps_lib_targets)
+    list(APPEND _aps_expected_libs "${_aps_lib_prefix}${_aps_t}${_aps_lib_suffix}")
+endforeach()
+list(LENGTH _aps_expected_libs _aps_lib_count)
+
+install(CODE "
+    set(_aps_exe \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/AircraftPoseSystem\")
+
+    if(NOT EXISTS \"\${_aps_exe}\")
+        message(FATAL_ERROR
+            \"[APS] 安装自检失败：安装前缀下没有可执行文件 \${_aps_exe}\\n\"
+            \"  → 检查本文件是否仍有 install(TARGETS AircraftPoseSystem ...)，\\n\"
+            \"     以及构建时是否真的生成了 AircraftPoseSystem 目标。\")
+    endif()
+
+    set(_aps_libdir \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
+    set(_aps_missing \"\")
+    foreach(_aps_lib IN ITEMS ${_aps_expected_libs})
+        if(NOT EXISTS \"\${_aps_libdir}/\${_aps_lib}\")
+            list(APPEND _aps_missing \"\${_aps_lib}\")
+        endif()
+    endforeach()
+    if(_aps_missing)
+        message(FATAL_ERROR
+            \"[APS] 安装自检失败：模块库未安装到 \${_aps_libdir}\：\${_aps_missing}\\n\"
+            \"  → 检查 src/CMakeLists.txt 的 aps_add_module_library() 里是否仍有\\n\"
+            \"     install(TARGETS \\\${target} ...)。\")
+    endif()
+    message(STATUS \"[APS] 安装自检：\${_aps_libdir} 下 ${_aps_lib_count} 个模块库齐备\")
+
+    # 可执行位。用 test(1) 而非 CMake 内置判定——CMake 没有 IS_EXECUTABLE。
+    # 若本机没有 test 命令，只提示、不失败：检查器缺失不应让安装失败。
+    execute_process(COMMAND test -x \"\${_aps_exe}\" RESULT_VARIABLE _aps_test_rc)
+    if(_aps_test_rc MATCHES \"^[0-9]+\")
+        if(NOT _aps_test_rc EQUAL 0)
+            message(FATAL_ERROR
+                \"[APS] 安装自检失败：\${_aps_exe} 存在但**没有可执行权限**。\")
+        endif()
+    else()
+        message(STATUS \"[APS] 安装自检：本机无 test 命令，跳过可执行位检查\")
+    endif()
+
+    message(STATUS \"[APS] 安装自检通过：\${_aps_exe}\")
+")
+
 message(STATUS "[APS] 可执行文件 AircraftPoseSystem 已生成（链接 ${_aps_link_targets}）")
