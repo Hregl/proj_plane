@@ -26,7 +26,7 @@
 //  degraded / state）：
 //    冻结接口 IMultiCameraManager（SYS-06 §5.2）只有 4 个方法，
 //    本类**完整实现且未修改**该契约；新增的查询是具象类自己的能力，
-//    用于满足 SYS-08 §7.5 对结果包的要求
+//    用于满足 SYS-08 §7.5〔引用无效·依据待裁决·见 Q-D2〕 对结果包的要求
 //      "result.json 记录 degraded=true 与 cameras_available"
 //    以及"降级必须在 UI 上可见，不得静默降级"。
 //    任何按冻结接口编写的消费者都不受影响（新增方法不改变虚表契约）。
@@ -39,13 +39,20 @@
 //  "本轮作废重采"还是"降级接受"，这属于应用层策略。
 // ============================================================================
 
+// ============================================================================
+//  ⚠ 本文件引用的 SYS-08 §7.x 经核实为悬空／撞号引用（2026-09-26 复核），依据待裁决，见《待裁决问题汇总》Q-D2 与《SYS-08-§7引用勘误.md》；正文引用仅描述现行行为，不作为冻结依据。
+// ============================================================================
+
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 #include "data/CameraChannel.h"
+#include "data/CaptureRound.h"
 #include "data/DeviceState.h"
 #include "data/ErrorInfo.h"
 #include "data/MultiCameraFrame.h"
+#include "data/OpStatus.h"
 #include "device/camera/ICameraBackend.h"
 #include "device/camera/IMultiCameraManager.h"
 
@@ -81,7 +88,39 @@ public:
     bool initializeAll() override;
     bool startAll() override;
     void stopAll() override;
-    bool capture(data::MultiCameraFrame& frame) override;
+    bool capture(data::MultiCameraFrame& frame, uint64_t deadlineNs) override;
+    data::CaptureRound lastCaptureRound() const override;
+
+    // ---- 具象类追加能力（011-A1）----
+
+    /// 注入当前时间的来源（默认 `data::monotonicNowNs`）。
+    ///
+    /// ⚠ 形状**照抄仓内既有先例** `VirtualTurntable::setClock`
+    /// （`src/device/turntable/VirtualTurntable.h:72`，已被
+    /// `tests/device/DeviceLayerTest.cpp` 使用）—— 本仓没有任何通用时钟
+    /// 接口（`IClock`／`std::function<int64_t>` 在管理器与控制器中零命中），
+    /// 故不为这一个用途新造抽象。
+    ///
+    /// 为什么必须有这个 seam：本批起 `capture()` 要按**绝对期限**判定
+    /// 是否还值得取帧。测试把模拟时间从 0 推进（既有用例全是
+    /// `tick(now); now += step;` 的形态），若管理器直读真实单调钟，
+    /// 模拟期限会被真实墙钟**一上来就判过期**，整套时序用例会以与本次
+    /// 改动无关的原因变红。
+    ///
+    /// ⚠ 生产与测试**各自只用一种来源**，不得在同一段逻辑里混用：
+    /// 控制器、管理器、测试共用同一个时间域。
+    void setClock(std::function<uint64_t()> clock);
+
+    /// 设置取帧预算（由装配点从 `MeasurementConfig` 注入）。
+    ///
+    /// @param perGrabTimeoutMs 单次取帧上限（传给 `ICameraBackend::grab`）。
+    ///        **不接受 0** —— SDK 对 `timeoutMS = 0` 的语义未文档化
+    ///        （§2.5 已核：`IMV_GetFrame` 的参数注释只提 `INFINITE`，
+    ///        而 `INFINITE` 宏甚至未定义），故项目也不定义它。
+    ///        传 0 ⇒ 各路按 `InvalidArgument`（本地判定，未调用 SDK）处置，
+    ///        **不是**静默当成"无限等待"。
+    /// @param groupBudgetNs 一次 `capture()` **三路合计**的总预算。
+    void setGrabBudget(uint32_t perGrabTimeoutMs, uint64_t groupBudgetNs);
 
     // ---- 具象类追加查询（见文件头"偏离 B"）----
 
@@ -90,7 +129,7 @@ public:
     int availableCameraCount() const;
 
     /// 是否处于降级状态：可用相机数在 1~2 之间（<3 但 ≥2）。
-    /// 即 SYS-08 §7.5 要求写入 result.json 的 `degraded` 字段。
+    /// 即 SYS-08 §7.5〔引用无效·依据待裁决·见 Q-D2〕 要求写入 result.json 的 `degraded` 字段。
     /// 可用数为 0~1 时不返回 true —— 那是失败而非降级
     /// （§7.5：≤1 直接 FAILED，code=1001）。
     bool degraded() const;
@@ -121,6 +160,24 @@ public:
     /// @return false 表示该角色本就没有 backend（无可禁用者）。
     bool disableChannel(data::CameraRole role);
 
+    /// 某一路当前是否可用（011-A1 新增）。
+    ///
+    /// ⚠ **不是** `IMultiCameraManager` 的虚方法：本方法存在的理由是装配层
+    /// 需要**逐路**的就绪事实，而那个接口的既有方法面（`initializeAll` /
+    /// `startAll` / `stopAll` / `capture` / `lastError` + 本批新增的
+    /// `lastCaptureRound`）只给出**合计**。故与后端类的 `state()` 一样，
+    /// 它是具象类各自的查询能力，不进冻结 ICD。
+    ///
+    /// 为什么装配层需要它（而不是自己数）：装配要回答两个问题——
+    ///   ① 装配摘要里每一路到底就绪没有（"三路都装配了"与"三路都能用"
+    ///      必须分开写）；
+    ///   ② **显式请求的真实后端若没打开，整次启动必须失败** —— 这一条
+    ///      不能靠"另外两路虚拟相机还在"来满足（`initializeAll()` 的
+    ///      判据是**合计** ≥2，2 虚拟 + 1 失败的真实 = 恰好 2 ⇒ 合计
+    ///      达标，而"真实接入成功"却是不成立的）。
+    /// 这两个问题的答案只有本类知道，故问本类，而不在装配层重数一遍。
+    bool channelAvailable(data::CameraRole role) const;
+
 private:
     /// 一个通道的运行时状态。把"backend 指针"与"是否可用"绑在一起，
     /// 保证二者不会失配 —— 若分成两个并列成员（如 backends_[3] 与
@@ -138,8 +195,27 @@ private:
     Channel&       channelOf(data::CameraRole role);
     const Channel& channelOf(data::CameraRole role) const;
 
+    /// 当前时间（ns），来自 `clock_`。
+    ///
+    /// ⚠ 全类**只经本方法**读时间，且**不缓存**任何时刻：
+    /// 缓存会让 `startedNs`／`finishedNs` 反映"入口那一次"而不是
+    /// "真的什么时候结束"，本批正是要测这段实际耗时（§2.2 删除
+    /// "组预算＝GUI 线程硬上限"承诺之后它成为唯一可测事实）。
+    uint64_t nowNs() const;
+
     /// 采集单路；成功则写入 frame 中对应的字段。
-    bool grabOne(Channel& ch, data::ImageFrame& out, uint64_t& timestampOut);
+    ///
+    /// ⚠ 本函数**只取帧，不发软件触发令**（§2.4 单一执行者）。
+    /// 发令由 `capture()` 在调用本函数**之前**完成 ——
+    /// "等待一帧"不等于"发出了一次软件触发"，这两件事必须在代码上
+    /// 也分开，否则以后有人说"加个重试吧"时，会在本函数里再发一次令。
+    ///
+    /// @param timeoutMs 已经取过最小的单次等待上限（见 capture() 的推导）。
+    /// @return 完整结果（分类 + 原码）；调用方据分类决定是否禁用该通道。
+    data::GrabResult grabOne(Channel&          ch,
+                             data::ImageFrame& out,
+                             uint64_t&         timestampOut,
+                             uint32_t          timeoutMs);
 
     /// 产出本轮的 `MultiCameraFrame::exposureIndex`（裁决 D-C02-6）。
     ///
@@ -188,6 +264,21 @@ private:
     /// 行为由各 SDK 决定（通常返回错误或阻塞），把 SDK 的行为差异
     /// 泄漏成上层可见的不确定行为。
     bool started_ = false;
+
+    /// 当前时间的来源（注入）。默认单调钟，测试注入假钟。
+    /// 只读不改：本成员**不缓存任何期限**（期限只从 capture() 的形参来）。
+    std::function<uint64_t()> clock_;
+
+    /// 单次取帧上限（ms）。默认 100 —— 与 MeasurementConfig 的默认值一致，
+    /// 使未显式注入的既有调用方行为不变。
+    uint32_t perGrabTimeoutMs_ = 100;
+
+    /// 一次 capture() 三路合计的总预算（ns）。默认 3.0e8（300 ms）。
+    uint64_t grabGroupBudgetNs_ = 300000000ULL;
+
+    /// 最近一轮 capture() 的每路结果与聚合（`lastCaptureRound()` 的返回）。
+    /// 每轮覆盖一次 —— 它表达"**本轮**发生了什么"，不是累积状态。
+    data::CaptureRound lastRound_;
 
     data::ErrorInfo lastError_;
 };

@@ -29,10 +29,15 @@
 //  没有任何状态会在 tick() 内部等待 —— 等待一律表现为"本次 tick 提前返回"。
 // ============================================================================
 
+// ============================================================================
+//  ⚠ 本文件引用的 SYS-08 §7.x 经核实为悬空／撞号引用（2026-09-26 复核），依据待裁决，见《待裁决问题汇总》Q-D2 与《SYS-08-§7引用勘误.md》；正文引用仅描述现行行为，不作为冻结依据。
+// ============================================================================
+
 #include "application/MeasurementController.h"
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 
 #include "data/MonotonicClock.h"
@@ -129,7 +134,7 @@ MeasurementController::MeasurementController(
 
     // 配置一致性检查：只记录、不阻断启动。
     //
-    // §7.1 要求 T_task > T_state > T_device。D 层时限（T_device）由设备层
+    // §7.1〔引用无效·依据待裁决·见 Q-D2〕 要求 T_task > T_state > T_device。D 层时限（T_device）由设备层
     // 自持（ENG-09 §6.4），本类看不到，故只能校核前两级。
     // 若某状态超时 > T_task，该状态专属错误码（如 2003）将**永远无法产生**，
     // 任务会先撞上 9001 —— 那会让现场拿到"超时"这个没有指向性的结论。
@@ -233,7 +238,7 @@ void MeasurementController::startMeasurement(uint64_t nowNs)
     //    无法开始 —— 且只在操作者隔了一会儿才点第二次时发作：
     //
     //    `stateMachine_.transition()` 会对**目标状态**上报一次尝试
-    //    （§7.6 约束 2），而 `RetryManager::beginAttempt()` 的第一件事就是
+    //    （§7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 2），而 `RetryManager::beginAttempt()` 的第一件事就是
     //    查 T_task（§7.1 的硬保证）。若此时窗口仍是**上一次任务**的
     //    （beginTask 尚未调用），那么上一次任务的 deadline 一旦过去，
     //    `COMPLETE → IDLE` 这条唯一入口就被它自己的超时判据关死；
@@ -306,7 +311,7 @@ void MeasurementController::startMeasurement(uint64_t nowNs)
     firstFailureSeen_ = false;
 
     // ④ 任务期间启用硬件触发；任务结束时在 onEnteredState() 里关闭。
-    //    §7.5 规定的"触发失效 → 降级为软触发（3001）"由设备层的
+    //    §7.5〔引用无效·依据待裁决·见 Q-D2〕 规定的"触发失效 → 降级为软触发（3001）"由设备层的
     //    CameraSynchronizer 判定并上报（ENG-05 §10），本类不重复推断 ——
     //    把 triggerTimestamp == 0 当作"触发失效"会把合法的软触发运行
     //    误报成降级。
@@ -355,7 +360,7 @@ data::MeasurementState MeasurementController::state() const
 }
 
 // ---------------------------------------------------------------------------
-// 事件循环入口（SYS-08 §9 + §7.6 约束 3）
+// 事件循环入口（SYS-08 §9 + §7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 3）
 // ---------------------------------------------------------------------------
 
 bool MeasurementController::tick(uint64_t nowNs)
@@ -367,7 +372,7 @@ bool MeasurementController::tick(uint64_t nowNs)
 
     // ⚠ 硬保证优先，且**先于任何状态逻辑**（SYS-08 §10 用例 7 的答案）。
     //
-    // §7.1 的 T_task 是"单次任务必然终止"的唯一依据（§11 约束 9）；
+    // §7.1〔引用无效·依据待裁决·见 Q-D2〕 的 T_task 是"单次任务必然终止"的唯一依据（§11 约束 9）；
     // 各状态的次数上限只是效率约束。若某状态的"最后一次尝试"与 T_task
     // 同时到期，必须由 T_task 胜出 —— 否则会多跑一个状态动作，
     // "任务在 T_task 内终止"这条对外承诺就有了例外。
@@ -419,7 +424,7 @@ void MeasurementController::stepSearch(uint64_t nowNs)
     }
 
     data::MultiCameraFrame frame;
-    if (!acquire(frame, nowNs))
+    if (!acquire(frame, nowNs, acquireDeadlineNs(nowNs)))
     {
         return;   // acquire 内部已按 §7.5 / §7.2 处置
     }
@@ -546,7 +551,7 @@ void MeasurementController::stepAlign(uint64_t nowNs)
 
     // ---- ② 重新检测（§5.4 流程的最后一环）----
     data::MultiCameraFrame frame;
-    if (!acquire(frame, nowNs))
+    if (!acquire(frame, nowNs, acquireDeadlineNs(nowNs)))
     {
         return;
     }
@@ -636,7 +641,7 @@ void MeasurementController::stepStabilize(uint64_t nowNs)
 {
     // ⚠ STABILIZE 的"一次动作" = **一个稳定观察窗口**，而不是一帧。
     //
-    // 依据 §5.5（判据是"连续稳定帧 N ≥ 3"）+ §7.3（STABILIZE 上限 1）。
+    // 依据 §5.5（判据是"连续稳定帧 N ≥ 3"）+ §7.3〔引用无效·依据待裁决·见 Q-D2〕（STABILIZE 上限 1）。
     // 若把每一帧当作一次尝试，上限 1 会让"连续 3 帧"永远不可能满足 ——
     // 文档里这两个数字只有"一帧不是一次尝试"这一种解释才能同时成立。
     // 窗口的时限即 stabilizeTimeoutNs（3.0 s，§7.1 的状态级时限）。
@@ -684,7 +689,7 @@ void MeasurementController::stepStabilize(uint64_t nowNs)
         displayCameraFor(MeasurementState::STABILIZE);
 
     data::MultiCameraFrame frame;
-    if (!acquire(frame, nowNs))
+    if (!acquire(frame, nowNs, acquireDeadlineNs(nowNs)))
     {
         stableFrames_ = 0;
         return;
@@ -750,7 +755,7 @@ void MeasurementController::stepMeasureSelect(uint64_t nowNs)
     // 重新采集：ALIGN/STABILIZE 期间转台已停止、光照可能已变，
     // 那一帧的评分不能代表当前的通道质量（同 §7.3 升级规则第 1 条的理由）。
     data::MultiCameraFrame frame;
-    if (!acquire(frame, nowNs))
+    if (!acquire(frame, nowNs, acquireDeadlineNs(nowNs)))
     {
         return;
     }
@@ -805,7 +810,7 @@ void MeasurementController::stepCapture(uint64_t nowNs)
     const int wanted = std::min(std::max(measurementConfig_.captureFrameCount, 1), 20);
     if (wanted != measurementConfig_.captureFrameCount)
     {
-        // 夹取必须**可见**（与 §7.5"降级必须可见"同一条原则：既成事实不得静默）。
+        // 夹取必须**可见**（与 §7.5〔引用无效·依据待裁决·见 Q-D2〕"降级必须可见"同一条原则：既成事实不得静默）。
         note("captureFrameCount="
              + std::to_string(measurementConfig_.captureFrameCount)
              + " 超出允许范围 [1,20]，已夹取为 " + std::to_string(wanted));
@@ -814,14 +819,42 @@ void MeasurementController::stepCapture(uint64_t nowNs)
     capturedFrames_.clear();
     capturedFrames_.reserve(static_cast<std::size_t>(wanted));
 
+    // ⚠ 连采循环内的**期限**（011-A1，C-01 v1.7）：每一轮都重新计算。
+    //
+    // 理由（这正是本批要修的那条缺口）：入口形参 `nowNs` 在一次 tick 内
+    // **不变**，而每一轮 `acquire()` 都可能真实等待（三路 × 最多 100 ms，
+    // 外加发令、复制与转换）。若把入口的 `nowNs` 或入口算出的期限用在
+    // 整段循环上，那么"5 帧 × 3 路各等 300 ms ＝ 4.5 s ≫ 1.5 s 状态时限"
+    // 这件事**没有任何一处能发现**：形参一直停在入口值，状态时限因而
+    // 对连采完全不可见。故每轮都经 `nowNs()` 重读时钟、重算剩余预算。
+    //
+    // 停止规则：**本轮开始前**已过期 ⇒ 不再发起本轮；**本轮返回后**已过期
+    // ⇒ 同样停止（末次返回后过期也必须如实反映，不能因为"已经在收尾"就放过）。
+    // 两种情形都**可见地**说明停在第几帧、已采几组，且已采到的帧**照常参与
+    // 后续评分** —— 提前停止是时限的如实结果，不是采集失败。
+    int capturedRounds = 0;
+    bool stoppedByDeadline = false;
+
     for (int i = 0; i < wanted; ++i)
     {
+        // ⚠ 必须写成 `MeasurementController::nowNs()`：本函数的形参就叫
+        // `nowNs`，**遮蔽**了同名成员函数，不加限定会编译失败（而若形参
+        // 换名，这一处就会静默变成"用入口形参算期限"，正是本批要修的缺陷）。
+        const uint64_t roundNowNs    = MeasurementController::nowNs();
+        const uint64_t roundDeadline = acquireDeadlineNs(roundNowNs);
+        if (roundNowNs >= roundDeadline)
+        {
+            stoppedByDeadline = true;
+            break;
+        }
+
         data::MultiCameraFrame frame;
-        if (!acquire(frame, nowNs))
+        if (!acquire(frame, nowNs, roundDeadline))
         {
             return;   // 采集失败/降级越界，acquire 内部已处置
         }
         lastFrame_ = frame;
+        ++capturedRounds;
 
         // 留**整帧**（三路齐），不再只留选定焦段那一路（C-02 §1.2）：
         // 结果包要求 cam25/50/100 三路原图**对应同一次曝光**，
@@ -835,6 +868,47 @@ void MeasurementController::stepCapture(uint64_t nowNs)
         // （C-02 §1.3 的 D-C02-3）。空帧的判定因此下移到按**角色**做：
         // 它只影响"这一帧能不能参与评分"，不影响"它是第几次采集"。
         capturedFrames_.push_back(frame);
+
+        // 本轮返回后复查（不只在下一次循环开始时）：最后一次采集刚越期时，
+        // 若不在此处判，循环会以 `i == wanted` 正常收尾，"实际耗时已突破
+        // 状态时限"这件事就只剩日志里一条看不出异常的时间差。
+        // ⚠ 判定放在 `push_back` **之后**：本轮的帧已经采到且合法，
+        // 停止连采不该把它丢掉 —— 丢帧会让"停在第几帧"与实际留下的帧数不符。
+        if (MeasurementController::nowNs() >= roundDeadline)
+        {
+            stoppedByDeadline = true;
+            break;
+        }
+    }
+
+    // 期限到了必须**可见**（与 §7.5〔引用无效·依据待裁决·见 Q-D2〕"降级必须可见"同一条原则）：
+    // 不说明的话，"CAPTURE 只采了 3 帧"与"配置就是 3 帧"在界面上没有区别。
+    // 措辞只陈述**事实**（停在第几帧、已采几组），不预测后果 ——
+    // "会不会因此评不出最佳帧"由后面的 view.empty() 分支如实回答。
+    //
+    // ⚠ 两种情形必须**分开说**（2026-09-26 补）：
+    //   ① 帧没采满就停 ⇒ "提前停止"，少采的那几帧是不存在的；
+    //   ② 帧**采满了**、但最后一轮返回时已越过期限 ⇒ 不是提前停止，
+    //      而是"这一拍把该状态的时限用完了"（复制、格式转换与评分还没算进去）。
+    //   上一版只表达 ①（条件里写了 `capturedRounds < wanted`），于是 ② 的
+    //   事实**没有任何出口**：`stoppedByDeadline` 被置了真，而唯一读它的
+    //   就是这个 note —— 即"末次返回后过期"在日志里与"一切正常"完全一样，
+    //   正是 §3.2 明确要求不得发生的那种静默。
+    if (stoppedByDeadline)
+    {
+        if (capturedRounds < wanted)
+        {
+            note("CAPTURE 因时限提前停止：已采 " + std::to_string(capturedRounds) +
+                 " / " + std::to_string(wanted) + " 帧（本轮期限已到，"
+                 "剩余预算不足以再发起一次采集）");
+        }
+        else
+        {
+            note("CAPTURE 已采满 " + std::to_string(wanted) +
+                 " 帧，但最后一轮返回时已越过本次期限"
+                 "（本拍的实际耗时已超出该状态的时限；复制、格式转换与"
+                 "评分的耗时未另计）");
+        }
     }
 
     // 建"选定焦段"视图 + 采集下标映射（C-02 §2.2）。
@@ -1038,7 +1112,7 @@ void MeasurementController::stepValidate(uint64_t nowNs)
     if (!validation.valid)
     {
         // §5.9 原文："每次必须**排除上一次失败的相机**"。
-        // §7.4 给出该规则的数量依据：三台相机、每次排除一台，
+        // §7.4〔引用无效·依据待裁决·见 Q-D2〕 给出该规则的数量依据：三台相机、每次排除一台，
         // 第 3 次已无候选可选 —— 这正是 VALIDATE 的回退上限取 2 的原因。
         // 排除动作必须发生在这里（而不是在 MEASURE_SELECT 里"猜"上一台），
         // 因为只有验证不通过的这一刻才知道是哪一台不行。
@@ -1204,9 +1278,10 @@ void MeasurementController::stepSave(uint64_t nowNs)
 // ---------------------------------------------------------------------------
 
 bool MeasurementController::acquire(data::MultiCameraFrame& frame,
-                                    uint64_t nowNs)
+                                    uint64_t nowNs,
+                                    uint64_t deadlineNs)
 {
-    if (!cameras_.capture(frame))
+    if (!cameras_.capture(frame, deadlineNs))
     {
         // §7.2 的**瞬态**：丢帧、超时都能靠换一帧解决。
         //
@@ -1228,6 +1303,9 @@ bool MeasurementController::acquire(data::MultiCameraFrame& frame,
             deviceError.message = "三相机同步采集失败";
         }
         deviceError.timestampNs = nowNs;
+        // ⚠ 期限耗尽的**本地**超时（设备层未调用 SDK）也走这条路径：
+        // 设备层已把 `skippedReason` 与分类记进 `CaptureRound`，本层据
+        // `lastError()` 如实转达（C-006：不猜码、不编码）。
         handleFailure(FailureKind::TRANSIENT, deviceError, nowNs);
         return false;
     }
@@ -1279,27 +1357,67 @@ void MeasurementController::submitPreview(const data::MultiCameraFrame& frame)
 bool MeasurementController::updateDegradation(const data::MultiCameraFrame& frame,
                                              uint64_t nowNs)
 {
-    // 可用性判据取"该通道的图非空"。
+    // 判据来源（011-A1 改）：设备层**本轮取帧结果**，即 `lastCaptureRound()`。
     //
-    // ⚠ 为什么不查 CameraChannel::enabled：本类不持有 OpticalRig 的通道表
-    // 的所有权语义，而**空图是设备层对"这一帧没拿到"的唯一如实表达**。
-    // 被管理性禁用的通道在采集结果中同样表现为空图，故两者殊途同归。
-    int available = 0;
-    const data::CameraRole kRoles[3] = {
-        data::CameraRole::CAM25,
-        data::CameraRole::CAM50,
-        data::CameraRole::CAM100,
-    };
-    for (data::CameraRole role : kRoles)
+    // ⚠ 改之前用的是"该通道的图非空"（在本地重新数一遍）。为什么必须换：
+    //   ① 它把**所有**失败都折成"图是空的"这一件事，于是**一次超时**
+    //      （瞬态，下一轮可能自愈）与**一次断连**（硬件故障）在上层完全
+    //      同形 —— 而下面的处置分支按 §7.5〔引用无效·依据待裁决·见 Q-D2〕 冻结规则是要区别对待的；
+    //      现行代码因此在 `available == 2` 时写 1002「相机断连（已降级）」，
+    //      把一次超时**记成了断连**（这正是 R09 在上层的同一失效形态）。
+    //   ② 它使"为什么没拿到"这一信息（`skippedReason`、`SdkFailure`）在
+    //      层间交接处被丢弃。
+    // ∴ 判据改为读设备层的**权威事实**，本类只解释、不重数。
+    //
+    // ⚠ **降级／终止的决策一字未改**（§7.5 的三行仍是三行）：改的只是
+    // "可用数从哪来"与"原因文本怎么写"。本条与本批的 Q-D1（降级策略缺
+    // 冻结依据）互不牵连 —— 后者待裁决，本批不动。
+    const data::CaptureRound round = cameras_.lastCaptureRound();
+
+    const int available = round.capturedCount;
+    availableCameras_  = available;
+
+    // 交叉核对：设备层说的"成功交付帧数"必须与本轮**实际**带回来的非空图
+    // 数一致。不一致说明两处判据已经分叉（本批明确列为契约错误
+    // `ContractViolation` 的情形之一）—— 此处**如实记录**而不是选一个信：
+    // 选一个信会让分叉永久隐藏，而它下一次出现时可能是在结果包里。
+    int nonEmpty = 0;
+    for (data::CameraRole role :
+         {data::CameraRole::CAM25, data::CameraRole::CAM50, data::CameraRole::CAM100})
     {
         if (!frameOf(frame, role).image.empty())
         {
-            ++available;
+            ++nonEmpty;
         }
     }
-    availableCameras_ = available;
+    if (nonEmpty != available)
+    {
+        note("设备层报告的交付帧数 " + std::to_string(available) +
+             " 与本轮实际非空图数 " + std::to_string(nonEmpty) +
+             " 不符（契约不一致，按设备层报告继续，但此事实必须可见）");
+    }
 
-    // SYS-08 §7.5 冻结的三行。
+    // 失败通道的**原因**（只用于文本，不参与决策）。三路里凡本轮
+    // `status != Ok` 的，把状态名与"未尝试的原因"列出 —— 这一句是
+    // "一次超时不再被记成断连"的可读证据。
+    std::string failedDetail;
+    for (const data::ChannelGrabRecord& ch : round.channels)
+    {
+        if (ch.result.status == data::OpStatus::Ok)
+        {
+            continue;
+        }
+        failedDetail += (failedDetail.empty() ? "：" : "；");
+        failedDetail += roleName(ch.role);
+        failedDetail += "=";
+        failedDetail += data::opStatusName(ch.result.status);
+        if (!ch.skippedReason.empty())
+        {
+            failedDetail += "（" + ch.skippedReason + "）";
+        }
+    }
+
+    // SYS-08 §7.5〔引用无效·依据待裁决·见 Q-D2〕 冻结的三行。
     if (available <= 1)
     {
         // 硬件故障类 —— 不重试。三相机体系退到 1 台时既无冗余也无交会，
@@ -1307,7 +1425,8 @@ bool MeasurementController::updateDegradation(const data::MultiCameraFrame& fram
         degraded_ = true;
         degradationNotice_ = data::ErrorInfo{
             data::kErrCameraInsufficient,
-            "可用相机数 " + std::to_string(available) + " ≤ 1，无法继续测量",
+            "可用相机数 " + std::to_string(available) + " ≤ 1，无法继续测量" +
+                failedDetail,
             nowNs};
         handleFailure(FailureKind::HARDWARE, degradationNotice_, nowNs);
         return false;
@@ -1315,12 +1434,19 @@ bool MeasurementController::updateDegradation(const data::MultiCameraFrame& fram
 
     if (available == 2)
     {
-        // 降级**继续**运行。§7.5 的要求是"降级模式继续测量 + degraded=true
+        // 降级**继续**运行。§7.5〔引用无效·依据待裁决·见 Q-D2〕 的要求是"降级模式继续测量 + degraded=true
         // + 界面上可见"，不是失败。
+        //
+        // ⚠ 码仍是 `kErrCameraDegraded(1002)`（冻结，名称不改），但文本
+        // 改成**陈述事实**而不是断言断连：1002 的名字是"相机断连（已降级）"，
+        // 而缺的这一路完全可能只是**本轮超时**。措辞纪律（ENG-09 V2.3 §5.29）：
+        // 断连一律写"按 SDK 错误码判定为断连，未经连接事件确认"，
+        // 且只有在确实是断连时才这么写 —— 故此处按每路**实际状态**分述。
         degraded_ = true;
         degradationNotice_ = data::ErrorInfo{
             data::kErrCameraDegraded,
-            "可用相机数 2（少一台），以降级模式继续测量",
+            "可用相机数 2（少一台），以降级模式继续测量；缺的一路本轮状态"
+            "见下（断连＝按 SDK 错误码判定，未经连接事件确认）" + failedDetail,
             nowNs};
         return true;
     }
@@ -1584,7 +1710,7 @@ bool MeasurementController::beginAttemptForAction(uint64_t nowNs)
 
     if (pendingEntryAttempt_)
     {
-        // 进入状态时 transition() 已经记过一次（§7.6 约束 2），不再重复记。
+        // 进入状态时 transition() 已经记过一次（§7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 2），不再重复记。
         pendingEntryAttempt_ = false;
     }
     else if (!retry_.beginAttempt(stateMachine_.state(), nowNs))
@@ -1945,6 +2071,69 @@ uint64_t MeasurementController::remainingNs(uint64_t nowNs) const
         return 0;
     }
     return retry_.remainingNs(nowNs);
+}
+
+// ---------------------------------------------------------------------------
+// 时钟与采集期限（011-A1，C-01 v1.7）
+// ---------------------------------------------------------------------------
+
+void MeasurementController::setClock(std::function<uint64_t()> clock)
+{
+    // 空函数对象 = 恢复默认钟（而不是保留一个会在调用时抛
+    // `std::bad_function_call` 的空壳 —— 那会把一次误用变成在 tick()
+    // 深处的异常，且现场只会看到"某次采集崩了"）。
+    clock_ = std::move(clock);
+}
+
+uint64_t MeasurementController::nowNs() const
+{
+    return clock_ ? clock_() : data::monotonicNowNs();
+}
+
+uint64_t MeasurementController::acquireDeadlineNs(uint64_t nowNs) const
+{
+    // 状态级期限：本次动作开始时刻 + 该状态的时限。
+    // ⚠ 用 `actionStartNs_` 而**不是**本拍的 `nowNs`：状态时限约束的是
+    // "这个状态总共待多久"，含此前若干拍已消耗的部分。若从本拍起算，
+    // 一个状态反复重试时每次都能拿到一整份时限，累计可达数倍 —— 而
+    // `actionTimedOut()` 判的正是前者，两处口径必须一致。
+    uint64_t deadline = 0;
+    const uint64_t stateLimit = stateTimeout(stateMachine_.state());
+    if (actionStartNs_ != 0 && stateLimit != 0 && nowNs >= actionStartNs_)
+    {
+        deadline = actionStartNs_ + stateLimit;
+    }
+
+    // 任务级期限：T_task 的到期时刻。也要取进来，因为一次 capture() 若
+    // 越过 T_task，`tick()` 那条"T_task 优先"的硬保证就被一次阻塞调用
+    // 绕过了（§7.1〔引用无效·依据待裁决·见 Q-D2〕 的 T_task 是"任务必然终止"的唯一依据）。
+    const uint64_t taskRemaining = retry_.remainingNs(nowNs);
+    // ⚠ `RetryManager::remainingNs()` 用 `UINT64_MAX`（`kNoDeadline`）表达
+    // "无期限"，**直接相加会溢出**成一个极小的时刻 —— 那会让每一次采集
+    // 都被判"期限已到"，而现场表现是"装好就采不到图"。
+    // 故先排除哨兵值，再排除一切会溢出的取值（`<` 即可，`==` 不够）。
+    if (taskRemaining > 0 &&
+        taskRemaining < (std::numeric_limits<uint64_t>::max)() - nowNs)
+    {
+        const uint64_t taskDeadline = nowNs + taskRemaining;
+        if (deadline == 0 || taskDeadline < deadline)
+        {
+            deadline = taskDeadline;
+        }
+    }
+
+    // 两个都不可得（状态未配置时限、且无活动任务记账）⇒ 退化为
+    // "本次采集的期限"＝一轮 `capture()` 的总预算。
+    // ⚠ **不给无穷大**：`deadlineNs = UINT64_MAX` 等于没有期限，而
+    // "没有期限"正是本批要消除的形态（管理器会据此算出极大的 timeoutMs
+    // 并真的等下去）。给一个有限的组预算，最坏情形下也只是这一轮被截断，
+    // 且该事实会出现在 `CaptureRound` 里。
+    if (deadline == 0)
+    {
+        deadline = nowNs + measurementConfig_.grabGroupBudgetNs;
+    }
+
+    return deadline;
 }
 
 int MeasurementController::attempts(data::MeasurementState state) const

@@ -24,11 +24,11 @@
 //     `bool running_` 控制。这段代码有两个独立的致命问题：
 //       · 它要跑在 UI 线程上（MainWindow 直接调用 startMeasurement），
 //         阻塞循环会让整个界面在测量的 60 秒内完全冻结 —— 而项目要求
-//         转台运动、状态、预览都要实时可见（SYS-08 §7.5"降级必须可见"）；
+//         转台运动、状态、预览都要实时可见（SYS-08 §7.5〔引用无效·依据待裁决·见 Q-D2〕"降级必须可见"）；
 //       · `bool` 跨线程读写是数据竞争（未同步访问非原子对象），
 //         停止按钮无法可靠终止循环，UB 之下连"能不能停下来"都不确定。
 //     本实现的依据是 SYS-08 §9（"状态机本身运行于 Application 线程"）
-//     + §7.6 约束 3（"状态机必须在每个事件循环中检查 deadlineExceeded"）
+//     + §7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 3（"状态机必须在每个事件循环中检查 deadlineExceeded"）
 //     —— "每个事件循环"这一措辞本身就说明状态机是被**反复进入**的，
 //     而不是占着一个循环不放手。故本类只提供 tick()，由宿主的事件循环
 //     （009 阶段的 QTimer）反复调用，单次调用为微秒级。
@@ -37,7 +37,17 @@
 //     与 RetryManager 同一理由（见 RetryManager.h）：注入时刻才能写出
 //     "同一时刻两个判断只有一个生效"这类用例（SYS-08 §10 用例 7）。
 //     若本类内部取 CLOCK_MONOTONIC，同一次 tick 中的多个判断会落在
-//     不同时刻，§7.6 约束 3 的"先到者生效"就无从验证。
+//     不同时刻，§7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 3 的"先到者生效"就无从验证。
+//
+//     ⚠ 2026-09-26 修订（011-A1，裁决 C-01 v1.7）——上面这条**仍然成立**，
+//     但需要补一句话，否则会与代码矛盾（本文件此后确实存在一处内部读钟）：
+//     `tick(nowNs)` 的形参在**一次调用内是不变的**，而 CAPTURE 会在一次
+//     `tick()` 里连采多帧（每帧一次三路 `capture()`，各含真实等待）。
+//     ∴ "这次 tick 已经跑了多久"**无法**由形参得知；若连采用形参判时限，
+//     1.5 s 的状态时限对连采循环就是**看不见的**（形参一直是入口那个值）。
+//     故连采循环经 `nowNs()` 读钟 —— 生产＝`data::monotonicNowNs`（真推进），
+//     测试＝注入的假钟（由替身在**一个 tick 内部**推动，见 `setClock`）。
+//     其它所有判断**依旧**只依据形参传入的时刻，两种情况各有其用例。
 //
 //  ⚠ 与 SYS-04 §4.5 冻结签名的差异（一处，且不影响调用方）：
 //     `MeasurementState state()` → `data::MeasurementState state() const`。
@@ -52,7 +62,12 @@
 //     **可选的降级通知通道**（§7.5 的 3001），默认 nullptr。
 // ============================================================================
 
+// ============================================================================
+//  ⚠ 本文件引用的 SYS-08 §7.x 经核实为悬空／撞号引用（2026-09-26 复核），依据待裁决，见《待裁决问题汇总》Q-D2 与《SYS-08-§7引用勘误.md》；正文引用仅描述现行行为，不作为冻结依据。
+// ============================================================================
+
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "algorithm/pipeline/IPosePipeline.h"
@@ -221,13 +236,13 @@ public:
     data::ErrorInfo lastError() const;
 
     /// §7.5 的降级标记。true 表示当前任务在"少一台相机"或"触发降级"下运行，
-    /// **必须可见**（§7.5 原文要求界面上能看到）。
+    /// **必须可见**（§7.5〔引用无效·依据待裁决·见 Q-D2〕 原文要求界面上能看到）。
     bool degraded() const;
 
     /// 降级的具体记录（1002 / 3001）。未降级时 code 为 0。
     data::ErrorInfo degradationNotice() const;
 
-    /// 未被降级/禁用标记为不可用的相机数量（§7.5 的三个分支依据）。
+    /// 未被降级/禁用标记为不可用的相机数量（§7.5〔引用无效·依据待裁决·见 Q-D2〕 的三个分支依据）。
     /// 取自最近一次采集的 MultiCameraFrame 中图像非空的通道数。
     int availableCameraCount() const;
 
@@ -281,6 +296,28 @@ public:
     /// 剩余任务时间（ns）。已超时或无活动任务时返回 0。
     uint64_t remainingNs(uint64_t nowNs) const;
 
+    // ---- 时钟注入（011-A1 新增，C-01 v1.7）--------------------------------
+
+    /// 注入当前时刻的来源（默认 `data::monotonicNowNs`）。
+    ///
+    /// ⚠ 为什么需要它（而不是继续只用 `tick(nowNs)` 的形参）：CAPTURE 会在
+    /// **一次 `tick()` 内部**连采多帧，而形参在这一整次调用里是**不变的**。
+    /// 若连采循环只依赖形参判断时限，那么"这个 tick 已经跑了多久"就无人
+    /// 知晓 —— 5 组 × 3 路各等 100 ms 可以轻松超过 1.5 s 的状态时限，
+    /// 而没有任何一处能发现。故连采循环必须能读到**推进中的**时刻。
+    ///
+    /// ⚠ 形状照抄仓内既有先例 `VirtualTurntable::setClock`
+    /// （`src/device/turntable/VirtualTurntable.h:72`，`DeviceLayerTest.cpp:463`
+    /// 已在用）。本仓**没有**任何通用时钟接口（`IClock` 等零命中），
+    /// 故不新造抽象。
+    ///
+    /// ⚠ **生产与测试各自只用一种来源**，不得在同一段逻辑里混用：
+    /// 生产＝单调钟（默认）；测试＝注入的假钟。注入后本类一切"现在几点"
+    /// 都来自它，测试即可让时间在**一个 tick 内部**推进（由替身的回调推动，
+    /// 见 tests/integration/MeasurementFlowTest.cpp 的 CAPTURE 时限用例）。
+    /// ⚠ 传空函数对象即**恢复默认钟**（不抛 `bad_function_call`）。
+    void setClock(std::function<uint64_t()> clock);
+
     /// 某状态已消耗的尝试次数（来自 RetryManager，见 C-20）。
     int attempts(data::MeasurementState state) const;
 
@@ -301,11 +338,11 @@ private:
 
     /// 开始一次"状态动作"。返回 false 表示次数已用尽且已按 §7.7 处置。
     ///
-    /// ⚠ 计数语义（本类与 RetryManager 的接缝，必须与 SYS-08 §7.6 约束 2
+    /// ⚠ 计数语义（本类与 RetryManager 的接缝，必须与 SYS-08 §7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 2
     /// 严格一致）：StateMachine::transition() 在**进入**状态时已记过一次尝试，
     /// 故进入后的第一次动作**不再**记数；此后每次动作都要记一次。
     /// 若不这样，ALIGN 的首次移动会被记两次，8 次上限退化为 4 次实际移动
-    /// —— 而 8 次这个数正是 §7.3 时间预算（8 × 2.5 s = 20 s）的依据。
+    /// —— 而 8 次这个数正是 §7.3〔引用无效·依据待裁决·见 Q-D2〕 时间预算（8 × 2.5 s = 20 s）的依据。
     ///
     /// 用 actionOpen_ 而非"每次调用都记数"的原因：转台运动与稳定等待要跨
     /// **多次 tick** 才完成，而它们是**一次**动作。若每个 tick 都记一次数，
@@ -333,7 +370,27 @@ private:
     // ---- 协作者调用 -------------------------------------------------------
 
     /// 采集一帧同步三相机图像。失败时返回 false 并填写 lastError_。
-    bool acquire(data::MultiCameraFrame& frame, uint64_t nowNs);
+    /// @param nowNs      本拍时刻（来自 `tick()` 的形参，用于失败记录）
+    /// @param deadlineNs 本次采集的**绝对**期限（ns，同一时间域）。
+    ///        ⚠ 它由 `acquireDeadlineNs()` 从**当前状态剩余预算**换算，
+    ///        管理器**不得缓存**它（见 MultiCameraManager::capture）。
+    bool acquire(data::MultiCameraFrame& frame, uint64_t nowNs,
+                 uint64_t deadlineNs);
+
+    /// 本次采集的绝对期限（ns）。
+    ///
+    /// 取**更早**的那个：
+    ///   · 状态级：`actionStartNs_ + stateTimeout(当前状态)`（`stepCapture`
+    ///     连采时每一轮的期限都据此重算，故"剩余预算"真的会随耗时收紧）；
+    ///   · 任务级：T_task 的到期时刻。
+    /// 状态超时未配置（0）或本动作尚未开始记账（`actionStartNs_ == 0`）时
+    /// 该项不参与 —— 此时退化为"本次采集的期限"＝`nowNs + grabGroupBudgetNs`
+    /// （一次 `capture()` 的总预算），**不给无穷大**：期限为无穷大等于没有
+    /// 期限，而"没有期限"正是本批要消除的形态。
+    uint64_t acquireDeadlineNs(uint64_t nowNs) const;
+
+    /// 当前时刻（ns）。**全类只经本方法读时间**，且**不缓存**任何时刻。
+    uint64_t nowNs() const;
 
     /// 按 §7.5 统计可用相机数并设置降级状态。
     /// 返回 false 表示已达下限（≤1 路），调用方须以 1001 失败。
@@ -506,6 +563,12 @@ private:
     data::MeasurementConfig measurementConfig_;
     data::TurntableConfig   turntableConfig_;
 
+    /// 当前时刻来源（011-A1）。空 = 用 `data::monotonicNowNs()`。
+    /// ⚠ 全类**只经 `nowNs()`** 读时间，不直接调 `monotonicNowNs()` ——
+    /// 否则"同一个 tick 里一部分逻辑用假钟、一部分用真钟"就会无处可查，
+    /// 而那种混用会让注入的期限被真实墙钟一上来就判过期。
+    std::function<uint64_t()> clock_;
+
     // ---- 状态机三件套（SYS-08 §7.6 / §3.3）--------------------------------
 
     RetryManager        retry_;
@@ -518,7 +581,7 @@ private:
     /// 本次任务的记录（SAVE 的落盘对象）。
     data::MeasurementTask task_;
 
-    /// 最近一次采集的帧。作为 §7.3 升级规则"重试必须换输入"的比较基准，
+    /// 最近一次采集的帧。作为 §7.3〔引用无效·依据待裁决·见 Q-D2〕 升级规则"重试必须换输入"的比较基准，
     /// 也是换相机重选（switchToNextCamera）的输入。
     data::MultiCameraFrame lastFrame_;
 
@@ -596,7 +659,7 @@ private:
     /// STABILIZE：连续稳定帧计数（SYS-08 §5.5 的 N ≥ 3）。
     int stableFrames_ = 0;
 
-    /// §7.5 的降级状态。degraded_ 为 true 时必须可见（界面 + 日志 + result.json）。
+    /// §7.5〔引用无效·依据待裁决·见 Q-D2〕 的降级状态。degraded_ 为 true 时必须可见（界面 + 日志 + result.json）。
     bool             degraded_           = false;
     data::ErrorInfo  degradationNotice_;
     int              availableCameras_   = 0;

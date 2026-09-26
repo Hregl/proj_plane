@@ -23,6 +23,10 @@
 //  少了一层（检测 → 偏差 → 角度）的验证。
 // ============================================================================
 
+// ============================================================================
+//  ⚠ 本文件引用的 SYS-08 §7.x 经核实为悬空／撞号引用（2026-09-26 复核），依据待裁决，见《待裁决问题汇总》Q-D2 与《SYS-08-§7引用勘误.md》；正文引用仅描述现行行为，不作为冻结依据。
+// ============================================================================
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -230,18 +234,55 @@ public:
     bool startAll() override { return true; }
     void stopAll() override {}
 
-    bool capture(aircraft::data::MultiCameraFrame& frame) override
+    /// 本轮记录（`IMultiCameraManager::lastCaptureRound()` 的返回）。
+    ///
+    /// ⚠ 桩**必须**如实填它，不能返回默认构造的空记录：
+    ///    `MeasurementController::updateDegradation()` 的可用性判据
+    ///    本批起改为读本字段的 `capturedCount`（011-A1），
+    ///    返回空记录会让上层恒看到"0 路可用"⇒ 所有流程用例都会
+    ///    因"降级/失败"的伪因而变红，而根因在桩不诚实。
+    ///    这与本文件既有的纪律一致：替身必须满足被替接口对实现者的要求。
+    aircraft::data::CaptureRound lastCaptureRound() const override { return round_; }
+
+    bool capture(aircraft::data::MultiCameraFrame& frame,
+                 uint64_t                        deadlineNs) override
     {
         ++captureCount;
+
+        // 期限形参本批在桩里只作**记录**：本桩的取帧是同步且瞬时的，
+        // 没有可"提前停止"的等待过程。真正按期限提前停止的行为由
+        // DeviceLayerTest 直接用 MultiCameraManager 验证（§4.3）。
+        lastDeadlineNs = deadlineNs;
+
+        const CameraRole roles[3] = {CameraRole::CAM25, CameraRole::CAM50,
+                                     CameraRole::CAM100};
+
+        round_ = aircraft::data::CaptureRound{};
+        for (int i = 0; i < 3; ++i)
+        {
+            // ⚠ 用下面的 `roles[]` 而不是 `static_cast<CameraRole>(i)`：
+            //    后者把记录里的角色绑到枚举的**底层值**上，枚举一旦重排
+            //    就会静默错位，而"cam25 的记录里写着 CAM100"正是本项目
+            //    最警惕的错位形态。
+            round_.channels[static_cast<std::size_t>(i)].role = roles[i];
+        }
 
         if (failNextCaptures > 0)
         {
             --failNextCaptures;
+            // 瞬时丢帧＝超时（可重采），**不是**断连：分类如实照做，
+            // 否则上层会把一次可自愈的失败当成设备掉线。
+            for (auto& rec : round_.channels)
+            {
+                rec.attempted = true;
+                rec.result    = aircraft::data::GrabResult{
+                    {aircraft::data::OpStatus::Timeout, std::nullopt, std::nullopt}};
+                rec.skippedReason = "桩：本轮瞬时丢帧";
+            }
+            round_.aggregate = aircraft::data::OpStatus::Timeout;
             return false;
         }
 
-        const CameraRole roles[3] = {CameraRole::CAM25, CameraRole::CAM50,
-                                     CameraRole::CAM100};
         aircraft::data::ImageFrame* slots[3] = {&frame.cam25, &frame.cam50,
                                                &frame.cam100};
 
@@ -258,10 +299,23 @@ public:
             if (i >= scene_.channels)
             {
                 *slots[i] = aircraft::data::ImageFrame{};   // 空图 = 该路不可用
+                // 该路根本没接相机 ⇒ **未尝试**，原因如实写。
+                round_.channels[static_cast<std::size_t>(i)].attempted     = false;
+                round_.channels[static_cast<std::size_t>(i)].skippedReason =
+                    "桩：该通道未接相机";
+                round_.channels[static_cast<std::size_t>(i)].result =
+                    aircraft::data::GrabResult{
+                        {aircraft::data::OpStatus::NotStarted, std::nullopt,
+                         std::nullopt}};
                 continue;
             }
             *slots[i] = render(roles[i]);
             slots[i]->frameId = acqId;
+            round_.channels[static_cast<std::size_t>(i)].attempted = true;
+            round_.channels[static_cast<std::size_t>(i)].result =
+                aircraft::data::GrabResult{
+                    {aircraft::data::OpStatus::Ok, std::nullopt, std::nullopt}};
+            round_.channels[static_cast<std::size_t>(i)].timestampNs = 1000000;
         }
 
         if (capturePhase_)
@@ -280,6 +334,37 @@ public:
                 case CameraRole::CAM100: frame.cam100.image = cv::Mat{}; break;
                 case CameraRole::CAM25:  frame.cam25.image  = cv::Mat{}; break;
                 }
+                // ⚠ 此处**只**清空图，`result.status` 保持 `Ok`：该路取帧
+                //    确实成功了，只是这一拍没有像素。而"这一路算不算采到"
+                //    由下面的有效帧判据表达（status == Ok **且**图非空）——
+                //    "取到空图"与"取帧失败"必须能分开，这正是一条
+                //    `Ok` 状态却不算数的记录存在的理由。
+            }
+        }
+
+        // 有效帧计数：与真实现同源判据（status == Ok 且图非空）。
+        for (int i = 0; i < 3; ++i)
+        {
+            const aircraft::data::ChannelGrabRecord& rec =
+                round_.channels[static_cast<std::size_t>(i)];
+            if (rec.result.status == aircraft::data::OpStatus::Ok &&
+                !slots[i]->image.empty())
+            {
+                ++round_.capturedCount;
+            }
+        }
+        round_.succeeded = round_.capturedCount >= 2;
+
+        // 聚合＝三路严重度最大者（全 Ok ⇒ Ok）。
+        round_.aggregate = aircraft::data::OpStatus::Ok;
+        int worst = -1;
+        for (const aircraft::data::ChannelGrabRecord& rec : round_.channels)
+        {
+            const int sev = aircraft::data::aggregationSeverity(rec.result.status);
+            if (sev > worst)
+            {
+                worst            = sev;
+                round_.aggregate = rec.result.status;
             }
         }
 
@@ -295,6 +380,17 @@ public:
         //    DeviceLayerTest 直接用 `MultiCameraManager` 验证；本文件只验证
         //    "这个值能一路进到记录里、且与解算的那一帧同源"。
         frame.exposureIndex = acqId;
+
+        // 本轮取帧的**耗时钩子**（§4.3）：本桩的采集是瞬时的，而真实取帧
+        // 会等待（三路 × 最多 100 ms，外加发令、复制与转换）。若模拟时间
+        // 只在 tick 之间推进，"同一拍内采了 5 帧花了 4.5 s"这件事在模拟里
+        // 根本不可表达 ⇒ `stepCapture()` 的期限复查（每轮开始前 + 每次
+        // capture() 返回后）永远命中不了，而那条规则恰恰是本批要验的行为。
+        // 故由用例注入"本轮耗时"，把它记进模拟钟。
+        if (afterCapture)
+        {
+            afterCapture();
+        }
 
         return true;
     }
@@ -325,7 +421,18 @@ public:
 
     int captureCount = 0;
 
+    /// 最近一次 `capture()` 收到的期限形参（§4.3 的"控制器传当前状态
+    /// 剩余预算"一条据此断言；0 表示尚未被调用过）。
+    uint64_t lastDeadlineNs = 0;
+
+    /// 每次 `capture()` 返回前调用的钩子（**本轮取帧耗时**的模拟入口）。
+    /// 空函数对象 = 不耗时。见 `capture()` 内的说明。
+    std::function<void()> afterCapture;
+
 private:
+    /// 本轮记录（`capture()` 每次覆盖；见 `lastRound()` 的说明）。
+    aircraft::data::CaptureRound round_;
+
     aircraft::data::ImageFrame render(CameraRole role) const
     {
         aircraft::data::ImageFrame f;
@@ -722,7 +829,46 @@ public:
             cameras_, turntable_, pipeline_, rig_, config_, turntableConfig_,
             preview_, nullptr, useRecorder_ ? &recorder_ : nullptr,
             modelsAvailable_);
+
+        // ⚠ 把**本夹具的模拟钟**注入控制器（011-A1 §3.2）。
+        //
+        // 必须注入而不能靠默认钟，理由是"三个时间量必须同一时基"：
+        // 本夹具用形参把模拟时刻喂给 `tick(nowNs)`（从 0 起逐拍推进），
+        // 而控制器的默认钟是**真实单调钟**（约 1e15 ns）。`stepCapture()`
+        // 每轮经 `nowNs()` 重算剩余预算，若读到的是真实钟，算出来的
+        // `roundNowNs` 会立刻大于由模拟时刻推出的 `roundDeadline`
+        // ⇒ 连采循环**第 0 帧就因"期限已到"退出** ⇒ `capturedFrames_` 为空
+        // ⇒ 报"未获得有效帧" ⇒ 整条流程永远到不了 COMPLETE。
+        //
+        // 症状之所以隐蔽：失败理由看起来是"相机没出图"，而根因在时基。
+        // 生产路径没有这个问题（`main.cpp` 把 `monotonicNowNs()` 传给
+        // `tick()`，与默认钟同源），所以这类混用**只可能**在测试里出现 ——
+        // 故修复落在夹具侧：注入的钟与 `tick()` 的形参取自同一个变量。
+        controller_->setClock([this] { return injectedNow_; });
     }
+
+    /// 推进控制器一拍，**同一个模拟时刻同时喂给 `tick()` 与控制器自己的钟**。
+    ///
+    /// 直接调 `controller_->tick(now)` 会绕过 `setClock()` 注入的钟：
+    /// 形参进了状态机，而 `stepCapture()` 里的期限判定读到的是另一个值。
+    /// 全部调用点一律经本函数，使"同一时基"成为**写法上唯一可能**的事，
+    /// 而不是靠每处调用者自觉。
+    void tickAt(uint64_t now)
+    {
+        injectedNow_ = now;
+        controller_->tick(now);
+    }
+
+    /// 在**一次采集之内**把模拟钟推进 `deltaNs`（`afterCapture` 钩子的实参）。
+    ///
+    /// 用途（§4.3）：`stepCapture()` 的期限复查必须在"本轮取帧真的耗了时间"
+    /// 时才命中。本桩的采集是瞬时的，故由用例显式注入这个耗时 ——
+    /// 它不是"为了通过用例而设的后门"，而是把"真实取帧要等待"这件**生产侧
+    /// 事实**在模拟里表达出来的唯一途径（见 `capture()` 内 `afterCapture`
+    /// 的说明）。
+    /// ⚠ 必须只改 `injectedNow_`：它与传给 `tick()` 的形参是同一个变量，
+    ///    直接改 `now_`（夹具自己的记账）会让二者分家。
+    void advanceClockWithinCapture(uint64_t deltaNs) { injectedNow_ += deltaNs; }
 
     /// 启动并逐 tick 推进，直到终止态或达到 maxTicks。
     /// tick 注入的时刻依次为 startNs, startNs+step, startNs+2·step, …
@@ -749,7 +895,7 @@ public:
                 cameras_.armCapturePhase();
             }
 
-            controller_->tick(now);
+            tickAt(now);
             observe(now);
             now += stepNs_;
         }
@@ -880,6 +1026,11 @@ private:
     uint64_t        stepNs_ = kStepNs;
     uint64_t        now_ = 0;
     std::vector<S>  states_;
+
+    /// 注入给控制器的"现在几点"（`setClock` 的实参来源）。
+    /// 只在 `tickAt()` 里被赋值 —— 见那里的说明：它与传给 `tick()` 的
+    /// 形参必须是**同一个值**，否则控制器内部会出现两个时间域。
+    uint64_t        injectedNow_ = 0;
 };
 
 /// 已配置的转台行程（±180° / −60°~+60°），使越程判定真正生效。
@@ -1213,7 +1364,7 @@ TEST(MeasurementFlowTest, R05_验证契约被违背时必须在当拍直接终�
             break;
         }
         const int usedBefore = h.pipeline_.validateLieUsed;
-        h.controller_->tick(now);
+        h.tickAt(now);
         if (h.pipeline_.validateLieUsed > usedBefore)
         {
             lyingTick = ticksRun;
@@ -1334,16 +1485,16 @@ TEST(MeasurementFlowTest, 用例4_升级规则_PnP恒失败时第2次必须换�
     //   t=18  POSE_SOLVE 的两次机会用尽 → 回退#1 到 MEASURE_SELECT
     //   t=19  MEASURE_SELECT#2 → CAPTURE#2 → CAPTURE 要进 POSE_SOLVE
     //   t=20  POSE_SOLVE 上限已满 → **进入 POSE_SOLVE 的转换被拒**；
-    //         而 CAPTURE 的这一次动作已被 §7.6 约束 2 记在 CAPTURE 头上
+    //         而 CAPTURE 的这一次动作已被 §7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 2 记在 CAPTURE 头上
     //   t=21  CAPTURE 的第 3 次机会也这样用掉 → 回退#2（CAPTURE→MEASURE_SELECT）
     //   t=23  MEASURE_SELECT 的三次机会用尽 → FAILED，码 9004（C-006 前为裸 0）
     //
-    // 也就是：**"回退次数"从未成为约束**，先到者始终是某个状态的 §7.3 次数上限。
-    // 罪魁是 §7.6 约束 2（"所有状态进入时必须调用 beginAttempt()"）——
+    // 也就是：**"回退次数"从未成为约束**，先到者始终是某个状态的 §7.3〔引用无效·依据待裁决·见 Q-D2〕 次数上限。
+    // 罪魁是 §7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 2（"所有状态进入时必须调用 beginAttempt()"）——
     // 在一个状态的机会已被用尽时，**连"转换进入它"都会被判为一次尝试**，
     // 于是被拒的转换仍消耗**发起方**的配额。§7.4 的 9002 因此在本用例中
     // 同样不可达。这与用例 3 是同一个文档级矛盾的两个侧面，已合并登记在
-    // README §6：§7.3 与 §7.4 的"取先到者"在 §7.6 约束 2 之下无法同时成立，
+    // README §6：§7.3 与 §7.4 的"取先到者"在 §7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 2 之下无法同时成立，
     // 需要一条裁决指明 9002 何时才应可观测。
     // ⚠ C-006 把兜底侧从裸 0 收紧为 9004，理由同用例 3 的对应断言。
     const int code = h.controller_->lastError().code;
@@ -1430,7 +1581,7 @@ TEST(MeasurementFlowTest, 用例7_时限与状态上限同时可达时报9001)
 {
     // 构造：恒偏差 100 pixel（对准永不成功）+ ALIGN 上限 2 + T_task = 6 s。
     // 由用例 2 的时刻分析，ALIGN 的第 3 次尝试恰好落在 t = 6 s ——
-    // 与 T_task 的到点**同一时刻**。§7.1 的 T_task 是硬保证，必须胜出。
+    // 与 T_task 的到点**同一时刻**。§7.1〔引用无效·依据待裁决·见 Q-D2〕 的 T_task 是硬保证，必须胜出。
     Harness h;
     h.turntableConfig_ = configuredTurntable();
     h.turntable_.minMoveDeg = 5.0;
@@ -1508,7 +1659,7 @@ TEST(MeasurementFlowTest, 转台指令下发失败按瞬态重试)
 
 TEST(MeasurementFlowTest, 采集瞬时失败不消耗额外预算即可恢复)
 {
-    // §7.2 的瞬态：丢帧换一帧即可，属于"允许重试"的一类。
+    // §7.2〔引用无效·依据待裁决·见 Q-D2〕 的瞬态：丢帧换一帧即可，属于"允许重试"的一类。
     Harness h;
     h.turntableConfig_ = configuredTurntable();
     h.turntable_.gain = 0.5;
@@ -1541,7 +1692,7 @@ TEST(MeasurementFlowTest, 采集瞬时失败不消耗额外预算即可恢复)
 
 TEST(MeasurementFlowTest, 转台越程按能力边界立即FAILED报2002)
 {
-    // §7.7：转台越程是**能力边界**，重试 8 次也到不了，必须立刻停。
+    // §7.7〔引用无效·依据待裁决·见 Q-D2〕：转台越程是**能力边界**，重试 8 次也到不了，必须立刻停。
     Harness h;
     TurntableConfig tight = configuredTurntable();
     tight.azimuthMin = -1.0;
@@ -1574,7 +1725,7 @@ TEST(MeasurementFlowTest, 人工取消以9003终止并让转台停下)
     uint64_t now = 0;
     for (int i = 0; i < 5; ++i)
     {
-        h.controller_->tick(now);
+        h.tickAt(now);
         now += kStepNs;
     }
     ASSERT_EQ(h.controller_->state(), S::SEARCH);
@@ -1597,8 +1748,8 @@ TEST(MeasurementFlowTest, 重复启动不打断进行中的任务)
     h.build();
 
     h.controller_->startMeasurement(0);
-    h.controller_->tick(0);
-    h.controller_->tick(kStepNs);
+    h.tickAt(0);
+    h.tickAt(kStepNs);
     ASSERT_EQ(h.controller_->state(), S::SEARCH);
 
     h.controller_->startMeasurement(2 * kStepNs);   // 重复点击"开始"
@@ -1679,7 +1830,7 @@ TEST(MeasurementFlowTest, R04_测量期间预览必须有生产者)
         const aircraft::data::CameraRole before = preview.displayCamera();
         const S stateBefore = h.controller_->state();
 
-        h.controller_->tick(now);
+        h.tickAt(now);
         now += kStepNs;
 
         aircraft::data::PreviewFrame pf;
@@ -2407,4 +2558,190 @@ TEST(MeasurementFlowTest, C007_成功任务有路径而无根因)
             << aircraft::data::errorCodeName(t.error.code) << "（"
             << t.error.message << "）";
     }
+}
+
+// ===========================================================================
+//  §4.3 取帧预算与阻塞：**控制器**这一侧（011-A1）
+//
+//  与 DeviceLayerTest 的分工：那边用替身直接验 `MultiCameraManager` 的
+//  "三个量取最小 / 不缓存上一轮期限 / 预算耗尽既不发令也不取帧"；
+//  本组验控制器：它把**什么期限**传下去、连采是否因期限**提前停止**、
+//  以及期限判定**只认控制器自己的时钟源**（不得混用真实钟）。
+//
+//  ⚠ 本组每组都必须在**有耗时**与**无耗时**两种情形下各有一条：
+//    只验"提前停止"的话，把连采写成"永远只采一帧"也能通过；
+//    只验"不停止"的话，把期限检查整个删掉也能通过。
+//    另有第三种情形单独一条：**帧采满了**但末轮返回时已越期 ——
+//    既不是提前停止，也不能静默（它是"每次 `capture()` 返回后复查期限"
+//    这一条的唯一探针）。
+// ===========================================================================
+
+TEST(MeasurementFlowTest, A1_43_CAPTURE连采因时限提前停止且停在第几帧可见)
+{
+    Harness h;
+    h.turntableConfig_ = configuredTurntable();
+    h.turntable_.gain = 0.5;
+    h.build();
+
+    // 注入"每轮取帧耗时 = CAPTURE 的整份状态时限"。取配置值而不写死，
+    // 使"配置改了、用例还按旧值算"不会发生。
+    // 于是第 1 轮返回后就已到期 ⇒ 必须停在**第 1** 帧。
+    h.cameras_.afterCapture = [&h] {
+        h.advanceClockWithinCapture(h.config_.captureTimeoutNs);
+    };
+
+    const int ticks = h.run(0, 200);
+    ASSERT_GE(ticks, 0) << "未在 200 个 tick 内终止";
+
+    // ⚠ 提前停止**不是采集失败**：已采到的帧照常参与评分，任务应能走完。
+    //    若实现把"期限到了"当成采集失败，测出的就是另一回事了。
+    EXPECT_EQ(h.controller_->state(), S::COMPLETE)
+        << "因时限提前停止被误判成任务失败";
+
+    // 停在第 1 帧：连采确实被截断了（而不是"配置就是 1 帧"）。
+    EXPECT_EQ(h.cameras_.phaseAcquisitionIds_.size(), 1u)
+        << "期限已到却仍继续连采";
+
+    // 且这件事**可见**：不说明的话，"只采了 1 帧"与"配置就是 1 帧"
+    // 在界面与日志上没有区别（与 §7.5〔引用无效·依据待裁决·见 Q-D2〕"降级必须可见"同一条原则）。
+    bool noted = false;
+    for (const std::string& n : h.controller_->notices())
+    {
+        if (n.find("因时限提前停止：已采 1 / 5 帧") != std::string::npos)
+        {
+            noted = true;
+        }
+    }
+    EXPECT_TRUE(noted) << "提前停止未说明停在第几帧（该事实不得静默）";
+}
+
+TEST(MeasurementFlowTest, A1_43_CAPTURE连采不因时限提前停止且期限判定只认注入钟)
+{
+    Harness h;
+    h.turntableConfig_ = configuredTurntable();
+    h.turntable_.gain = 0.5;
+    h.build();
+
+    // ---- 不注入任何"本轮耗时"：模拟钟只在 tick 之间推进 ----
+    //（`afterCapture` 保持为空函数对象）
+
+    const int ticks = h.run(0, 200);
+    ASSERT_GE(ticks, 0) << "未在 200 个 tick 内终止";
+    EXPECT_EQ(h.controller_->state(), S::COMPLETE);
+
+    EXPECT_EQ(h.cameras_.phaseAcquisitionIds_.size(), 5u)
+        << "没有耗时却提前停止了连采";
+
+    for (const std::string& n : h.controller_->notices())
+    {
+        EXPECT_EQ(n.find("因时限提前停止"), std::string::npos)
+            << "未到期却报告了提前停止：" << n;
+    }
+
+    // ---- 这一条同时是**时钟一致性**用例（§3.2）----
+    // 本夹具把模拟时刻经 `tick()` 的形参喂进来（`run()` 从 0 起逐拍推进），
+    // 而真实单调钟约为 1e18 ns。若 `stepCapture()` 的期限判定去读**真实钟**
+    // （而不是注入的钟），`roundNowNs` 会立刻大于由模拟时刻推出的
+    // `roundDeadline`（约 1.5e9）⇒ 连采在第 0 帧就退出 ⇒ 上面那条
+    // "恰好 5 帧"的断言必然变红。
+    // ∴ 该断言同时证明"期限判定走的是控制器自己的时钟源"，不需要另设用例。
+}
+
+TEST(MeasurementFlowTest, A1_43_CAPTURE采满帧但末轮返回时已越期也要如实说明)
+{
+    // 第三种情形：**帧一帧没少**，可是最后一轮返回时已经越过期限。
+    // 这不是"提前停止"（没有少采），所以**不能说成提前停止**；
+    // 但也不能什么都不说 —— 那等于"这一拍把状态时限用完了"这件事
+    // 在日志里与"一切正常"完全一样（§3.2 明确的静默禁止项）。
+    //
+    // ⚠ 本条是唯一能钉住"**每次 `capture()` 返回后**复查期限"（不只是
+    //    下一轮开始前复查）的用例：若把那处复查删掉，末轮越期时循环
+    //    是**自然走完**（`i == wanted`）的，没有任何分支会记下越期 ⇒
+    //    下面的"有说明"断言必然变红。
+    Harness h;
+    h.turntableConfig_ = configuredTurntable();
+    h.turntable_.gain = 0.5;
+    h.build();
+
+    // 每轮耗时取状态时限的 21%：4 轮 = 84% < 100%（前 4 轮的复查都不得触发），
+    // 5 轮 = 105% ≥ 100%（第 5 轮返回后越期）。取自配置值，不写死。
+    const uint64_t perRoundNs = h.config_.captureTimeoutNs * 21 / 100;
+    ASSERT_GT(perRoundNs, 0u);
+    ASSERT_LT(perRoundNs * 4, h.config_.captureTimeoutNs)
+        << "本用例的前提不成立：前 4 轮就已越期，测的就不是「采满帧后越期」了";
+    ASSERT_GE(perRoundNs * 5, h.config_.captureTimeoutNs)
+        << "本用例的前提不成立：5 轮仍未越期，末轮复查永远不会触发";
+
+    h.cameras_.afterCapture = [&h, perRoundNs] { h.advanceClockWithinCapture(perRoundNs); };
+
+    const int ticks = h.run(0, 200);
+    ASSERT_GE(ticks, 0) << "未在 200 个 tick 内终止";
+    EXPECT_EQ(h.controller_->state(), S::COMPLETE)
+        << "末轮越期被误判成任务失败";
+
+    // 帧**没少**：这正是与"提前停止"的分界，也说明本用例测的是另一件事。
+    EXPECT_EQ(h.cameras_.phaseAcquisitionIds_.size(), 5u)
+        << "末轮越期把已经采到的帧弄丢了几帧";
+
+    bool statedOverrun = false;
+    for (const std::string& n : h.controller_->notices())
+    {
+        if (n.find("已采满 5 帧，但最后一轮返回时已越过本次期限") != std::string::npos)
+        {
+            statedOverrun = true;
+        }
+        // ⚠ 措辞不得混用：帧一帧没少，就不该说"提前停止"。
+        EXPECT_EQ(n.find("因时限提前停止"), std::string::npos)
+            << "采满帧却报告了「提前停止」（措辞与实际事实不符）：" << n;
+    }
+    EXPECT_TRUE(statedOverrun)
+        << "末轮返回时已越期这件事没有任何出口（该事实不得静默）";
+}
+
+TEST(MeasurementFlowTest, A1_43_控制器把状态剩余预算作为期限传给管理器)
+{
+    // 期限**只能经形参**从控制器传到管理器（管理器不得缓存上一轮的期限，
+    // 见 `ManagerDoesNotCacheThePreviousRoundsDeadline`）。故这里断言传下去
+    // 的正是"本状态本次尝试的起始时刻 + 该状态时限"。
+    Harness h;
+    h.turntableConfig_ = configuredTurntable();
+    h.turntable_.gain = 0.5;
+    h.build();
+
+    uint64_t now           = 0;
+    uint64_t captureTickNs = 0;
+    bool     found         = false;
+
+    // ⚠ 必须显式启动（`run()` 会替调用者做这件事，本用例自己推进，
+    //    故要自己调）—— 不启动则控制器停在 IDLE，`tick()` 什么也不做，
+    //    循环只会跑满 200 拍然后报"未进入 CAPTURE"。
+    h.controller_->startMeasurement(0);
+
+    for (int i = 0; i < 200 && !h.finished(); ++i)
+    {
+        // 每拍只推进一个状态 ⇒ "此刻状态 == CAPTURE" 意味着这一拍
+        // 就会执行 `stepCapture()`（与 `run()` 里 `armCapturePhase()` 同理）。
+        const bool thisIsTheCaptureTick = (h.controller_->state() == S::CAPTURE);
+        if (thisIsTheCaptureTick && !found)
+        {
+            captureTickNs = now;
+            found         = true;
+        }
+
+        h.tickAt(now);
+        if (thisIsTheCaptureTick)
+        {
+            break;   // CAPTURE 那一拍已跑完，`lastDeadlineNs` 就是它的期限
+        }
+        now += kStepNs;
+    }
+    ASSERT_TRUE(found) << "未进入 CAPTURE，本用例的前提不成立";
+
+    EXPECT_EQ(h.cameras_.lastDeadlineNs,
+              captureTickNs + h.config_.captureTimeoutNs)
+        << "控制器传给管理器的期限不是「本状态本次尝试的起始时刻 + 状态时限」："
+           "实得 " << h.cameras_.lastDeadlineNs << "，期望 "
+        << (captureTickNs + h.config_.captureTimeoutNs) << "（CAPTURE 起始时刻 "
+        << captureTickNs << " + capture_timeout_ns " << h.config_.captureTimeoutNs
+        << "）";
 }
