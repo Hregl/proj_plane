@@ -263,7 +263,37 @@ bool PreviewManager::submitFrom(const data::MultiCameraFrame& frame)
         return false;
     }
 
+    // ⚠ 显示链路的边界条件：进入预览的 `image` **必须**是 8U。
+    //   `image` 是**显示图**（12 位格式经 `>> (validBits − 8)` 得到的
+    //   加工产物），而"这一帧真实的采集格式"在 `captureFormat` / `raw` 里 ——
+    //   两者不是一回事（ENG-09 V2.3 §5.28 第 6 条）。一幅 16U/32F 的
+    //   图进到这里，说明某个后端把**原始载荷**当成了显示图发布，
+    //   而症状是"预览的颜色/亮度不对"这类看不出根因的现象。
+    //
+    //   ⚠ 用**显式检查 + 拒绝**而不是 `assert()`：本仓从无运行期 `assert`
+    //     （只有 `static_assert`）；且本函数跑在 GUI 线程上 —— 一次断言
+    //     失败会把整个界面带走，而"这一路暂时不显示"是能承受的后果。
+    //     不用返回 false 之外的表达（不加 `notices_`）：`notices_` 没有
+    //     互斥保护，而本函数由采集线程调用。
+    if (src->image.depth() != CV_8U)
+    {
+        return false;
+    }
+
     data::PreviewFrame pf;
+    // ⚠ 这里是**浅拷贝**（`cv::Mat` 共享像素数据；`raw.bytes` 共享一个
+    //   `shared_ptr<const vector>`）。它成立的条件正是本批冻结的三条
+    //   （ENG-09 V2.3 §5.28 第 5 条），缺一不可：
+    //     ① **自有**：`image` 的像素数据由采集侧自有一份 —— 后端在归还
+    //        SDK 缓冲区（`IMV_ReleaseFrame`）**之前**已把字节复制出来
+    //        （`IMV_GetFrame` 交出的是 SDK 内部缓存，释放后会被**就地复用**）；
+    //     ② **发布后不再修改**：一旦提交，采集侧不得再写这份像素数据；
+    //     ③ `raw.bytes` 是 `shared_ptr<const vector>` —— 共享的是**读**
+    //        权限，类型上就无法从任何持有者处改写。
+    //   ⚠ 安全**不**来自"`shared_ptr` 使浅拷贝天然安全"：若 ① 不成立
+    //     （`image` 悬在 SDK 缓冲上），这里拷到的是一个会被下一次取帧
+    //     改写的头部，而症状是"预览偶尔显示别的时刻的画面" ——
+    //     排查方向会指向渲染，而不是取帧时的复制。
     pf.frame = *src;
     // 显式覆盖 role：src 指向 MultiCameraFrame 的某个成员，其 role 字段
     // 依赖采集侧正确填写（漏填时默认 CAM25）。以本次选中的角色为准写入。

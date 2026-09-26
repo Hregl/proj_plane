@@ -131,8 +131,17 @@ public:
     const std::string& modelId() const { return modelId_; }
 
 private:
-    /// 写 cam25|50|100.raw（裸像素缓冲，解码依据写在 result.json 里）。
-    /// 见 .cpp 的格式选择说明。
+    /// 写 cam25|50|100.raw。
+    ///
+    /// ⚠ 文件里的字节**不一定是裸像素缓冲**，取决于该路帧携带的字段
+    ///   （011-A1 §2.1 第 7 条的三分支）：有原始载荷 ⇒ 写原始载荷；
+    ///   `RawOptional` 且 8 位而载荷缺失 ⇒ 写 8U 显示图并**如实标注**
+    ///   `data_source = image`；`RawRequired` 或 12 位而载荷缺失 ⇒
+    ///   **报契约错误、不写该文件**（禁止静默回落成 8 位图）。
+    ///   故解码依据是 result.json 里该路的 `data_source` 与
+    ///   `pixel_format`／`valid_bits`／`packing`／`declared_byte_order`
+    ///   —— **不是** `display_image` 的 `width`/`height`/`type`
+    ///   （那三项描述的是显示图）。见 .cpp 的格式选择说明。
     bool writeRawFrames(const data::MultiCameraFrame& frame,
                         const std::string& packageDir,
                         std::string& error);

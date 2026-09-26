@@ -154,6 +154,203 @@ const char* roleName(data::CameraRole role)
     return "UNKNOWN_ROLE";
 }
 
+/// ---- 原始载荷的四项解释信息（011-A1；ENG-09 V2.3 §5.28 / §6.5）----
+///
+/// ⚠ 四个函数全部落盘用**名字**，与 motionName / roleName 同一条理由：
+///   枚举值落盘后，将来在中间插入一个成员会让历史包里的 "1" 悄悄改含义，
+///   而 `cam*.raw` 是**无头裸缓冲** —— 它唯一的解码依据就是这些名字。
+///   一个含义漂移的格式名会让历史原始数据**按错误布局解码**，
+///   而结果仍然"看起来是一张图"（灰度系统性偏移，不报错）。
+///
+/// ⚠ 这四张表**目前只有本文件一个消费者**（全仓没有 result.json 的读回
+///   实现）。故不放进 data 层：那属于"是否在 data 冻结枚举名函数"这一
+///   未裁决事项（见上方 stateName / roleName 的说明），本批不替它预先
+///   决定。将来出现第二个消费者时，再按那时的裁决合并。
+const char* pixelFormatName(data::PixelFormat format)
+{
+    switch (format)
+    {
+    case data::PixelFormat::Mono8:        return "Mono8";
+    case data::PixelFormat::Mono12:       return "Mono12";
+    case data::PixelFormat::Mono12Packed: return "Mono12Packed";
+    case data::PixelFormat::BGR8:         return "BGR8";
+    }
+    return "UNKNOWN_FORMAT";
+}
+
+const char* packingName(data::Packing packing)
+{
+    switch (packing)
+    {
+    case data::Packing::Unpacked: return "Unpacked";
+    case data::Packing::Packed12: return "Packed12";
+    }
+    return "UNKNOWN_PACKING";
+}
+
+const char* bitAlignmentName(data::BitAlignment alignment)
+{
+    switch (alignment)
+    {
+    case data::BitAlignment::LsbZeroPadded: return "LsbZeroPadded";
+    case data::BitAlignment::MsbAligned:    return "MsbAligned";
+    case data::BitAlignment::Unknown:       return "Unknown";
+    }
+    return "UNKNOWN_ALIGNMENT";
+}
+
+const char* byteOrderName(data::ByteOrder order)
+{
+    switch (order)
+    {
+    case data::ByteOrder::LittleEndian: return "LittleEndian";
+    case data::ByteOrder::BigEndian:    return "BigEndian";
+    }
+    return "UNKNOWN_BYTE_ORDER";
+}
+
+/// `cam*.raw` 的内容来源：本批三分支（ENG-09 V2.3 §5.28 第 7 条）。
+enum class RawSource
+{
+    None,          ///< 该路本轮没有可用帧 ⇒ **不写文件**（不是写 0 字节）
+    RawBytes,      ///< 写**原始载荷本体**（`raw.bytes`，逐字节等于 SDK 缓冲）
+    DisplayImage   ///< 写显示图 —— **仅**当 8 位格式且 raw 缺失时允许
+};
+
+/// 三路原始文件的**唯一**文件名清单（下标与 role 一一对应：0=CAM25）。
+///
+/// ⚠ 单列一份而不是在两个函数里各写一遍字面量：这两处会**同时**出现在
+///   同一条契约错误的文本里（`writeResultJson` 先写、`writeRawFrames`
+///   随后），两份字面量一旦漂移，现场拿到的通道名就可能与实际写出的
+///   文件名对不上 —— 而那正是"按文件排查"的人唯一的抓手。
+const char* const kRawFileNames[3] = {"cam25.raw", "cam50.raw", "cam100.raw"};
+
+const char* dataSourceName(RawSource source)
+{
+    switch (source)
+    {
+    case RawSource::None:         return "none";
+    case RawSource::RawBytes:     return "raw";
+    case RawSource::DisplayImage: return "image";
+    }
+    return "UNKNOWN_SOURCE";
+}
+
+/// 某一路写什么 —— **单一实现**（011-A1 §3.3）。
+///
+/// ⚠ 为什么必须是一个函数、被两处调用：`writeResultJson` 写元数据、
+///   `writeRawFrames` 写文件，两者必须对"这一路到底写的是什么"给出
+///   **同一个答案**。各写一份必然在某次修改后分叉，而分叉的形态极难察觉：
+///   元数据说 `data_source = "raw"`、文件里其实是 8U 显示图 ——
+///   离线解码时按 16 位容器去读一张 8 位图，得到的仍"是一张图"。
+///
+/// ⚠ 判据**只依据帧自身携带的字段**（`raw` / `rawPolicy` / `captureFormat`），
+///   不靠文件名、逻辑 `cameraId`，也不在落盘时重查配置 —— 后者会让
+///   "结果包说自己是什么"依赖于"哪个配置恰好在场"。
+///
+/// @param contractError 非空 ⇒ 该帧违反本批契约，**调用方必须让本包失败**：
+///        既不写文件，也不得把它当成"这一路本轮没有帧"（那会把一次
+///        契约违背降级成一次正常的缺图）。
+RawSource decideRawSource(const data::ImageFrame& frame, std::string& contractError)
+{
+    contractError.clear();
+    const data::RawImagePayload& raw    = frame.raw;
+    const bool                   hasRaw = raw.bytes && !raw.bytes->empty();
+
+    if (hasRaw)
+    {
+        // ---- 复检（后端发布帧时已断言过一次，此处**不信任上游**）----
+        //  这里不是"重复劳动"：帧可能来自别的后端实现、别的版本，
+        //  也可能在测试里被手工拼出来。落盘是最后一道能拦住它的地方。
+        if (raw.format != frame.captureFormat)
+        {
+            contractError = "raw.format（" +
+                            std::string(pixelFormatName(raw.format)) +
+                            "）与帧的 captureFormat（" +
+                            std::string(pixelFormatName(frame.captureFormat)) +
+                            "）不一致 —— 二者必须同源";
+            return RawSource::None;
+        }
+        if (!data::isValidCombination(raw.format, raw.packing, raw.validBits,
+                                      raw.bitAlignment))
+        {
+            contractError = "原始载荷的组合不合法：format=" +
+                            std::string(pixelFormatName(raw.format)) + " packing=" +
+                            std::string(packingName(raw.packing)) + " validBits=" +
+                            std::to_string(raw.validBits) + " alignment=" +
+                            std::string(bitAlignmentName(raw.bitAlignment));
+            return RawSource::None;
+        }
+        if (!raw.compactSizeMatches)
+        {
+            // 本批契约：`compactSizeMatches` 为假的帧**不会被发布**
+            // （后端判 CorruptFrame、上层不写输出帧）。故走到这里说明
+            // 有一个不遵守该契约的发布者 —— 按契约错误拒绝，不落盘。
+            contractError =
+                "原始载荷的长度与本批紧凑契约不符（sdk_payload_bytes=" +
+                std::to_string(raw.sdkPayloadBytes) + "，expected_compact_bytes=" +
+                std::to_string(raw.expectedCompactBytes) +
+                "）—— 已交付的帧不应出现这种组合";
+            return RawSource::None;
+        }
+        if (raw.bytes->size() != raw.sdkPayloadBytes)
+        {
+            // ⚠ 这一条挡的是"元数据与文件对不上"：元数据里写的是
+            //   `sdk_payload_bytes`，而写出去的字节数是载体自己的大小。
+            //   两者不等时，那份 raw 的**解码依据就是错的** ——
+            //   而它仍然能被读成一张尺寸不匹配或错位的图。
+            contractError = "原始载荷载体与自报长度不符（载体 " +
+                            std::to_string(raw.bytes->size()) +
+                            " 字节，sdk_payload_bytes=" +
+                            std::to_string(raw.sdkPayloadBytes) + "）";
+            return RawSource::None;
+        }
+        return RawSource::RawBytes;
+    }
+
+    // ---- 原始载荷缺失：分支二（照常保存）还是分支三（拒绝回落）----
+    //
+    //  判据是**帧的两个字段**，不是"图是不是空的"：
+    //    · `rawPolicy == RawRequired`（有效位深 > 8 的格式本批即 Mono12）
+    //    · 或 `captureFormat` 本身的有效位深 > 8
+    //  两个都查：任一为真即拒绝。只查一个的话，"rawPolicy 被留成默认值
+    //  RawOptional 而没有跟着 captureFormat 走"这一种错误组合就会漏过 ——
+    //  而那恰恰是 `[缺口 1]` 点名的情形（12 位帧丢了载荷，文件里却留着一张
+    //  8 位图，事后无法分辨）。
+    if (frame.rawPolicy == data::RawDataPolicy::RawRequired ||
+        data::validBitsOf(frame.captureFormat) > 8)
+    {
+        contractError =
+            "该路声明为 " + std::string(pixelFormatName(frame.captureFormat)) +
+            "（有效位 " + std::to_string(data::validBitsOf(frame.captureFormat)) +
+            "，rawPolicy=" +
+            (frame.rawPolicy == data::RawDataPolicy::RawRequired ? "RawRequired"
+                                                                 : "RawOptional") +
+            "）却**未携带原始载荷**：显示图是加工产物，回落保存等于把"
+            "不可复原的数据当成测量结果（禁止静默存 8 位图）";
+        return RawSource::None;
+    }
+
+    if (!frame.image.empty())
+    {
+        // 显示图必须真的是 8U：下面的字节数是按 `elemSize()` 算的，
+        // 而元数据里的 `pixel_format` 与 `valid_bits` 描述的是这个文件。
+        // 一个 16U/32F 的显示图会让"元数据描述的文件布局"与文件不符。
+        if (frame.image.depth() != CV_8U)
+        {
+            contractError = "显示图的深度不是 8U（depth=" +
+                            std::to_string(frame.image.depth()) +
+                            "）—— 本批只把 8U 显示图当作可保存的回落内容";
+            return RawSource::None;
+        }
+        return RawSource::DisplayImage;
+    }
+
+    // 该路本轮没有可用帧（`capture()` 每轮从零构造 frame，故这里
+    // 不会拿到上一轮的旧图）。不写文件，由元数据的 data_source = "none" 表达。
+    return RawSource::None;
+}
+
 /// 转台运动状态名（`turntable.json` 与 result.json 共用）。
 ///
 /// ⚠ 落盘用**名字**而不是枚举的整数值：整数值会随枚举成员顺序变化而
@@ -440,8 +637,21 @@ bool Recorder::writeResultJson(const data::MeasurementRecord& record,
 
     // ---- 被解算的那一次采集（D-C02-2：raw 与 result.json 必须同源）----
     //
-    // width / height / type 是 cam*.raw **裸缓冲**的解码依据（见
-    // writeRawFrames 的说明）：raw 没有文件头，缺了这三项就无法解码。
+    // ⚠ 011-A1 起，`cam*.raw` 的**解码依据**是每路的
+    //   `data_source` + `pixel_format` / `valid_bits` / `packing` /
+    //   `valid_bit_alignment` / `declared_byte_order`，
+    //   **不是** `display_image` 里的 width/height/type ——
+    //   `display_image` 描述的是**显示图**（12 位格式时是右移后的加工产物），
+    //   它的尺寸与类型解释不了原始载荷。旧版把 `image.type()` 当作裸缓冲的
+    //   解码依据，是"12 位数据被按 8 位读"这条静默失效的来源（见
+    //   writeRawFrames 的说明与 RawImagePayload.h 的文件头）。
+    //
+    // ⚠ 每个文件的**文件名**由 role 决定（CAM25 → cam25.raw），下标 0/1/2
+    //   与 role 一一对应；`data_source == "none"` 表示该文件**不存在**。
+    //
+    // ⚠ 元数据的键与 `RawImagePayload` 的字段**一一对应**（共 12 个）：
+    //   与 writeRawFrames 用**同一个** decideRawSource，故"元数据说写的是什么"
+    //   与"文件里实际是什么"不可能分叉。
     os << "  \"best_frame\": {\n";
     os << "    \"exposure_index\": " << record.bestFrame.exposureIndex << ",\n";
     os << "    \"trigger_timestamp_ns\": " << record.bestFrame.triggerTimestamp
@@ -452,13 +662,50 @@ bool Recorder::writeResultJson(const data::MeasurementRecord& record,
                                         &record.bestFrame.cam100};
     for (int i = 0; i < 3; ++i)
     {
+        std::string     contractError;
+        const RawSource source = decideRawSource(*chans[i], contractError);
+        if (!contractError.empty())
+        {
+            // 与 writeRawFrames 同一条判据、同一段文本（含同一个文件名，
+            // 取自 kRawFileNames）：result.json 先写，故这里先把它拦下来 ——
+            // 一份"元数据已落盘、raw 文件却没写"的结果包是最坏的一种
+            // （它看起来完整）。
+            error = "结果包的原始载荷不合法（" + std::string(kRawFileNames[i]) +
+                    "）：" + contractError;
+            return false;
+        }
+
+        const data::RawImagePayload& raw = chans[i]->raw;
         os << "      {\"role\": \"" << roleName(chans[i]->role)
            << "\", \"frame_id\": " << chans[i]->frameId
            << ", \"timestamp_ns\": " << chans[i]->timestampNs
-           << ", \"width\": " << chans[i]->image.cols
+           // 该路本轮是否交付了可用帧（= 该路的 cam*.raw 是否写出）。
+           // ⚠ 判据取自三分支判定，**不再**等同于 `!image.empty()`：
+           //   12 位帧可以"有原始载荷、没有显示图"，那仍是可用帧。
+           << ", \"frame_valid\": " << jsonBool(source != RawSource::None)
+           << ",\n"
+           // 显示图（**仅供人看与离线预览**，不是 raw 的解码依据）。
+           // 空图时 width/height 为 0，本身即"没有显示图"的表达。
+           << "       \"display_image\": {\"width\": " << chans[i]->image.cols
            << ", \"height\": " << chans[i]->image.rows
-           << ", \"type\": " << chans[i]->image.type()
-           << ", \"valid\": " << jsonBool(!chans[i]->image.empty()) << "}"
+           << ", \"type\": " << chans[i]->image.type() << "},\n"
+           << "       \"data_source\": \"" << dataSourceName(source) << "\",\n"
+           << "       \"pixel_format\": \"" << pixelFormatName(raw.format)
+           << "\", \"valid_bits\": " << raw.validBits
+           << ", \"packing\": \"" << packingName(raw.packing)
+           << "\",\n"
+           << "       \"valid_bit_alignment\": \""
+           << bitAlignmentName(raw.bitAlignment) << "\",\n"
+           << "       \"sdk_payload_bytes\": " << raw.sdkPayloadBytes
+           << ", \"expected_compact_bytes\": " << raw.expectedCompactBytes
+           << ",\n"
+           << "       \"compact_size_matches\": "
+           << jsonBool(raw.compactSizeMatches) << ",\n"
+           << "       \"declared_byte_order\": \""
+           << byteOrderName(raw.declaredByteOrder) << "\",\n"
+           << "       \"sdk_pixel_format_code\": " << raw.sdkPixelFormatCode
+           << ", \"sdk_padding_x\": " << raw.sdkPaddingX
+           << ", \"sdk_padding_y\": " << raw.sdkPaddingY << "}"
            << (i < 2 ? "," : "") << "\n";
     }
     os << "    ]\n";
@@ -609,36 +856,74 @@ bool Recorder::writeRawFrames(const data::MultiCameraFrame& frame,
     // SYS-09 §12 要求结果包含 cam25|50|100.raw。
     //
     // ⚠ 格式选择（冻结文档未规定，此处明确并记录）：
-    //   写**裸像素缓冲**（行连续、`cv::Mat` 的原始字节），**不加文件头**。
+    //   写**裸像素缓冲**（行连续，**不加文件头**）。
     //   裸缓冲单独存在时是不可解码的 —— 而"文件在、却打不开"比"文件不在"
     //   更糟（前者看起来一切正常）。故配套要求：
-    //   ① result.json 的 best_frame.frames[] 记录每路的
-    //      width / height / type，缺了这三项这份 raw 就没有意义；
+    //   ① result.json 的 best_frame.frames[] 里的 `pixel_format` /
+    //      `valid_bits` / `packing` / `valid_bit_alignment` /
+    //      `declared_byte_order` 是这份裸缓冲的**唯一**解码依据，
+    //      缺了它们这份 raw 就没有意义；
     //   ② 三路一律按**该路实际**的尺寸写，不做统一缩放：
     //      三台相机分辨率本就可能不同，强行统一会在"哪一路被改过"
     //      这件事上制造一个事后查不出来的错误。
     //
-    // ⚠ 空帧（该路不可用）**不写文件**，而不是写一个 0 字节文件：
+    //  ⚠ 011-A1 的关键修正（ENG-09 V2.3 §5.28 第 6、7 条）：解码依据**不再**是
+    //    `image` 的 `width/height/type`。`image` 是**显示图**（12 位格式时
+    //    是右移后的加工产物），它的行列数与类型**不能**用来解释原始载荷；
+    //    把 8U 显示图的 type 当作裸缓冲的解码依据，正是"12 位数据被按
+    //    8 位读"这条静默失效的来源。
+    //
+    // ⚠ 三分支（判据在 decideRawSource，此处只负责落字节）：
+    //    ① `raw` 非空 ⇒ 写真身（**逐字节等于 SDK 交付缓冲**）；
+    //    ② `raw` 空、`RawOptional` 且 8 位 ⇒ 写显示图，标 data_source=image；
+    //    ③ `raw` 空、但 `RawRequired` 或 12 位 ⇒ **契约错误，本包失败**
+    //       （禁止静默存 8 位图）。
+    //
+    // ⚠ 没有可用帧的那一路**不写文件**，而不是写一个 0 字节文件：
     //   0 字节文件在目录列表里与"写失败被截断"无法区分。
-    //   它的缺失由 result.json 中的 valid=false 表达。
+    //   它的缺失由 result.json 中的 `data_source = "none"` 表达。
     const data::ImageFrame* chans[3] = {&frame.cam25, &frame.cam50,
                                         &frame.cam100};
-    const char* const       names[3] = {"cam25.raw", "cam50.raw", "cam100.raw"};
 
     for (int i = 0; i < 3; ++i)
     {
-        const cv::Mat& img = chans[i]->image;
-        if (img.empty())
+        std::string      contractError;
+        const RawSource  source = decideRawSource(*chans[i], contractError);
+        if (!contractError.empty())
         {
-            continue;
+            // 一路违反契约 ⇒ **整包失败**，理由同 save() 的既有原则：
+            // 写一份"看起来完整、实际缺一路原始数据"的结果包，比不写更危险。
+            // 该状态在生产路径上不可达（RawRequired 的帧必然带 raw），
+            // 故它的出现本身就是代码缺陷指示 —— 错误文本必须点名通道与原因。
+            error = "结果包的原始载荷不合法（" + std::string(kRawFileNames[i]) +
+                    "）：" + contractError;
+            return false;
         }
 
-        // 行连续才能按一整块内存写出。子矩阵（ROI）不连续，此时 clone()
-        // 一份 —— 直接按 rows*cols 写会按步长把别的像素写进来，
-        // 得到一张"尺寸对、内容错"的图，而它看起来完全正常。
-        const cv::Mat contiguous = img.isContinuous() ? img : img.clone();
+        const std::string path = joinPath(packageDir, kRawFileNames[i]);
+        const char*       data = nullptr;
+        std::size_t       bytes = 0;
 
-        const std::string path = joinPath(packageDir, names[i]);
+        // 显示图分支才需要拷贝：子矩阵（ROI）不连续时直接按 rows*cols 写
+        // 会按步长把别的像素写进来，得到一张"尺寸对、内容错"的图，
+        // 而它看起来完全正常。原始载荷是一块平坦的 vector，天然连续。
+        cv::Mat           contiguous;
+        switch (source)
+        {
+        case RawSource::None:
+            continue;
+        case RawSource::RawBytes:
+            data  = reinterpret_cast<const char*>(chans[i]->raw.bytes->data());
+            bytes = chans[i]->raw.bytes->size();
+            break;
+        case RawSource::DisplayImage:
+            contiguous = chans[i]->image.isContinuous() ? chans[i]->image
+                                                        : chans[i]->image.clone();
+            data  = reinterpret_cast<const char*>(contiguous.data);
+            bytes = contiguous.total() * contiguous.elemSize();
+            break;
+        }
+
         std::ofstream out(path, std::ios::out | std::ios::binary
                                    | std::ios::trunc);
         if (!out.is_open())
@@ -646,9 +931,7 @@ bool Recorder::writeRawFrames(const data::MultiCameraFrame& frame,
             error = "无法写入 " + path;
             return false;
         }
-        const std::size_t bytes = contiguous.total() * contiguous.elemSize();
-        out.write(reinterpret_cast<const char*>(contiguous.data),
-                  static_cast<std::streamsize>(bytes));
+        out.write(data, static_cast<std::streamsize>(bytes));
         out.flush();
         if (!out.good())
         {

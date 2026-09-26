@@ -45,6 +45,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,7 @@
 #include "data/MeasurementTask.h"
 #include "data/MultiCameraFrame.h"
 #include "data/PoseValidationResult.h"
+#include "data/RawImagePayload.h"
 #include "data/ShipPoseResult.h"
 #include "data/StateTransition.h"
 #include "data/SystemConfig.h"
@@ -482,6 +484,309 @@ TEST(RecorderPackageTest, RawFramesAreHeaderlessBuffersMatchingDeclaredGeometry)
               record.bestFrame.cam50.image.size());
     EXPECT_NE(record.bestFrame.cam50.image.size(),
               record.bestFrame.cam100.image.size());
+}
+
+// ===========================================================================
+//  2b 12 位帧的原始载荷缺失 ⇒ **拒绝回落**（011-A1 §2.1 第 7 条 / [缺口 1]）
+// ===========================================================================
+//
+//  ⚠ 这一对用例是**同一份帧的两个方向**，缺任何一个都不成立：
+//    ① 只清空 `raw`、其余信息原样保留 ⇒ 保存必须**失败**；
+//    ② 同一份帧把 `raw` 装回去 ⇒ 保存成功且写出的字节就是 `raw`。
+//    只有 ① 时，"保存失败"也可能是因为帧根本是坏的（尺寸不对、格式非法）；
+//    只有 ② 时，"保存成功"也说明不了旧判据（`!image.empty()`）有问题。
+//    两者合起来才证明**判据恰好是 `raw` 本身**。
+
+namespace
+{
+
+/// 一帧 Mono12 的两个侧面：16 位容器（**原始载荷的本体**）与由它
+/// 右移 4 位得到的 8U 显示图（§2.1 第 6 条，不缩放、不拉伸）。
+///
+/// ⚠ 显示图**由容器派生**而不是另一幅随手画的图：这样 ① 用例才真的在问
+///   "这份 12 位帧的载荷丢了会怎样"，而不是"一幅无关的 8U 图会怎样"。
+struct Mono12Fixture
+{
+    uint32_t             width  = 0;
+    uint32_t             height = 0;
+    std::vector<uint8_t> container;   ///< 每像素 2 字节的小端 16 位容器
+    cv::Mat              display;     ///< 8U，= 容器里的值 >> (12−8)
+};
+
+Mono12Fixture makeMono12(uint32_t width, uint32_t height)
+{
+    Mono12Fixture fx;
+    fx.width  = width;
+    fx.height = height;
+    fx.display.create(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
+
+    fx.container.resize(static_cast<std::size_t>(width) * height * 2u);
+    for (uint32_t y = 0; y < height; ++y)
+    {
+        for (uint32_t x = 0; x < width; ++x)
+        {
+            // 取值覆盖 0 / 满量程 / 中间值，且**低位非零** ——
+            // 低位非零才能让"右移 4 位"与"截断/取高字节"区分开。
+            const uint32_t index = y * width + x;
+            const uint16_t value =
+                static_cast<uint16_t>((index * 37u + 0x0801u) & 0x0FFFu);
+            const std::size_t off = static_cast<std::size_t>(index) * 2u;
+            fx.container[off]     = static_cast<uint8_t>(value & 0xFFu);   // 小端
+            fx.container[off + 1] = static_cast<uint8_t>((value >> 8) & 0xFFu);
+            fx.display.at<unsigned char>(static_cast<int>(y), static_cast<int>(x)) =
+                static_cast<unsigned char>(value >> 4);
+        }
+    }
+    return fx;
+}
+
+/// 把夹具装成一帧 Mono12。`withRaw == false` 即**只清空原始载荷**、
+/// 采集格式与策略（`captureFormat` / `rawPolicy`）原样保留。
+aircraft::data::ImageFrame mono12Frame(const Mono12Fixture& fx, bool withRaw)
+{
+    aircraft::data::ImageFrame f;
+    f.role          = CameraRole::CAM25;
+    f.cameraId      = "cam25";
+    f.frameId       = 101;
+    f.timestampNs   = 4242;
+    f.captureFormat = aircraft::data::PixelFormat::Mono12;
+    f.rawPolicy     = aircraft::data::RawDataPolicy::RawRequired;
+    f.image         = fx.display;
+
+    if (withRaw)
+    {
+        aircraft::data::RawImagePayload p;
+        p.bytes = std::make_shared<const std::vector<uint8_t>>(fx.container);
+        p.format      = aircraft::data::PixelFormat::Mono12;
+        p.validBits   = 12;
+        p.packing     = aircraft::data::Packing::Unpacked;
+        p.bitAlignment = aircraft::data::BitAlignment::LsbZeroPadded;
+        p.width  = fx.width;
+        p.height = fx.height;
+        p.sdkPayloadBytes = fx.container.size();
+        // ⚠ 期望长度**算**出来，不写死 ±2 字节
+        //   （写死的话，将来紧凑契约改了这里不会红）。
+        aircraft::data::computeExpectedCompactBytes(fx.width, fx.height,
+                                                    p.format,
+                                                    p.expectedCompactBytes);
+        p.compactSizeMatches = (p.sdkPayloadBytes == p.expectedCompactBytes);
+        p.declaredByteOrder  = aircraft::data::ByteOrder::LittleEndian;
+        f.raw = p;
+    }
+    return f;
+}
+
+}  // namespace
+
+TEST(RecorderPackageTest, Mono12FrameWithoutRawPayloadIsRefusedNotSilentlyDowngraded)
+{
+    TempDir out("mono12noraw");
+
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const Mono12Fixture             fx     = makeMono12(32, 24);
+    record.bestFrame.cam25                 = mono12Frame(fx, /*withRaw=*/false);
+
+    // ---- 前提：这不是"缺图"场景 ----
+    // 显示图在、尺寸对、深度 8U —— 旧判据 `!image.empty()` 在这里为真，
+    // 于是旧版会**照写**一份 8U 的 cam25.raw，而元数据（若按同一判据生成）
+    // 说什么都不影响那一份文件已经被按显示图解释。
+    ASSERT_FALSE(record.bestFrame.cam25.image.empty());
+    ASSERT_EQ(record.bestFrame.cam25.image.depth(), CV_8U);
+    ASSERT_EQ(record.bestFrame.cam25.captureFormat,
+              aircraft::data::PixelFormat::Mono12);
+    ASSERT_TRUE(record.bestFrame.cam25.raw.bytes == nullptr);
+
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+    Recorder rec(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+
+    EXPECT_FALSE(rec.save(record))
+        << "12 位帧丢了原始载荷却保存成功 —— 这份包里的 cam25.raw 其实是一张"
+           "8U 显示图，而元数据按 Mono12 描述它（事后**无法**分辨）";
+
+    const std::string dir = rec.lastPackageDir();
+    ASSERT_FALSE(dir.empty());
+
+    // 错误必须**点名是哪一路、为什么** —— 只说"保存失败"就无法排查。
+    EXPECT_TRUE(rec.lastErrorText().find("cam25.raw") != std::string::npos)
+        << rec.lastErrorText();
+    EXPECT_TRUE(rec.lastErrorText().find("未携带原始载荷") != std::string::npos)
+        << rec.lastErrorText();
+
+    // ---- 一个文件都不该有 ----
+    // 契约错误在**写 result.json 的那一步**就被拦下（它是第一步），
+    // 故不存在"元数据已落盘、raw 却没写"那种**看起来完整**的包 ——
+    // 它比整包失败更危险：目录里有 result.json，读的人会认为结果齐全。
+    EXPECT_FALSE(pathExists(joinPath(dir, "cam25.raw")));
+    // 另外两路（8U、RawOptional、无 raw）本来**可以**正常写出 ——
+    // 断言它们也没有，是为了证明"一路违约 ⇒ 整包失败"，而不是
+    // "跳过坏的那一路、把其余两路写出去"。
+    EXPECT_FALSE(pathExists(joinPath(dir, "cam50.raw")));
+    EXPECT_FALSE(pathExists(joinPath(dir, "result.json")));
+}
+
+TEST(RecorderPackageTest, Mono12FrameWithRawPayloadIsSavedByteForByte)
+{
+    TempDir out("mono12raw");
+
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const Mono12Fixture             fx     = makeMono12(32, 24);
+    record.bestFrame.cam25                 = mono12Frame(fx, /*withRaw=*/true);
+
+    const std::string dir = saveRecord(out, "config", record);
+    ASSERT_FALSE(dir.empty());
+
+    // ① 写出的字节**逐字节等于原始载荷**（不是显示图、不是重新打包的容器）。
+    const std::string path = joinPath(dir, "cam25.raw");
+    ASSERT_EQ(fileSize(path), static_cast<long>(fx.container.size()))
+        << "Mono12 的载荷是 2 字节/像素的 16 位容器（OCCUPY16BIT），"
+           "按 1 字节/像素写出说明它被当成 8 位读了";
+    const std::vector<unsigned char> onDisk = readBytes(path);
+    ASSERT_EQ(onDisk.size(), fx.container.size());
+    EXPECT_EQ(std::memcmp(onDisk.data(), fx.container.data(), fx.container.size()), 0);
+
+    // ② 元数据**描述的就是这份文件**：写 "raw" 且格式三件套一致。
+    cv::FileStorage fs(joinPath(dir, "result.json"), cv::FileStorage::READ);
+    ASSERT_TRUE(fs.isOpened());
+    cv::FileNode frames = fs["best_frame"]["frames"];
+    ASSERT_TRUE(frames.isSeq());
+    ASSERT_EQ(frames.size(), 3u);
+
+    // 下标 0 = CAM25（三路与 role 一一对应，见 Recorder.cpp 的说明）。
+    cv::FileNode f0 = frames[0];
+    std::string  role, source, format, packing, order;
+    int          validBits = 0;
+    f0["role"] >> role;
+    f0["data_source"] >> source;
+    f0["pixel_format"] >> format;
+    f0["packing"] >> packing;
+    f0["declared_byte_order"] >> order;
+    f0["valid_bits"] >> validBits;
+
+    EXPECT_EQ(role, "CAM25");
+    EXPECT_EQ(source, "raw") << "有原始载荷时必须写真身，不得落成 image";
+    EXPECT_EQ(format, "Mono12");
+    EXPECT_EQ(packing, "Unpacked");
+    EXPECT_EQ(order, "LittleEndian");
+    EXPECT_EQ(validBits, 12);
+
+    // ③ 显示图**不是**这份文件的解码依据：它的尺寸与容器尺寸不同，
+    //    若谁按 display_image 去解释这份 raw，长度立刻对不上。
+    cv::FileNode disp = f0["display_image"];
+    int          dw = 0, dh = 0;
+    disp["width"] >> dw;
+    disp["height"] >> dh;
+    EXPECT_EQ(dw, static_cast<int>(fx.width));
+    EXPECT_EQ(dh, static_cast<int>(fx.height));
+    EXPECT_EQ(static_cast<std::size_t>(dw) * static_cast<std::size_t>(dh),
+              fx.container.size() / 2u)
+        << "显示图是 1 字节/像素、载荷是 2 字节/像素 —— 两者长度天然不同，"
+           "这正是'type/width/height 不能当裸缓冲解码依据'的直接体现";
+}
+
+TEST(RecorderPackageTest, EightBitFrameWithoutRawPayloadIsSavedAndLabelledAsImage)
+{
+    TempDir out("mono8noraw");
+
+    // 分支②的**正**用例：8 位帧本来就没有（也不需要）原始载荷 ——
+    // `fixtureRecord()` 的三路正是这个形态（虚拟后端 = BGR8/8U、
+    // `RawOptional`）。这里要证明的不是"能写出去"，而是**标签如实**：
+    // 文件内容与 `data_source = "image"` 这一条必须同时成立。
+    const aircraft::data::MeasurementRecord record = fixtureRecord();
+    const std::string dir = saveRecord(out, "config", record);
+    ASSERT_FALSE(dir.empty());
+
+    const std::string path = joinPath(dir, "cam25.raw");
+    const long        expected =
+        static_cast<long>(record.bestFrame.cam25.image.total()) *
+        static_cast<long>(record.bestFrame.cam25.image.elemSize());
+    ASSERT_EQ(fileSize(path), expected);
+
+    cv::FileStorage fs(joinPath(dir, "result.json"), cv::FileStorage::READ);
+    ASSERT_TRUE(fs.isOpened());
+    cv::FileNode f0 = fs["best_frame"]["frames"][0];
+
+    std::string source, format;
+    int         validBits = 0;
+    bool        frameValid = false;
+    f0["data_source"] >> source;
+    f0["pixel_format"] >> format;
+    f0["valid_bits"] >> validBits;
+    f0["frame_valid"] >> frameValid;
+
+    EXPECT_EQ(source, "image")
+        << "没有原始载荷、回落保存显示图时，必须**如实标注** image —— "
+           "标成 raw 会让离线解码按 16 位容器去读一张 8 位图";
+    EXPECT_EQ(format, "Mono8");
+    EXPECT_EQ(validBits, 8);
+    EXPECT_TRUE(frameValid) << "8 位帧没有 raw 是**正常**形态，不是缺帧";
+}
+
+TEST(RecorderPackageTest, Mono12FrameWithRawButNoDisplayImageIsStillSaved)
+{
+    TempDir out("mono12nodisp");
+
+    // 12 位帧的另一种真实形态：**有原始载荷、没有显示图**（例如显示转换
+    // 尚未做、或调用方只要原始数据）。它必须是"可用帧"——
+    // ⚠ 这正是旧判据（`valid = !image.empty()`）会判错的那一格：
+    //   按旧判据这份包会说 CAM25 缺帧，而它的原始数据其实完好。
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const Mono12Fixture             fx     = makeMono12(32, 24);
+    record.bestFrame.cam25                 = mono12Frame(fx, /*withRaw=*/true);
+    record.bestFrame.cam25.image           = cv::Mat();
+
+    const std::string dir = saveRecord(out, "config", record);
+    ASSERT_FALSE(dir.empty());
+
+    const std::string path = joinPath(dir, "cam25.raw");
+    ASSERT_EQ(fileSize(path), static_cast<long>(fx.container.size()));
+    const std::vector<unsigned char> onDisk = readBytes(path);
+    ASSERT_EQ(onDisk.size(), fx.container.size());
+    EXPECT_EQ(std::memcmp(onDisk.data(), fx.container.data(), fx.container.size()), 0);
+
+    cv::FileStorage fs(joinPath(dir, "result.json"), cv::FileStorage::READ);
+    ASSERT_TRUE(fs.isOpened());
+    cv::FileNode f0 = fs["best_frame"]["frames"][0];
+
+    std::string source;
+    bool        frameValid = false;
+    int         dw = -1, dh = -1;
+    f0["data_source"] >> source;
+    f0["frame_valid"] >> frameValid;
+    f0["display_image"]["width"] >> dw;
+    f0["display_image"]["height"] >> dh;
+
+    EXPECT_EQ(source, "raw");
+    EXPECT_TRUE(frameValid)
+        << "有原始载荷就是可用帧 —— 判据不得再等同于 `!image.empty()`";
+    EXPECT_EQ(dw, 0);
+    EXPECT_EQ(dh, 0);
+}
+
+TEST(RecorderPackageTest, RawCarrierShorterThanItsOwnDeclaredLengthIsRefused)
+{
+    TempDir out("mono12short");
+
+    // 元数据写的是 `sdk_payload_bytes`，而写出去的字节数取自载体本身。
+    // 两者不等时那份 raw 的**解码依据就是错的**（文件比元数据短），
+    // 而它仍然能被读成一张"尺寸不匹配"的图 —— 又一条静默失效。
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const Mono12Fixture             fx     = makeMono12(32, 24);
+    record.bestFrame.cam25                 = mono12Frame(fx, /*withRaw=*/true);
+
+    std::vector<uint8_t> short_ = fx.container;
+    short_.resize(short_.size() / 2);   // 载体被截短，元数据不动
+    record.bestFrame.cam25.raw.bytes =
+        std::make_shared<const std::vector<uint8_t>>(short_);
+
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+    Recorder rec(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+
+    EXPECT_FALSE(rec.save(record));
+    EXPECT_TRUE(rec.lastErrorText().find("载体") != std::string::npos)
+        << rec.lastErrorText();
+    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
 }
 
 // ===========================================================================

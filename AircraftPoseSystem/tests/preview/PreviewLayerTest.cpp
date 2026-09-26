@@ -661,6 +661,31 @@ TEST(PreviewManagerTest, SubmitFromReturnsFalseWhenDisplayedChannelIsEmpty)
         << "空帧不得进入队列：它会占掉容量并被当作正常数据发布，界面于是显示空白";
 }
 
+TEST(PreviewManagerTest, SubmitFromRefusesNonEightBitDisplayImage)
+{
+    // 边界：进入预览的 `image` 必须是**显示图**（8U）。
+    // 一幅 16U 的图进到这里，说明某个后端把原始载荷当成了显示图发布
+    // （ENG-09 V2.3 §5.28 第 6 条：`image` 永远是加工产物，不是载荷）。
+    PreviewManager pm;
+    pm.setMode(PreviewMode::MANUAL);
+    ASSERT_TRUE(pm.setCamera(CameraRole::CAM25));
+
+    aircraft::data::MultiCameraFrame mcf = makeMultiFrame(11, 22, 33);
+    mcf.cam25.image = cv::Mat(4, 4, CV_16UC1, cv::Scalar(11));
+
+    EXPECT_FALSE(pm.submitFrom(mcf))
+        << "16U 图不得进入预览：它会被 Qt 转换按 8U 读，症状是"
+           "颜色/亮度不对，而根因在取帧侧的格式映射";
+    EXPECT_TRUE(pm.queue().empty());
+
+    // ---- 正对照：同一份帧、同一路，只把深度换成 8U ⇒ 必须提交 ----
+    // 没有这一条，"返回 false"也可能是因为别的判据（例如空图）
+    // 在这里同样成立，于是这条用例证明不了深度判据存在。
+    mcf.cam25.image = cv::Mat(4, 4, CV_8UC1, cv::Scalar(11));
+    EXPECT_TRUE(pm.submitFrom(mcf));
+    EXPECT_FALSE(pm.queue().empty());
+}
+
 TEST(PreviewManagerTest, SubmitFromDoesNotMislableOnSourceSwitch)
 {
     // 回归：submitFrom 内部若把 displayCamera() 读两次，切换相机的窗口
