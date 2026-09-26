@@ -12,7 +12,25 @@
 #    ConfigManager 对焦距做了量级校验（(0.001, 0.5] m），越界即启动失败。
 #
 #  ⚠ exposure_time 的单位是**秒**（ENG-09 §6.1 冻结为 s，不是 ms/µs）。
-#  ⚠ gain 的单位是 dB。trigger_mode: 1 = 硬触发，0 = 软触发。
+#  ⚠ gain 的单位是 dB。
+#
+#  ⚠ trigger_mode 是**三值字符串**（ENG-09 V2.3 起；旧版是 1 = 硬触发、
+#    0 = 软触发）：`software` / `hardware` / `free_run`。
+#    旧数字值**显式拒绝并给迁移提示**，不自动映射 —— 旧 `1` 的语义是
+#    "开触发"，而开触发之后还分软件源与硬件源，自动映射到任一边都可能
+#    把另一边的意图悄悄改掉（ConfigManager 逐值报错）。
+#    本批 CAM25 用 `software`（软触发）；`hardware` 归 PH-01 未实施；
+#    `free_run` 真实后端返回 NotImplemented（不静默当自由运行）。
+#
+#  ⚠ backend 必须**逐通道显式声明** `virtual` 或 `imv`（ENG-09 §6.1）：
+#    缺键即配置错误、启动失败。不设默认值，也不因"检测到 SDK"自动切换 ——
+#    隐式默认会让一份虚拟配置在 SDK 装好后**静默**变成真实采集。
+#
+#  ⚠ serial 是**设备标签上的序列号**（期望值，用于按序列号绑定设备）。
+#    它在 backend = "virtual" 时留空（虚拟后端没有设备可绑定）；
+#    backend = "imv" 时**必须非空**，否则启动失败 —— 三台相机同型号，
+#    按型号或"第 0 个设备"打开会在换了线序之后静默接错焦段。
+#    现场接入时把对应通道的 backend 改为 "imv" 并填上实际序列号。
 #
 #  ⚠ 以下 width/height/exposure_time/gain 是**虚拟阶段的占位值**（与
 #    VirtualCameraBackend 在未配置时的回退尺寸一致，使虚拟图像尺寸稳定，
@@ -25,31 +43,42 @@
 ---
 cameras:
    -
-      # 与 CameraChannel::cameraId 对应；真实后端下即相机序列号。
+      # 通道的**逻辑名**（`CameraChannel::cameraId`），与焦段绑定，
+      # 由配置决定；设备身份在独立的 serial 键里（ENG-09 §6.1）。
+      #
+      # ⚠ 旧版此处写的是"真实后端下即相机序列号"，那是错的：逻辑名一旦
+      #    被当成序列号，`serial` 键就无处安放，设备身份也就无法与通道
+      #    解耦（换一台同型号相机要改 id，而 id 还被预览/落盘/界面引用）。
       id: "cam25"
       # 焦段角色：CAM25 / CAM50 / CAM100（ENG-09 §4.1 冻结的三个取值）
       role: "CAM25"
+      backend: "virtual"
+      serial: ""
       width: 1280
       height: 1024
       exposure_time: 0.005
       gain: 6.0
-      trigger_mode: 1
+      trigger_mode: software
       focal_length: 0.025
    -
       id: "cam50"
       role: "CAM50"
+      backend: "virtual"
+      serial: ""
       width: 1280
       height: 1024
       exposure_time: 0.003
       gain: 6.0
-      trigger_mode: 1
+      trigger_mode: software
       focal_length: 0.05
    -
       id: "cam100"
       role: "CAM100"
+      backend: "virtual"
+      serial: ""
       width: 1280
       height: 1024
       exposure_time: 0.002
       gain: 6.0
-      trigger_mode: 1
+      trigger_mode: software
       focal_length: 0.1

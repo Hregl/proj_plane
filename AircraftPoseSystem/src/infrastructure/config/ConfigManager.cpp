@@ -16,6 +16,10 @@
 //    在代码里编一组"看起来合理"的阈值比留空更危险。
 // ============================================================================
 
+// ============================================================================
+//  ⚠ 本文件引用的 SYS-08 §7.x 经核实为悬空／撞号引用（2026-09-26 复核），依据待裁决，见《待裁决问题汇总》Q-D2 与《SYS-08-§7引用勘误.md》；正文引用仅描述现行行为，不作为冻结依据。
+// ============================================================================
+
 #include "infrastructure/config/ConfigManager.h"
 
 #include <algorithm>
@@ -435,9 +439,109 @@ bool ConfigManager::load(const std::string& configDir)
             c.height = r.integer(n["height"], "height", 0);
             c.exposureTime = r.real(n["exposure_time"], "exposure_time", 0.0);
             c.gain         = r.real(n["gain"], "gain", 0.0);
-            c.triggerMode  = r.boolean(n["trigger_mode"], "trigger_mode", true);
 
             const std::string ctx = "camera.cameras[" + std::to_string(index) + "]";
+
+            // ---- backend（011-A1 新增）-------------------------------------
+            // ⚠ **缺该键 = 配置错误、启动失败**，不做隐式默认（ENG-09 V2.3 §6.1）。
+            // 理由：若按"检测到 SDK 就用真实后端"来默认，则现场 SDK 装好的
+            // 那一刻，虚拟配置会**静默变成**真实采集，而操作者以为在跑仿真；
+            // 反之 SDK 缺失时又静默退化为虚拟，使"没有真图"这件事只在测量
+            // 结果上体现。显式声明把这两种静默切换都消除掉。
+            // 故此处用 errors_（⇒ 启动失败）而**不是** defaults_（⇒ 取默认值）。
+            {
+                const cv::FileNode nb = n["backend"];
+                if (nb.empty() || nb.isNone())
+                {
+                    errors_.push_back(
+                        ctx + ".backend 缺失：必须显式声明 \"virtual\" 或 "
+                        "\"imv\"（不设默认值——隐式默认会让虚拟配置在 SDK "
+                        "装好后静默变成真实采集）");
+                }
+                else if (!nb.isString())
+                {
+                    errors_.push_back(ctx + ".backend 应为字符串 \"virtual\" 或 "
+                                      "\"imv\"");
+                }
+                else
+                {
+                    c.backend = nb.string();
+                    if (c.backend != "virtual" && c.backend != "imv")
+                    {
+                        errors_.push_back(ctx + ".backend 取值非法：" + c.backend +
+                                          "（允许 \"virtual\" / \"imv\"）");
+                    }
+                }
+            }
+
+            // ---- serial（011-A1 新增）---------------------------------------
+            // 设备**序列号**（期望值），来自设备标签。空 = 未绑定。
+            // ⚠ 不在缺键时登记 defaults_：该键对 `backend: virtual` 本来就是
+            // 无意义的（虚拟后端没有设备身份），把它记成"命中默认值"会让
+            // 每次虚拟启动都多一条噪声提示，而提示该指向真问题时才有价值。
+            // ⚠ 但**类型错了要报错**：`serial: 12345` 会被读成数字而静默丢弃。
+            {
+                const cv::FileNode ns = n["serial"];
+                if (!ns.empty() && !ns.isNone())
+                {
+                    if (!ns.isString())
+                    {
+                        errors_.push_back(ctx + ".serial 应为字符串（设备标签上的"
+                                          "序列号；不要写成数字，前导零会丢失）");
+                    }
+                    else
+                    {
+                        c.serialNumber = ns.string();
+                    }
+                }
+            }
+
+            // ---- trigger_mode（011-A1 改：bool → 三值字符串）----------------
+            // ⚠ 旧版是 `1 = 硬触发，0 = 软触发`（`bool`）。本版改为
+            // `software | hardware | free_run`，**旧数字值显式拒绝**并给迁移
+            // 提示：让 `1` 静默变成"某一种模式"会把一次**配置未迁移**伪装成
+            // 配置正确 —— 而它正好落在一个本项目最警惕的形态上（设备按一种
+            // 模式跑、配置说另一种）。三值的必要性见 CameraTriggerMode.h。
+            {
+                const cv::FileNode nt = n["trigger_mode"];
+                if (nt.empty() || nt.isNone())
+                {
+                    errors_.push_back(
+                        ctx + ".trigger_mode 缺失：必须显式声明 software / "
+                        "hardware / free_run（旧版数字 0/1 已不再接受）");
+                }
+                else if (!nt.isString())
+                {
+                    errors_.push_back(
+                        ctx + ".trigger_mode 是数字（读到 " +
+                        std::to_string(static_cast<int>(nt.real())) +
+                        "）：本版已改为三值字符串。旧值 1 = 硬触发、0 = 软触发，"
+                        "请改写为 hardware / software（旧 1 的另一半可能本来是"
+                        "自由运行，故不自动映射）");
+                }
+                else
+                {
+                    const std::string tm = nt.string();
+                    if (tm == "software")
+                    {
+                        c.triggerMode = data::CameraTriggerMode::Software;
+                    }
+                    else if (tm == "hardware")
+                    {
+                        c.triggerMode = data::CameraTriggerMode::Hardware;
+                    }
+                    else if (tm == "free_run")
+                    {
+                        c.triggerMode = data::CameraTriggerMode::FreeRun;
+                    }
+                    else
+                    {
+                        errors_.push_back(
+                            ctx + ".trigger_mode 取值非法：" + tm +
+                            "（允许 software / hardware / free_run）");
+                    }
+                }
+            }
 
             if (!parseRole(roleText, c.role))
             {
@@ -447,6 +551,19 @@ bool ConfigManager::load(const std::string& configDir)
             if (c.cameraId.empty())
             {
                 errors_.push_back(ctx + ".id 为空");
+            }
+            // 真实后端必须绑定序列号：三台相机是同型号，不绑定就只能
+            // "取第 0 个"，而三路随机互换之后**没有任何错误**，只表现为
+            // 角度系统性偏差。在此处拦下＝在**碰到硬件之前**失败。
+            // ⚠ 后端自身的打开流程里还有一道同样的检查（`openDevice()`）——
+            // 那一道不是重复，是"最后一道防线"：配置可以被绕过（测试直接
+            // 构造 CameraConfig），而**打开设备**这一步绕不过去。
+            if (c.backend == "imv" && c.serialNumber.empty())
+            {
+                errors_.push_back(
+                    ctx + "：backend = \"imv\" 但未绑定 serial —— 三台相机同型号，"
+                    "不绑定序列号就只能按序号打开，会让三路随机互换且不报错。"
+                    "请填写该相机标签上的序列号。");
             }
             if (c.width <= 0 || c.height <= 0)
             {
@@ -754,6 +871,61 @@ bool ConfigManager::load(const std::string& configDir)
         measurement_.captureTimeoutNs =
             r.nanoseconds(g["capture_timeout_ns"], "capture_timeout_ns",
                           measurement_.captureTimeoutNs);
+
+        // ---- 取帧预算（ENG-09 V2.3 §6.5；SYS-04 V2.4 §6.1）----
+        //  ⚠ 这两个量是**上限**而不是承诺值：`capture()` 时它们与实际等待处
+        //    的"距状态期限的剩余"三者**取最小**（MultiCameraManager::capture）。
+        //    故调大它们不会延长任何一次等待。
+        measurement_.grabTimeoutMs =
+            r.integer(g["grab_timeout_ms"], "grab_timeout_ms",
+                      measurement_.grabTimeoutMs);
+        if (measurement_.grabTimeoutMs <= 0)
+        {
+            // 0 **不是**"不等待"的意思：`IMV_GetFrame` 对 timeoutMS = 0 的
+            // 语义在 SDK 中未文档化（ENG-09 V2.3 §2.5 核验表），项目**不定义**
+            // 它，后端实现会明确拒绝 0（InvalidArgument）。负数同样非法。
+            errors_.push_back(
+                "measurement.grab_timeout_ms 必须为正（0 的语义 SDK 未文档化、"
+                "项目不定义，后端会拒绝）");
+        }
+
+        measurement_.grabGroupBudgetNs =
+            r.nanoseconds(g["grab_group_budget_ns"], "grab_group_budget_ns",
+                          measurement_.grabGroupBudgetNs);
+        if (measurement_.grabGroupBudgetNs == 0)
+        {
+            // 组预算为 0 ⇒ 每路都判"预算耗尽"，一次 SDK 调用都不会发生，
+            // 表现为"三路全部取帧失败"而实际是配置把预算配没了。
+            errors_.push_back("measurement.grab_group_budget_ns 为 0");
+        }
+
+        // ---- 取帧预算与状态时限的**余量事实**（只警告，不改冻结值）----
+        //  capture_frame_count 帧 × 3 路 × grab_timeout_ms 若已占满
+        //  capture_timeout_ns，则该状态**没有余量**，而复制、格式转换、评分
+        //  都不受取帧等待参数约束 ⇒ CAPTURE 在真实相机上**可能被时限截断**。
+        //  ⚠ 这里**不判启动失败、也不自行放宽冻结值**：时限体系的取值余量属
+        //    《待裁决问题汇总》Q-D2，本批只把事实测出来、让它可见。
+        if (measurement_.grabTimeoutMs > 0 && measurement_.captureTimeoutNs > 0 &&
+            measurement_.captureFrameCount > 0)
+        {
+            const uint64_t needTotalMs =
+                static_cast<uint64_t>(measurement_.grabTimeoutMs) * 3ULL *
+                static_cast<uint64_t>(measurement_.captureFrameCount);
+            const uint64_t captureTimeoutMs = measurement_.captureTimeoutNs / 1000000ULL;
+            if (needTotalMs >= captureTimeoutMs)
+            {
+                warnings_.push_back(
+                    "measurement：取帧预算无余量 —— capture_frame_count(" +
+                    std::to_string(measurement_.captureFrameCount) + ") × 3 路 × "
+                    "grab_timeout_ms(" +
+                    std::to_string(measurement_.grabTimeoutMs) + ") = " +
+                    std::to_string(needTotalMs) + " ms ≥ capture_timeout_ns(" +
+                    std::to_string(captureTimeoutMs) +
+                    " ms)，且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上"
+                    "可能被时限截断（取值余量见《待裁决问题汇总》Q-D2）");
+            }
+        }
+
         measurement_.solveTimeoutNs =
             r.nanoseconds(g["solve_timeout_ns"], "solve_timeout_ns",
                           measurement_.solveTimeoutNs);
@@ -770,7 +942,7 @@ bool ConfigManager::load(const std::string& configDir)
             errors_.push_back("measurement.task_timeout_ns 为 0（ENG-10 §5.3 判为越界）");
         }
 
-        // 三级时限的包含关系（SYS-08 §7.1，冻结）：
+        // 三级时限的包含关系（SYS-08 §7.1〔引用无效·依据待裁决·见 Q-D2〕，冻结）：
         //   T_task > T_state > T_device
         // 某个状态超时 ≥ T_task 时该状态的超时永远不会触发 ——
         // 任务会先撞 T_task 并以 9001 结束，于是该状态专属错误码

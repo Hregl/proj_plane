@@ -36,6 +36,16 @@ const char* errorCodeName(int code)
         return "ErrCameraInsufficient";
     case kErrCameraDegraded:
         return "ErrCameraDegraded";
+    case kErrGrabTimeout:
+        return "ErrGrabTimeout";
+    case kErrCameraNotStarted:
+        return "ErrCameraNotStarted";
+    case kErrCameraSdkError:
+        return "ErrCameraSdkError";
+    case kErrGrabContract:
+        return "ErrGrabContract";
+    case kErrCameraUnsupported:
+        return "ErrCameraUnsupported";
 
     // ---- 转台设备段 ----
     case kErrTurntableComm:
