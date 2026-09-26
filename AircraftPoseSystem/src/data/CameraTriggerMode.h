@@ -3,8 +3,8 @@
 // ============================================================================
 //  src/data/CameraTriggerMode.h
 //
-//  依据：ENG-09 V2.3 §5.31（触发模式契约，冻结）、§6.1（camera.yaml）
-//        SYS-04 V2.4 §6.1 / SYS-06 V2.3 §6.1 / SYS-17 V1.1 §5
+//  依据：ENG-09 V2.4 §5.31（触发模式契约，冻结）、§6.1（camera.yaml）
+//        SYS-04 V2.5 §6.1 / SYS-06 V2.3 §6.1 / SYS-17 V1.1 §5
 //        裁决 C-01 v1.7
 //
 //  作用：把相机触发模式从 `bool`（`true` = 硬触发）扩为三值，并把
@@ -27,8 +27,12 @@
 //  默认成某个合法模式（那会让一次读失败伪装成"模式正确"）。
 // ============================================================================
 
+#include <array>
+#include <cstddef>
 #include <optional>
 #include <string>
+
+#include "data/OpStatus.h"
 
 namespace aircraft
 {
@@ -125,11 +129,79 @@ inline std::optional<CameraTriggerMode> triggerModeFromSource(
     return std::nullopt;
 }
 
+/// 三项前置特性的**读回现场**（逐项记录，一项一条）。
+///
+/// ⚠ 为什么不能只留一个 `vector<SdkFailure>`（011-A1 九项缺口 §7 的裁决）：
+/// 三项读回**走的是同一个 SDK 调用**（`ImvGetEnumFeatureSymbol`），
+/// 失败记录里只有一个操作名时，**看不出失败的是哪一项特性** ——
+/// 而三项失败的现场动作不同：`TriggerMode` 读不到 ⇒ 连"是不是硬触发"
+/// 都不知道；`TriggerSource` 读不到 ⇒ 开关读到了但模式仍未知。
+/// 故每项必须**自带特性名**。
+///
+/// ⚠ 另必须区分两种都表现为"没读到值"的情形（它们的排查方向相反）：
+///   · `failure` 非空      —— SDK 调用**失败**（原码可查，是链路/SDK 问题）；
+///   · `returnedEmpty`     —— 调用**成功**但设备回了空串（特性存在与否、
+///                            取值语义问题，不是调用问题）。
+/// 把二者混成"值为空"，离线排查会把一次调用失败当成设备没配该特性。
+struct TriggerFeatureReadback
+{
+    /// SDK 特性名（`"TriggerSelector"`/`"TriggerMode"`/`"TriggerSource"`）。
+    /// ⚠ 逐字取自本项目下发的符号名，**不臆造**（见 `SdkCall` 的同类纪律）。
+    std::string feature;
+
+    /// 是否真的发起过这次 `ImvGetEnumFeatureSymbol`。
+    /// ⚠ `false` 与"调用了但失败"不同：前者是这一项**根本没读**
+    /// （例如在入口就因预算耗尽而整段跳过）。
+    bool callAttempted = false;
+
+    /// 调用**失败**时的操作名与原码；调用成功（含返回空串）为 `nullopt`。
+    std::optional<SdkFailure> failure;
+
+    /// 调用**成功**但返回空串。与 `failure` 互斥表达：
+    /// "调用失败" ⇒ `failure` 非空、本字段无意义；
+    /// "调用成功但没读到值" ⇒ `failure` 为空、本字段为 `true`。
+    bool returnedEmpty = false;
+
+    /// 读回的取值（可能为空串）。空串**不**表示"这就是实际取值"。
+    std::string value;
+};
+
+/// 三项前置特性的条数（`TriggerModeState::readbacks` 的长度）。
+inline constexpr std::size_t kTriggerFeatureCount = 3;
+
+/// 三项前置特性的**规范名**（下标与 `TriggerModeState::readbacks` 一一对应）。
+///
+/// ⚠ 集中在此处而不是各处手写字面量：`triggerModeState()` 填名字、
+/// 日志与结果包读名字、测试断言名字 —— 三处各写一份必然在某次改名后分叉，
+/// 而分叉的表现是"日志说 TriggerSource 读失败、实际失败的是 TriggerMode"。
+inline const char* triggerFeatureName(std::size_t index)
+{
+    switch (index)
+    {
+    case 0:
+        return "TriggerSelector";
+    case 1:
+        return "TriggerMode";
+    case 2:
+        return "TriggerSource";
+    default:
+        return "Unknown";
+    }
+}
+
 /// 触发模式的**请求值与实际读回值**。
 struct TriggerModeState
 {
     /// 请求值（来自配置/装配）。
     CameraTriggerMode requested = CameraTriggerMode::FreeRun;
+
+    /// 三项前置特性的**逐项读回现场**（含失败信息与特性名）。
+    ///
+    /// ⚠ 它与下面的 `selectorReported`/`switchReported`/`sourceReported`
+    /// 不是重复：那三个是**取值**（供 `composeTriggerModeState` 合成），
+    /// 本字段是**取证**（哪一项读了、怎么失败的、原码是多少）。
+    /// 只有取值时，一次读失败在结果里只剩一个"空"，无法回答"为什么空"。
+    std::array<TriggerFeatureReadback, kTriggerFeatureCount> readbacks{};
 
     /// 实际生效的 `TriggerSelector`（如 `"FrameStart"`）。
     std::optional<std::string> selectorReported;

@@ -3,8 +3,8 @@
 // ============================================================================
 //  src/data/CaptureRound.h
 //
-//  依据：ENG-09 V2.3 §5.32（每轮取帧结果，冻结）、§5.29（操作结果）
-//        SYS-04 V2.4 §6.1 / SYS-06 V2.3 §5.1
+//  依据：ENG-09 V2.4 §5.32（每轮取帧结果，冻结）、§5.29（操作结果）
+//        SYS-04 V2.5 §6.1 / SYS-06 V2.3 §5.1
 //        裁决 C-01 v1.7（R09 部分修复：每路结果与聚合）
 //
 //  作用：把**一次 `capture()` 里三路各自发生了什么**如实保留下来。
@@ -17,7 +17,7 @@
 //  （前者重采即可，后者要禁用并降级）。R09 的失效形态正源于此：
 //  "所有取帧失败被统一处置"，上层无从细分，只能一律按最重的处理。
 //
-//  ⚠ 三个字段的分工（不得混成一个 bool，见 ENG-09 V2.3 §5.32）：
+//  ⚠ 三个字段的分工（不得混成一个 bool，见 ENG-09 V2.4 §5.32）：
 //    `attempted`     —— 这一路**有没有被尝试**（预算耗尽/通道不可用时为 false）
 //    `skippedReason` —— **没尝试的原因**（人读；只表达"未尝试"，不表达失败）
 //    `result`        —— 尝试后的结果（含分类与 SDK 原码）
@@ -32,9 +32,11 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "data/CameraRole.h"
+#include "data/CameraTriggerMode.h"
 #include "data/OpStatus.h"
 
 namespace aircraft
@@ -65,6 +67,26 @@ struct ChannelGrabRecord
     /// 取帧结果：分类 + SDK 原码（`sdkError`） + 清理失败（`cleanupError`）。
     GrabResult result;
 
+    /// 本次取帧的现场诊断（**直接转发** `GrabResult::diagnosis`，不另加工）。
+    ///
+    /// ⚠ 只描述**这一个轮次**的这一路：轮次开始时只清除**上一轮的陈旧信息**
+    /// （见 `MultiCameraManager::finishRound` 的清理口径），本次实际取得的
+    /// 事实一律保留 —— 否则"未取得"与"正常值"会被一起清空，与本轮
+    /// "两者必须可区分"的要求直接冲突。
+    /// ⚠ **不得**改去读后端的 `lastErrorText()`：那是"最近一次失败文本"，
+    /// 可能属于更早的调用，当作本轮事实会张冠李戴。
+    std::string diagnosis;
+
+    /// SDK 回报的帧状态**原值**（直接转发 `GrabResult::frameStatusRaw`）。
+    ///
+    /// ⚠ `nullopt` = 本次**未取得**（如取帧调用本身失败、或这一路没走到取帧）；
+    /// `0` = 取到了、且设备报正常。两者**不得**混成一个 0 兜底。
+    std::optional<uint32_t> frameStatusRaw;
+
+    /// 本路触发前置三项特性的读取现场（§7）。未走到读回时各项
+    /// `callAttempted == false`（**不是**"读了但值为空"）。
+    std::array<TriggerFeatureReadback, kTriggerFeatureCount> readbacks{};
+
     /// 本路画面的主机单调时间戳（ns）；未取到帧时为 0。
     uint64_t timestampNs = 0;
 
@@ -73,6 +95,78 @@ struct ChannelGrabRecord
     /// 这是 `Unset` 唯一被允许出现的地方 —— 它不在聚合范围内）。
     OperationResult trigger;
 };
+
+/// 通道名的稳定文本（诊断与日志用）。
+///
+/// ⚠ 落在 `data` 而不是各层各写一份：`roleName()` 目前在
+/// `MeasurementController.cpp`、`Recorder.cpp`、`CalibrationManager.cpp`
+/// 各有一份**同名不同源**的副本（历史遗留，本批不动它们），而本批
+/// 新加的诊断文本要**逐字一致**地出现在设备层 sink 与应用层失败说明里 ——
+/// 两份措辞只要有一处不同，离线核对时就要先判断"这两行说的是不是同一件事"。
+/// 故共用一份。（本函数只多一个名字，不改 ENG-09 §4.1 的类型清单。）
+inline const char* captureRoleText(CameraRole role)
+{
+    switch (role)
+    {
+    case CameraRole::CAM25:
+        return "CAM25";
+    case CameraRole::CAM50:
+        return "CAM50";
+    case CameraRole::CAM100:
+        return "CAM100";
+    }
+    return "CAM?";
+}
+
+/// 一路采集记录的**完整**诊断文本（011-A1 九项缺口 §9 的样例格式）。
+///
+/// 形状（逐字）：
+///   `CAM25=CorruptFrame（调用 IMV_GetFrame 返回 0；原始载荷的长度与本批
+///     紧凑契约不符：…；清理失败：IMV_ReleaseFrame 返回 −119）；<未尝试原因>`
+///
+/// ⚠ 三个信息块各说各的事，缺一不可：
+///   · `调用 <名> 返回 <码>` —— 从 `GrabResult::sdkError`（**本次**调用）；
+///     无 `sdkError` 时写"未调用 SDK（本地判定）"，**不伪造**调用记录；
+///   · `清理失败：…` —— `cleanupError`：主操作失败**且**清理也失败时，
+///     两者是不同的故障（"没取到帧" vs "帧没还回去"）；
+///   · `<diagnosis>` —— `GrabResult::diagnosis`：本次现场的具体数值
+///     （长度、期望长度、padding、格式原值）。
+///   · `skippedReason` 在括号**之外**：它表达"这一路**没被尝试**"，
+///     与括号内"尝试了但失败"是两件事（`attempted` 的语义）。
+inline std::string channelGrabRecordText(const ChannelGrabRecord& record)
+{
+    std::string text = captureRoleText(record.role);
+    text += "=";
+    text += opStatusName(record.result.status);
+    text += "（";
+    if (record.result.sdkError.has_value())
+    {
+        text += "调用 " +
+                std::string(sdkCallName(record.result.sdkError->call)) +
+                " 返回 " + std::to_string(record.result.sdkError->code);
+    }
+    else
+    {
+        // 本地判定：**不伪造**"调用过 SDK"（那是离线排查的头号误导）。
+        text += "未调用 SDK（本地判定）";
+    }
+    if (record.result.cleanupError.has_value())
+    {
+        text += "；清理失败：" +
+                std::string(sdkCallName(record.result.cleanupError->call)) +
+                " 返回 " + std::to_string(record.result.cleanupError->code);
+    }
+    if (!record.diagnosis.empty())
+    {
+        text += "；" + record.diagnosis;
+    }
+    text += "）";
+    if (!record.skippedReason.empty())
+    {
+        text += "；" + record.skippedReason;
+    }
+    return text;
+}
 
 /// 一次 `capture()` 的完整结果。
 struct CaptureRound

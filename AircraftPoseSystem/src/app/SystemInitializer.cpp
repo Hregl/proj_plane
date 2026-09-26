@@ -389,6 +389,92 @@ std::shared_ptr<device::ICameraBackend> SystemInitializer::makeBackend(
     return nullptr;
 }
 
+std::shared_ptr<device::ICameraBackend> SystemInitializer::assembleBackend(
+    const data::CameraConfig& config, std::string& error)
+{
+    // ⚠ 未注入 ⇒ 与上一版**逐字相同**的行为（内置工厂仍是生产路径）。
+    if (!ctx_.backendFactory)
+    {
+        return makeBackend(config, error);
+    }
+
+    std::shared_ptr<device::ICameraBackend> backend = ctx_.backendFactory(config, error);
+    if (!backend && error.empty())
+    {
+        // 注入方没给说明：如实写"没有"，而不是留一句空错误让上层拼出
+        // "CAM25 后端装配失败："。指路牌必须是可执行的。
+        error = "注入的后端工厂返回空，且未给出错误说明（通道 " +
+                config.cameraId + "）";
+    }
+    // ⚠ **不回落** `makeBackend()`：空返回就是结论（见本函数的头文件说明）。
+    return backend;
+}
+
+bool SystemInitializer::verifyExplicitImvChannels(const char* stage)
+{
+    struct Slot
+    {
+        const data::CameraConfig*                      cfg;
+        const std::shared_ptr<device::ICameraBackend>* backend;
+    };
+    const data::CameraConfig& c25  = ctx_.config->camera(data::CameraRole::CAM25);
+    const data::CameraConfig& c50  = ctx_.config->camera(data::CameraRole::CAM50);
+    const data::CameraConfig& c100 = ctx_.config->camera(data::CameraRole::CAM100);
+    const Slot slots[] = {{&c25, &ctx_.backend25},
+                          {&c50, &ctx_.backend50},
+                          {&c100, &ctx_.backend100}};
+
+    for (const Slot& slot : slots)
+    {
+        const data::CameraConfig* c = slot.cfg;
+        if (c->backend != "imv")
+        {
+            continue;
+        }
+        if (ctx_.cameras->channelAvailable(c->role))
+        {
+            continue;
+        }
+
+        // ⚠ 走到这里时**管理器**的 `lastError()` 通常是**空**的：
+        //    `initializeAll()` 开头就把它清空，而
+        //    `availableCameraCount() >= 2` 又不触发它写 1001 —— 即
+        //    "一路真实相机没打开"这件事在管理器里**不产生**错误文本
+        //    （那一路的失败是瞬态、可降级的，见 `shouldDisableChannel`）。
+        //
+        //    ⚠ 上一版据此写的是"（无附加说明——单路初始化失败的明细见
+        //    各后端自身日志）"，**那是一个假的指路牌**：后端并不写
+        //    那种日志，实测（`backend: imv` + 本机不存在的序列号）
+        //    进程级输出里除了"未能就绪"什么都没有 —— 而后端手里明明
+        //    有枚举结果，`计划 §3.2` 要求"把枚举到的型号／序列号全列进
+        //    错误信息"。故本批把**后端自己的说明**接到这里来。
+        //
+        // 取值顺序：后端自身的说明 → 管理器的错误文本 → "后端自身未给出
+        // 说明"。最后一条如实说"没有"，且**不再指向任何不存在的日志**。
+        const std::string backendDetail = (*slot.backend)->lastErrorText();
+        const std::string managerDetail = ctx_.cameras->lastError().message;
+        const std::string detail =
+            !backendDetail.empty()
+                ? backendDetail
+                : (!managerDetail.empty() ? managerDetail
+                                          : std::string("（后端自身未给出说明）"));
+
+        // ⚠ 两个阶段的**标题必须不同**（011-A1 九项缺口 §1）：初检说的是
+        //    "没能打开设备"，复检说的是"设备打开了但**没启动取流**"。
+        //    两者共用一句会让现场去查接错线序，而根因在 `IMV_StartGrabbing`
+        //    —— 或者反过来。标出阶段就足以把注意力放到正确的那一半。
+        const std::string stageText = std::string(stage);
+        errorText_ = "真实相机接入失败（" + stageText + "）：通道 " +
+                     c->cameraId + "（backend: imv，目标序列号 \"" +
+                     c->serialNumber + "\"）在" + stageText +
+                     "检查时不可用。设备层报告：" + detail +
+                     "。本程序**不会**用其它通道或虚拟后端来让本次启动"
+                     "看起来成功。";
+        return false;
+    }
+    return true;
+}
+
 bool SystemInitializer::buildDevices()
 {
     // ┌────────────────────────────────────────────────────────────────────┐
@@ -404,19 +490,19 @@ bool SystemInitializer::buildDevices()
     const data::CameraConfig& c100 = ctx_.config->camera(data::CameraRole::CAM100);
 
     std::string backendError;
-    ctx_.backend25 = makeBackend(c25, backendError);
+    ctx_.backend25 = assembleBackend(c25, backendError);
     if (!ctx_.backend25)
     {
         errorText_ = "CAM25 后端装配失败：" + backendError;
         return false;
     }
-    ctx_.backend50 = makeBackend(c50, backendError);
+    ctx_.backend50 = assembleBackend(c50, backendError);
     if (!ctx_.backend50)
     {
         errorText_ = "CAM50 后端装配失败：" + backendError;
         return false;
     }
-    ctx_.backend100 = makeBackend(c100, backendError);
+    ctx_.backend100 = assembleBackend(c100, backendError);
     if (!ctx_.backend100)
     {
         errorText_ = "CAM100 后端装配失败：" + backendError;
@@ -449,58 +535,11 @@ bool SystemInitializer::buildDevices()
     //    真实那一路打不开时合计恰好是 2 ⇒ 达标 ⇒ 启动会被判成功，而
     //    "真实接入成功"这件事**并不成立** —— 操作者以为在跑真实采集，
     //    实际三路全是虚拟图。故逐路核对**配置为 imv 的那几路**。
-    // ⚠ 迭代的是 (配置, 后端) **成对**的槽位，而不是只有配置（2026-09-26 改）：
-    //    要如实说出"这一路为什么没就绪"，必须拿得到**该路后端自己**的
-    //    说明（`lastErrorText()`）—— 例如按序列号匹配失败时，那里有
-    //    完整的枚举结果（型号／序列号／厂商／设备键），正是操作者查
-    //    接错线序所需的全部信息。只迭代配置就拿不到它。
-    struct Slot
+    //    （逐路核对的实现与理由见 `verifyExplicitImvChannels`。）
+    if (!verifyExplicitImvChannels("设备打开"))
     {
-        const data::CameraConfig*                      cfg;
-        const std::shared_ptr<device::ICameraBackend>* backend;
-    };
-    const Slot slots[] = {{&c25, &ctx_.backend25},
-                          {&c50, &ctx_.backend50},
-                          {&c100, &ctx_.backend100}};
-    for (const Slot& slot : slots)
-    {
-        const data::CameraConfig* c = slot.cfg;
-        if (c->backend != "imv")
-        {
-            continue;
-        }
-        if (!ctx_.cameras->channelAvailable(c->role))
-        {
-            // ⚠ 走到这里时**管理器**的 `lastError()` 通常是**空**的：
-            //    `initializeAll()` 开头就把它清空，而
-            //    `availableCameraCount() >= 2` 又不触发它写 1001 —— 即
-            //    "一路真实相机没打开"这件事在管理器里**不产生**错误文本
-            //    （那一路的失败是瞬态、可降级的，见 `shouldDisableChannel`）。
-            //
-            //    ⚠ 上一版据此写的是"（无附加说明——单路初始化失败的明细见
-            //    各后端自身日志）"，**那是一个假的指路牌**：后端并不写
-            //    那种日志，实测（`backend: imv` + 本机不存在的序列号）
-            //    进程级输出里除了"未能就绪"什么都没有 —— 而后端手里明明
-            //    有枚举结果，`计划 §3.2` 要求"把枚举到的型号／序列号全列进
-            //    错误信息"。故本批把**后端自己的说明**接到这里来。
-            //
-            // 取值顺序：后端自身的说明 → 管理器的错误文本 → "后端自身未给出
-            // 说明"。最后一条如实说"没有"，且**不再指向任何不存在的日志**。
-            const std::string backendDetail = (*slot.backend)->lastErrorText();
-            const std::string managerDetail = ctx_.cameras->lastError().message;
-            const std::string detail =
-                !backendDetail.empty()
-                    ? backendDetail
-                    : (!managerDetail.empty() ? managerDetail
-                                              : std::string("（后端自身未给出说明）"));
-            errorText_ = "真实相机接入失败：通道 " + c->cameraId +
-                         "（backend: imv，目标序列号 \"" + c->serialNumber +
-                         "\"）未能就绪。设备层报告：" + detail +
-                         "。本程序**不会**用其它通道或虚拟后端来让本次启动"
-                         "看起来成功。";
-            rollbackDevices();
-            return false;
-        }
+        rollbackDevices();
+        return false;
     }
 
     if (!ctx_.cameras->startAll())
@@ -510,6 +549,51 @@ bool SystemInitializer::buildDevices()
         rollbackDevices();
         return false;
     }
+
+    // ---- 启动取流后的**复检**：011-A1 九项缺口 §1 --------------------------
+    //
+    // ⚠ 初检（上一处）查的是"设备打得开"，**代替不了**这一处。
+    //    `MultiCameraManager::startAll()` 的判据同样是**合计**：某一路
+    //    `start()` 失败时它只把该路标记为不可用，其余两路成功即便可用数
+    //    回到 2 ⇒ `started_ = true` 且**返回 true**。于是
+    //    "CAM25 真实相机**打开了但取流起不来**"（`IMV_StartGrabbing` 失败）
+    //    会被报成整次启动成功 —— 而这一路从未交付过一帧。
+    //
+    //    这与初检是**两种不同的故障**，故文本里的阶段名不同（"设备打开"
+    //    vs "取流启动"）：一个要查线序/占用，一个要查带宽/触发/取流权限。
+    //    两处都必须在**整次启动返回之前**判，且都要回滚已建立的资源。
+    if (!verifyExplicitImvChannels("取流启动"))
+    {
+        rollbackDevices();
+        return false;
+    }
+
+    // ---- 采集诊断出口（011-A1 九项缺口 §9）--------------------------------
+    //
+    // ⚠ 为什么接在这里：`src/device/` 全树不包含 `Logger.h`（ENG-01 §17：
+    //    device 不依赖 infrastructure），而管理器恰恰是**唯一**掌握
+    //    "这一路取帧现场"的地方。装配点是全工程唯一同时认识"设备"与
+    //    "日志"的地方（ENG-01 §14），故由它把出口接起来。
+    // ⚠ 放在 `setGrabBudget` 之前/之后都不影响语义（两者互不依赖），
+    //    这里紧跟设备装配段落，便于阅读。
+    // ⚠ 捕获的是 `Logger*` 而**不是** `this`：`SystemInitializer` 是
+    //    `main()` 里的局部对象，先于 `ApplicationContext` 析构，而管理器
+    //    归 `ctx_` 所有 —— 捕获 `this` 会留下一个"管理器比装配器活得久"
+    //    时的悬空指针。`logger`（成员 2）在 `cameras`（成员 4）**之前**
+    //    声明 ⇒ 逆序析构时相机先销毁，故该指针一定比管理器活得久。
+    // ⚠ 日志级别取 warn：走到这里的每一条都表示"这一路本轮没正常交付"
+    //    或"本轮有现场数值要留"，不是常规进度信息。
+    infrastructure::Logger* const diagnosticLogger = ctx_.logger.get();
+    ctx_.cameras->setDiagnosticSink(
+        [diagnosticLogger](const std::string& text) {
+            // 设备层已经判过"这一条值不值得记"（只在该路 `status != Ok`
+            // 或本次诊断非空时输出）—— 此处**不再过滤**，否则两级各判一次
+            // 会让"为什么这条没记下来"无从回答。
+            if (diagnosticLogger != nullptr)
+            {
+                diagnosticLogger->warn("device", text);
+            }
+        });
 
     // ---- 触发 ----
     ctx_.trigger =

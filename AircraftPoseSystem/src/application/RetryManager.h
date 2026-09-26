@@ -49,6 +49,7 @@
 #include "data/ErrorInfo.h"
 #include "data/MeasurementConfig.h"
 #include "data/MeasurementState.h"
+#include "data/MonotonicClock.h"
 
 namespace aircraft
 {
@@ -185,8 +186,13 @@ private:
     /// （nowNs >= 0 永真）—— 那样状态机在 beginTask() 之前就会被判超时。
     /// 这与 ErrorInfo::code 用 0 表示"未设置"的方向相反，原因不同：
     /// code 的 0 是"无错误"，而这里需要的是"无穷大的剩余时间"。
-    static constexpr uint64_t kNoDeadline =
-        (std::numeric_limits<uint64_t>::max)();
+    ///
+    /// ⚠ 自 011-A1 九项缺口 §3 起，本值与 device 层期限的"**无期限**"哨兵
+    /// **同值同义**，定义落在最低公共层 `data::kNoDeadlineNs`（见
+    /// data/MonotonicClock.h）—— 两处共用一份，不得各写一个极大值常量：
+    /// 一旦二者漂移（一处极大值、一处 0），表现是"某一层永远超时"这类
+    /// 极难定位的故障，而编译器不会提示。
+    static constexpr uint64_t kNoDeadline = data::kNoDeadlineNs;
 
     data::MeasurementConfig config_;
 

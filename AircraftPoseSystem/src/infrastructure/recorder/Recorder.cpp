@@ -154,7 +154,7 @@ const char* roleName(data::CameraRole role)
     return "UNKNOWN_ROLE";
 }
 
-/// ---- 原始载荷的四项解释信息（011-A1；ENG-09 V2.3 §5.28 / §6.5）----
+/// ---- 原始载荷的四项解释信息（011-A1；ENG-09 V2.4 §5.28 / §6.5）----
 ///
 /// ⚠ 四个函数全部落盘用**名字**，与 motionName / roleName 同一条理由：
 ///   枚举值落盘后，将来在中间插入一个成员会让历史包里的 "1" 悄悄改含义，
@@ -209,7 +209,7 @@ const char* byteOrderName(data::ByteOrder order)
     return "UNKNOWN_BYTE_ORDER";
 }
 
-/// `cam*.raw` 的内容来源：本批三分支（ENG-09 V2.3 §5.28 第 7 条）。
+/// `cam*.raw` 的内容来源：本批三分支（ENG-09 V2.4 §5.28 第 7 条）。
 enum class RawSource
 {
     None,          ///< 该路本轮没有可用帧 ⇒ **不写文件**（不是写 0 字节）
@@ -262,6 +262,13 @@ RawSource decideRawSource(const data::ImageFrame& frame, std::string& contractEr
         // ---- 复检（后端发布帧时已断言过一次，此处**不信任上游**）----
         //  这里不是"重复劳动"：帧可能来自别的后端实现、别的版本，
         //  也可能在测试里被手工拼出来。落盘是最后一道能拦住它的地方。
+        //
+        //  ⚠ 011-A1 九项缺口 §6：所谓"不信任上游"在上一版其实**不成立** ——
+        //    它只读了上游算好的两个字段（`compactSizeMatches` 与
+        //    `expectedCompactBytes`），**从不重算**，于是上游把期望长度
+        //    算错（或干脆填错）时，这里会原样放行并把错误的元数据写进
+        //    结果包。判据必须只依据**帧自身的字段**：重算而得，而不是
+        //    转录别人的结论。
         if (raw.format != frame.captureFormat)
         {
             contractError = "raw.format（" +
@@ -274,6 +281,10 @@ RawSource decideRawSource(const data::ImageFrame& frame, std::string& contractEr
         if (!data::isValidCombination(raw.format, raw.packing, raw.validBits,
                                       raw.bitAlignment))
         {
+            // ⚠ 这一条同时把 `bitAlignment != LsbZeroPadded` 挡在外面
+            //   （`MsbAligned` / `Unknown` 本批不实现）—— 对齐方式决定
+            //   12 位样本在 16 位容器里的位置，按错的假设解码是"整幅图
+            //   看起来正常、数值整体偏了 4 位"这种查不出来的错。
             contractError = "原始载荷的组合不合法：format=" +
                             std::string(pixelFormatName(raw.format)) + " packing=" +
                             std::string(packingName(raw.packing)) + " validBits=" +
@@ -281,28 +292,103 @@ RawSource decideRawSource(const data::ImageFrame& frame, std::string& contractEr
                             std::string(bitAlignmentName(raw.bitAlignment));
             return RawSource::None;
         }
-        if (!raw.compactSizeMatches)
+
+        // ---- 策略与格式一致：`rawPolicy` 必须由 `captureFormat` 推出 ----
+        // ⚠ 上一版只查了 `rawPolicy` 本身是不是 `RawRequired`（在"无 raw"
+        //   的分支里），**从不查它与格式是否相符** ⇒ 一个
+        //   `captureFormat=Mono8` 而 `rawPolicy=RawRequired` 的帧（或反之）
+        //   会被当作自洽的帧保存，于是"这一路该不该有载荷"这个判断在结果
+        //   包里失去了可信来源。两个字段必须给出同一个答案。
+        const data::RawDataPolicy requiredPolicy =
+            data::requiredRawPolicyOf(frame.captureFormat);
+        if (frame.rawPolicy != requiredPolicy)
         {
-            // 本批契约：`compactSizeMatches` 为假的帧**不会被发布**
-            // （后端判 CorruptFrame、上层不写输出帧）。故走到这里说明
-            // 有一个不遵守该契约的发布者 —— 按契约错误拒绝，不落盘。
             contractError =
-                "原始载荷的长度与本批紧凑契约不符（sdk_payload_bytes=" +
-                std::to_string(raw.sdkPayloadBytes) + "，expected_compact_bytes=" +
-                std::to_string(raw.expectedCompactBytes) +
-                "）—— 已交付的帧不应出现这种组合";
+                "帧的 rawPolicy（" +
+                std::string(frame.rawPolicy == data::RawDataPolicy::RawRequired
+                                ? "RawRequired"
+                                : "RawOptional") +
+                "）与 captureFormat（" +
+                std::string(pixelFormatName(frame.captureFormat)) +
+                "，有效位 " +
+                std::to_string(data::validBitsOf(frame.captureFormat)) +
+                "）不符：该格式要求 " +
+                std::string(requiredPolicy == data::RawDataPolicy::RawRequired
+                                ? "RawRequired"
+                                : "RawOptional") +
+                " —— 二者必须由同一条规则推出";
             return RawSource::None;
         }
-        if (raw.bytes->size() != raw.sdkPayloadBytes)
+
+        // ---- 字节序：本批只声明小端 ----
+        // ⚠ `PixelFormat.h` 定义了 `BigEndian` 但**全仓此前没有任何一处
+        //   读过它**（即"声明为哪种字节序"这件事此前完全不参与判断）。
+        //   本批的实现只声明小端，故大端声明一出现就是"这份载荷不是按
+        //   我们实现的规则组装的" —— 按小端去读会得到逐样本字节颠倒的值，
+        //   而图仍是"一张合法的图"。
+        if (raw.declaredByteOrder != data::ByteOrder::LittleEndian)
         {
-            // ⚠ 这一条挡的是"元数据与文件对不上"：元数据里写的是
-            //   `sdk_payload_bytes`，而写出去的字节数是载体自己的大小。
-            //   两者不等时，那份 raw 的**解码依据就是错的** ——
-            //   而它仍然能被读成一张尺寸不匹配或错位的图。
-            contractError = "原始载荷载体与自报长度不符（载体 " +
-                            std::to_string(raw.bytes->size()) +
-                            " 字节，sdk_payload_bytes=" +
-                            std::to_string(raw.sdkPayloadBytes) + "）";
+            contractError =
+                "原始载荷声明为 " +
+                std::string(byteOrderName(raw.declaredByteOrder)) +
+                "，本批适配层只声明 LittleEndian（依据见 ENG-09 §5.28 第 4 条）"
+                " —— 按小端解码这份载荷会逐样本字节颠倒";
+            return RawSource::None;
+        }
+
+        // ---- 长度：**重算**，并让四个事实互证 ----
+        //
+        // 四个事实（缺一不可，全部走 64 位）：
+        //   ① 重算值   —— 由 `width × height × 布局` 当场算出（**不转录**）
+        //   ② `raw.expectedCompactBytes` —— 上游算出的期望长度
+        //   ③ `raw.sdkPayloadBytes`      —— 设备自报的权威总长
+        //   ④ `raw.bytes->size()`        —— 载体实际大小（**写出去的就是它**）
+        // 四者必须相等：①②不等说明上游的期望值算错；②③不等说明这一帧
+        // 根本不符合紧凑契约；③④不等说明元数据描述的长度与文件不符 ——
+        // 那正是"按元数据解码得到一张尺寸不对的图"的来源。
+        uint64_t recomputedBytes = 0;
+        if (!data::computeExpectedCompactBytes(raw.width, raw.height, raw.format,
+                                              recomputedBytes))
+        {
+            contractError = "无法按紧凑契约重算期望长度（width=" +
+                            std::to_string(raw.width) + " height=" +
+                            std::to_string(raw.height) + " format=" +
+                            std::string(pixelFormatName(raw.format)) +
+                            "）：格式本批不支持，或乘法溢出 64 位";
+            return RawSource::None;
+        }
+
+        const uint64_t carrierBytes = static_cast<uint64_t>(raw.bytes->size());
+        if (recomputedBytes != raw.expectedCompactBytes ||
+            raw.expectedCompactBytes != raw.sdkPayloadBytes ||
+            raw.sdkPayloadBytes != carrierBytes)
+        {
+            contractError =
+                "原始载荷的长度四方不一致（重算=" +
+                std::to_string(recomputedBytes) + "，expected_compact_bytes=" +
+                std::to_string(raw.expectedCompactBytes) +
+                "，sdk_payload_bytes=" + std::to_string(raw.sdkPayloadBytes) +
+                "，载体=" + std::to_string(carrierBytes) + "；width=" +
+                std::to_string(raw.width) + " height=" +
+                std::to_string(raw.height) + " format=" +
+                std::string(pixelFormatName(raw.format)) +
+                "）—— 四个数字必须相等，否则这份载荷的解码依据是错的";
+            return RawSource::None;
+        }
+
+        // ---- `compactSizeMatches` 与上述事实**不得矛盾** ----
+        // 到这里四个事实已经一致（即按契约"长度相符"），故该布尔量必须为真。
+        // 它为假时**不是**"长度不符"（那已被上面拦下），而是"上游算出的
+        // 布尔量与它自己的两个字段矛盾" —— 本批契约要求这类帧不被发布，
+        // 故落盘是最后一道拦截：**不得**忽略它再照原样保存错误元数据。
+        if (!raw.compactSizeMatches)
+        {
+            contractError =
+                "compact_size_matches=false 与重算结果矛盾（重算／期望／自报／"
+                "载体 四者均为 " +
+                std::to_string(recomputedBytes) +
+                " 字节）—— 该布尔量由 sdk_payload_bytes 与 "
+                "expected_compact_bytes 推出，二者相等时它必为真";
             return RawSource::None;
         }
         return RawSource::RawBytes;
@@ -341,6 +427,33 @@ RawSource decideRawSource(const data::ImageFrame& frame, std::string& contractEr
             contractError = "显示图的深度不是 8U（depth=" +
                             std::to_string(frame.image.depth()) +
                             "）—— 本批只把 8U 显示图当作可保存的回落内容";
+            return RawSource::None;
+        }
+
+        // ---- 通道数必须与**已校验的格式**相符（011-A1 九项缺口 §6）----
+        //
+        // ⚠ 上一版只查了 `depth() == CV_8U`，于是**通道数完全不参与判断**
+        //    ⇒ 一份 `captureFormat = Mono8`、`image` 却是 3 通道 BGR 的帧
+        //    会被写成 `pixel_format: "Mono8"` 配 `rows × cols × 3` 字节的
+        //    文件：元数据说单通道，文件里是三通道。离线按元数据解码得到的
+        //    是一张"宽度是对的、每行只取前 1/3"的错位图 —— 而它看起来
+        //    完全像一张正常的图。
+        //
+        // 判据取自 `captureFormat` 而**不是** `image.channels()`：要问的是
+        // "这份文件符合它声称的格式吗"，不是"它自己说自己是什么"。
+        // 本批能走到这里的格式只有 8 位两种（>8 位的已在上面被拒绝），
+        // 故映射是纯查表：Mono8 → 1，BGR8 → 3。
+        const int expectedChannels =
+            (frame.captureFormat == data::PixelFormat::BGR8) ? 3 : 1;
+        if (frame.image.channels() != expectedChannels)
+        {
+            contractError =
+                "显示图的通道数（" + std::to_string(frame.image.channels()) +
+                "）与 captureFormat（" +
+                std::string(pixelFormatName(frame.captureFormat)) + "，应为 " +
+                std::to_string(expectedChannels) +
+                " 通道）不符 —— 元数据将描述这份文件，二者必须一致"
+                "（否则离线按元数据解码会得到一张错位的图）";
             return RawSource::None;
         }
         return RawSource::DisplayImage;
@@ -649,9 +762,28 @@ bool Recorder::writeResultJson(const data::MeasurementRecord& record,
     // ⚠ 每个文件的**文件名**由 role 决定（CAM25 → cam25.raw），下标 0/1/2
     //   与 role 一一对应；`data_source == "none"` 表示该文件**不存在**。
     //
-    // ⚠ 元数据的键与 `RawImagePayload` 的字段**一一对应**（共 12 个）：
+    // ⚠ 元数据的键大多与 `RawImagePayload` 的字段一一对应（共 12 个），
+    //   外加 `raw_image`（011-A1 九项缺口 §4）与 `display_image`：
     //   与 writeRawFrames 用**同一个** decideRawSource，故"元数据说写的是什么"
     //   与"文件里实际是什么"不可能分叉。
+    //
+    // ⚠ 011-A1 九项缺口 §4：**`raw_image` 是裸缓冲自己的宽高**。
+    //   上一版只有 `display_image.width/height`（取自 `image.cols/rows`），
+    //   而 `RawImagePayload::width/height`（设备回报的原始尺寸）**全文件
+    //   从不读取** —— 于是 ① 12 位帧可以"有原始载荷、没有显示图"，
+    //   那种包里宽高是 0，**无法独立恢复原始二维图像**；② 即便显示图在，
+    //   它也是**加工产物**（12 位时是右移 4 位的结果），拿它当载荷的几何
+    //   依据是"用显示图解释原始载荷"的同一类错误。
+    //   ∴ 只有在 `data_source == "raw"`（真身路径）时才写 `raw_image`：
+    //   回落路径（`data_source == "image"`）**没有**原始载荷，写 0 会让人
+    //   以为"原始图是 0×0"，而 `data_source` 已经如实表明了来源 ——
+    //   不写这个键，比写一个会被误读的键好。
+    //
+    //   裸缓冲的**完整**解码依据因此是：
+    //     `pixel_format` / `valid_bits` / `packing` / `valid_bit_alignment` /
+    //     `declared_byte_order` ＋ **`raw_image.width/height`**（真身路径），
+    //   或（回落路径）`pixel_format` ＋ `display_image.width/height`。
+    //   `display_image` 仅供人看与离线预览，**不是**真身路径的解码依据。
     os << "  \"best_frame\": {\n";
     os << "    \"exposure_index\": " << record.bestFrame.exposureIndex << ",\n";
     os << "    \"trigger_timestamp_ns\": " << record.bestFrame.triggerTimestamp
@@ -676,6 +808,35 @@ bool Recorder::writeResultJson(const data::MeasurementRecord& record,
         }
 
         const data::RawImagePayload& raw = chans[i]->raw;
+
+        // ---- 元数据描述的是**实际写出的那个文件**（§6）----
+        //
+        // ⚠ 上一版无论哪条分支都从 `raw` 取格式/有效位/打包/对齐 ——
+        //   而回落分支（`data_source == "image"`）**根本没有 raw**，
+        //   取到的是 `RawImagePayload` 的**默认字段**。默认值恰好是
+        //   `Mono8/8/Unpacked`，于是"`captureFormat=BGR8`、写出去的
+        //   是 3 通道图"这种帧会被描述成 `Mono8` 的单通道文件 ——
+        //   元数据与文件自相矛盾，且矛盾的方向会让人按 1 字节/像素去读
+        //   一条 3 字节/像素的行。
+        //   ∴ 分支各自给出**该文件自己的**描述：
+        //     真身路径 → `raw` 的字段（刚刚已由 decideRawSource 四方校验）
+        //     回落路径 → 已校验的 `captureFormat`（+ `image` 的通道数）
+        const bool isRawBytes = (source == RawSource::RawBytes);
+        const data::PixelFormat fileFormat =
+            isRawBytes ? raw.format : chans[i]->captureFormat;
+        const uint16_t fileValidBits =
+            isRawBytes ? raw.validBits : data::validBitsOf(fileFormat);
+        const data::Packing filePacking =
+            isRawBytes ? raw.packing : data::requiredPackingOf(fileFormat);
+        const data::BitAlignment fileAlignment =
+            isRawBytes ? raw.bitAlignment : data::bitAlignmentOf(fileFormat);
+        // 回落路径的 8 位样本**逐字节**写出，不存在多字节样本的组装顺序
+        // ⇒ 该字段对这份文件不适用；此处仍写声明值只是让键集保持稳定
+        // （与 `bitAlignmentOf` 对 8 位格式仍返回一个确定取值的处理同构），
+        // 解码方**不得**据它为 8 位文件推断任何组装方式。
+        const data::ByteOrder fileByteOrder =
+            isRawBytes ? raw.declaredByteOrder : data::ByteOrder::LittleEndian;
+
         os << "      {\"role\": \"" << roleName(chans[i]->role)
            << "\", \"frame_id\": " << chans[i]->frameId
            << ", \"timestamp_ns\": " << chans[i]->timestampNs
@@ -689,20 +850,30 @@ bool Recorder::writeResultJson(const data::MeasurementRecord& record,
            << "       \"display_image\": {\"width\": " << chans[i]->image.cols
            << ", \"height\": " << chans[i]->image.rows
            << ", \"type\": " << chans[i]->image.type() << "},\n"
-           << "       \"data_source\": \"" << dataSourceName(source) << "\",\n"
-           << "       \"pixel_format\": \"" << pixelFormatName(raw.format)
-           << "\", \"valid_bits\": " << raw.validBits
-           << ", \"packing\": \"" << packingName(raw.packing)
+           << "       \"data_source\": \"" << dataSourceName(source) << "\",\n";
+
+        // ---- `raw_image`：**仅在真身路径**写出（§4）----
+        // 回落路径的宽高由 `display_image` 给出（那份文件就是显示图），
+        // 写一个 `raw_image` 会让人以为存在一份原始载荷。
+        if (isRawBytes)
+        {
+            os << "       \"raw_image\": {\"width\": " << raw.width
+               << ", \"height\": " << raw.height << "},\n";
+        }
+
+        os << "       \"pixel_format\": \"" << pixelFormatName(fileFormat)
+           << "\", \"valid_bits\": " << fileValidBits
+           << ", \"packing\": \"" << packingName(filePacking)
            << "\",\n"
            << "       \"valid_bit_alignment\": \""
-           << bitAlignmentName(raw.bitAlignment) << "\",\n"
+           << bitAlignmentName(fileAlignment) << "\",\n"
            << "       \"sdk_payload_bytes\": " << raw.sdkPayloadBytes
            << ", \"expected_compact_bytes\": " << raw.expectedCompactBytes
            << ",\n"
            << "       \"compact_size_matches\": "
            << jsonBool(raw.compactSizeMatches) << ",\n"
            << "       \"declared_byte_order\": \""
-           << byteOrderName(raw.declaredByteOrder) << "\",\n"
+           << byteOrderName(fileByteOrder) << "\",\n"
            << "       \"sdk_pixel_format_code\": " << raw.sdkPixelFormatCode
            << ", \"sdk_padding_x\": " << raw.sdkPaddingX
            << ", \"sdk_padding_y\": " << raw.sdkPaddingY << "}"
@@ -867,7 +1038,7 @@ bool Recorder::writeRawFrames(const data::MultiCameraFrame& frame,
     //      三台相机分辨率本就可能不同，强行统一会在"哪一路被改过"
     //      这件事上制造一个事后查不出来的错误。
     //
-    //  ⚠ 011-A1 的关键修正（ENG-09 V2.3 §5.28 第 6、7 条）：解码依据**不再**是
+    //  ⚠ 011-A1 的关键修正（ENG-09 V2.4 §5.28 第 6、7 条）：解码依据**不再**是
     //    `image` 的 `width/height/type`。`image` 是**显示图**（12 位格式时
     //    是右移后的加工产物），它的行列数与类型**不能**用来解释原始载荷；
     //    把 8U 显示图的 type 当作裸缓冲的解码依据，正是"12 位数据被按

@@ -1302,6 +1302,36 @@ bool MeasurementController::acquire(data::MultiCameraFrame& frame,
         {
             deviceError.message = "三相机同步采集失败";
         }
+
+        // ⚠ 011-A1 九项缺口 §9：**整轮失败**这条出口同样要带出本轮现场。
+        //
+        // 上一版在这里只转达 `lastError()`（设备层给的**一句**汇总），
+        // 于是三路各自的 `sdkError`（调用名＋原码）、`cleanupError` 与
+        // `diagnosis`（长度不符时的重算值／期望值／padding／格式原值）
+        // 在这条路径上**全部不可见** —— 而整轮失败恰恰最需要现场：
+        // `updateDegradation()` 的降级说明只在**继续运行**（可用数 ≥2）时
+        // 才写，`capturedCount <= 1` 是走到这里来的，那条出口不会再讲一次。
+        //
+        // 判据与设备层 sink 一致：只列**这一路有话说**的（状态非 Ok，
+        // 或有未尝试原因／诊断）。三路全好的通道不写 —— 否则"正常"与
+        // "异常"在同一句里并列，读的人还得自己分辨。
+        const data::CaptureRound failedRound = cameras_.lastCaptureRound();
+        std::string              roundDetail;
+        for (const data::ChannelGrabRecord& ch : failedRound.channels)
+        {
+            if (ch.result.status == data::OpStatus::Ok && ch.diagnosis.empty() &&
+                ch.skippedReason.empty())
+            {
+                continue;
+            }
+            roundDetail += (roundDetail.empty() ? "：" : "；");
+            roundDetail += data::channelGrabRecordText(ch);
+        }
+        if (!roundDetail.empty())
+        {
+            deviceError.message += roundDetail;
+        }
+
         deviceError.timestampNs = nowNs;
         // ⚠ 期限耗尽的**本地**超时（设备层未调用 SDK）也走这条路径：
         // 设备层已把 `skippedReason` 与分类记进 `CaptureRound`，本层据
@@ -1400,6 +1430,14 @@ bool MeasurementController::updateDegradation(const data::MultiCameraFrame& fram
     // 失败通道的**原因**（只用于文本，不参与决策）。三路里凡本轮
     // `status != Ok` 的，把状态名与"未尝试的原因"列出 —— 这一句是
     // "一次超时不再被记成断连"的可读证据。
+    //
+    // ⚠ 011-A1 九项缺口 §9：这里**必须**带上本轮的取证，而不只是状态名 ——
+    //   上一版只拼"角色＝状态（未尝试原因）"，于是 `SdkFailure` 的调用名与
+    //   原码、`cleanupError`、`GrabResult::diagnosis`（长度不符时的重算值、
+    //   期望值、padding、格式原值）全部在**层间交接处被丢掉**：设备层辛苦
+    //   算出来的现场数字，到了唯一会把它写进结果包与界面的一层就没了。
+    //   文本格式器与设备层的 sink **共用一份**（`data::channelGrabRecordText`），
+    //   使两条出口上的同一次失败写出来是同一句话。
     std::string failedDetail;
     for (const data::ChannelGrabRecord& ch : round.channels)
     {
@@ -1408,13 +1446,7 @@ bool MeasurementController::updateDegradation(const data::MultiCameraFrame& fram
             continue;
         }
         failedDetail += (failedDetail.empty() ? "：" : "；");
-        failedDetail += roleName(ch.role);
-        failedDetail += "=";
-        failedDetail += data::opStatusName(ch.result.status);
-        if (!ch.skippedReason.empty())
-        {
-            failedDetail += "（" + ch.skippedReason + "）";
-        }
+        failedDetail += data::channelGrabRecordText(ch);
     }
 
     // SYS-08 §7.5〔引用无效·依据待裁决·见 Q-D2〕 冻结的三行。
@@ -1439,7 +1471,7 @@ bool MeasurementController::updateDegradation(const data::MultiCameraFrame& fram
         //
         // ⚠ 码仍是 `kErrCameraDegraded(1002)`（冻结，名称不改），但文本
         // 改成**陈述事实**而不是断言断连：1002 的名字是"相机断连（已降级）"，
-        // 而缺的这一路完全可能只是**本轮超时**。措辞纪律（ENG-09 V2.3 §5.29）：
+        // 而缺的这一路完全可能只是**本轮超时**。措辞纪律（ENG-09 V2.4 §5.29）：
         // 断连一律写"按 SDK 错误码判定为断连，未经连接事件确认"，
         // 且只有在确实是断连时才这么写 —— 故此处按每路**实际状态**分述。
         degraded_ = true;
@@ -2092,34 +2124,74 @@ uint64_t MeasurementController::nowNs() const
 
 uint64_t MeasurementController::acquireDeadlineNs(uint64_t nowNs) const
 {
+    // ⚠ 011-A1 九项缺口 §3：**不能再用 `deadline == 0` 当"还没有期限"的哨兵**。
+    //
+    // 上一版就是那样写的，而 `nowNs` 之外的另一个 0 也走同一条判断 ——
+    // 任务级期限算出来等于 `nowNs`（**任务已到期**）时，`deadline` 恰好
+    // 回到 0 的值域起点以上/以下都无从区分：`taskDeadline` 明明已算出，
+    // 却因为末尾那句 `if (deadline == 0)` 被**当成"两个都不可得"**，
+    // 于是**重新获得一份组预算**（`nowNs + grabGroupBudgetNs`）。
+    // T_task 是"任务必然终止"的唯一依据，在这里给它续期等于让一次
+    // 已经超时的采集照样跑满一轮 —— 而且现场完全看不见（`deadline` 是
+    // 个普通数值，没有第二个字段记录它从哪来）。
+    // ∴ 改用**独立的 `haveDeadline`** 表达"算出来了没有"，`deadline` 只存值。
+    bool     haveDeadline = false;
+    uint64_t deadline     = 0;
+
     // 状态级期限：本次动作开始时刻 + 该状态的时限。
     // ⚠ 用 `actionStartNs_` 而**不是**本拍的 `nowNs`：状态时限约束的是
     // "这个状态总共待多久"，含此前若干拍已消耗的部分。若从本拍起算，
     // 一个状态反复重试时每次都能拿到一整份时限，累计可达数倍 —— 而
     // `actionTimedOut()` 判的正是前者，两处口径必须一致。
-    uint64_t deadline = 0;
     const uint64_t stateLimit = stateTimeout(stateMachine_.state());
     if (actionStartNs_ != 0 && stateLimit != 0 && nowNs >= actionStartNs_)
     {
-        deadline = actionStartNs_ + stateLimit;
+        deadline     = actionStartNs_ + stateLimit;
+        haveDeadline = true;
     }
 
     // 任务级期限：T_task 的到期时刻。也要取进来，因为一次 capture() 若
     // 越过 T_task，`tick()` 那条"T_task 优先"的硬保证就被一次阻塞调用
     // 绕过了（§7.1〔引用无效·依据待裁决·见 Q-D2〕 的 T_task 是"任务必然终止"的唯一依据）。
+    //
+    // `RetryManager::remainingNs()` 的返回值有**三种**含义，必须分开处理
+    // （`IMultiCameraManager.h` 与 `MonotonicClock.h` 都写明了这两个取值）：
+    //   · `data::kNoDeadlineNs`（＝`RetryManager::kNoDeadline`，UINT64_MAX）
+    //     ⇒ **无期限**。⚠ 直接相加会溢出一个极小的时刻，那会让每一次
+    //     采集都被判"期限已到"（现场表现是"装好就采不到图"）；
+    //     而把它当成"已到期"同样是错的 —— 它是"不设期限"，不是"没有时间"。
+    //     ∴ **不参与取小**（既不加、也不取）。
+    //   · `0` ⇒ **已到期**。这不是"没有期限"，而是期限**此刻**就到。
+    //     ⚠ 上一版把它与无期限一起排除掉了（`taskRemaining > 0`），
+    //     于是"任务已经超时"的这一次采集退化为重新获得一份预算（见上）。
+    //     ∴ 期限＝`nowNs` **本身**，正常参与取小。
+    //   · 其余 ⇒ `nowNs + taskRemaining`，正常取小。
     const uint64_t taskRemaining = retry_.remainingNs(nowNs);
-    // ⚠ `RetryManager::remainingNs()` 用 `UINT64_MAX`（`kNoDeadline`）表达
-    // "无期限"，**直接相加会溢出**成一个极小的时刻 —— 那会让每一次采集
-    // 都被判"期限已到"，而现场表现是"装好就采不到图"。
-    // 故先排除哨兵值，再排除一切会溢出的取值（`<` 即可，`==` 不够）。
-    if (taskRemaining > 0 &&
-        taskRemaining < (std::numeric_limits<uint64_t>::max)() - nowNs)
+    if (taskRemaining == data::kNoDeadlineNs)
+    {
+        // 无期限：不参与取小（也不得被当成已到期）。
+    }
+    else if (taskRemaining == 0)
+    {
+        // 已到期：期限＝此刻。取小后必然胜出或持平（nowNs ≤ 任何未来时刻）。
+        deadline     = nowNs;
+        haveDeadline = true;
+    }
+    else if (taskRemaining <= (std::numeric_limits<uint64_t>::max)() - nowNs)
     {
         const uint64_t taskDeadline = nowNs + taskRemaining;
-        if (deadline == 0 || taskDeadline < deadline)
+        if (!haveDeadline || taskDeadline < deadline)
         {
             deadline = taskDeadline;
         }
+        haveDeadline = true;
+    }
+    else
+    {
+        // 只剩"相加会溢出"这一种可能：`taskRemaining` 本身已接近
+        // UINT64_MAX（却又不等于哨兵），其期限远在未来 ⇒ 取小后必然
+        // 是另一个候选 ⇒ 等价于不参与。**显式写出**是为了让"为什么这里
+        // 什么都不做"在代码上看得见，而不是靠读者自己推。
     }
 
     // 两个都不可得（状态未配置时限、且无活动任务记账）⇒ 退化为
@@ -2128,7 +2200,7 @@ uint64_t MeasurementController::acquireDeadlineNs(uint64_t nowNs) const
     // "没有期限"正是本批要消除的形态（管理器会据此算出极大的 timeoutMs
     // 并真的等下去）。给一个有限的组预算，最坏情形下也只是这一轮被截断，
     // 且该事实会出现在 `CaptureRound` 里。
-    if (deadline == 0)
+    if (!haveDeadline)
     {
         deadline = nowNs + measurementConfig_.grabGroupBudgetNs;
     }

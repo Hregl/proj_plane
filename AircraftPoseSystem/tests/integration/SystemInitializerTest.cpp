@@ -77,6 +77,7 @@
 
 #include "app/ApplicationContext.h"
 #include "app/SystemInitializer.h"
+#include "data/CameraConfig.h"
 #include "data/DeviceIdentity.h"
 #include "data/ErrorInfo.h"
 #include "data/MeasurementConfig.h"
@@ -1093,6 +1094,247 @@ TEST(SystemInitializerTest, 场景D_启动失败时已建立资源逐路回滚)
         std::fprintf(stderr, "  〔回滚证据〕%d 路虚拟后端记录了 stop -> close 的先后\n",
                      checked);
     }
+}
+
+// ===========================================================================
+//  场景 D（011-A1 九项缺口 §1）：真实通道**取流启动**失败的失败边界
+//
+//  为什么不能用真后端来造这个场景：本机没有相机，"`IMV_StartGrabbing` 返回
+//  非 0"这条分支在无设备条件下不可复现。故用**注入槽**换上一个可观测的替身，
+//  但走的是**真实** `SystemInitializer::initialize()`（不是绕过装配层）。
+// ===========================================================================
+
+/// 装配替身：`initialize()` 成功、**`start()` 失败**（带区分性文本）。
+///
+/// ⚠ 记录**分两层**，这是本组用例的核心判据：
+///   · 包装方法调用次数（`stopCalls`／`closeCalls`）—— 允许大于 1
+///     （`rollbackDevices()` 与拥有者析构各调一次 `close()` 是**正常**的，
+///      真实后端本身也幂等）；
+///   · **底层资源**归还次数（`resourceReleases`）—— 必须**恰好一次**。
+///     重复释放一个句柄会让 SDK 内部计数错乱，而错误码可能仍是 0，
+///     是无声的破坏。把两者混成一个计数，就分不出"多调了一次幂等包装"
+///     与"真的释放了两次"。
+class StartFailingBackend : public aircraft::device::ICameraBackend
+{
+public:
+    explicit StartFailingBackend(std::string startError)
+        : startError_(std::move(startError))
+    {
+    }
+
+    ~StartFailingBackend() override
+    {
+        // 兜底关闭（与真实后端的纪律一致）：拥有者正常关闭时不会走到这里。
+        (void)close();
+    }
+
+    int  initializeCalls  = 0;
+    int  startCalls       = 0;
+    int  stopCalls        = 0;
+    int  closeCalls       = 0;
+    int  resourceReleases = 0;   ///< 底层资源**真的**归还了几次（必须恰好 1）
+    bool released         = false;
+
+    aircraft::data::OperationResult initialize() override
+    {
+        ++initializeCalls;
+        return ok();
+    }
+
+    aircraft::data::OperationResult start() override
+    {
+        ++startCalls;
+        // 取流启动失败：**设备打开了但没在出图** —— 与"打不开设备"是两种
+        // 故障，处置不同（一个查线序/占用，一个查带宽/触发/取流权限）。
+        lastErrorText_ = startError_;
+        return aircraft::data::OperationResult{
+            aircraft::data::OpStatus::SdkError,
+            aircraft::data::SdkFailure{
+                aircraft::data::SdkCall::ImvStartGrabbing, -118},
+            std::nullopt};
+    }
+
+    aircraft::data::OperationResult stop() override
+    {
+        ++stopCalls;
+        return ok();
+    }
+
+    aircraft::data::OperationResult close() override
+    {
+        ++closeCalls;
+        if (!released)
+        {
+            released = true;
+            ++resourceReleases;
+        }
+        return ok();
+    }
+
+    aircraft::data::TriggerModeState triggerModeState() const override
+    {
+        return aircraft::data::TriggerModeState{};
+    }
+    aircraft::data::OperationResult setTriggerMode(
+        aircraft::data::CameraTriggerMode) override
+    {
+        return ok();
+    }
+    aircraft::data::DeviceIdentity deviceIdentity() const override
+    {
+        return aircraft::data::DeviceIdentity{};
+    }
+    std::string lastErrorText() const override { return lastErrorText_; }
+
+    aircraft::data::OperationResult triggerSoftware() override { return ok(); }
+
+    aircraft::data::GrabResult grab(aircraft::data::ImageFrame&,
+                                   uint32_t) override
+    {
+        return aircraft::data::GrabResult{
+            {aircraft::data::OpStatus::NotStarted, std::nullopt, std::nullopt}};
+    }
+
+private:
+    static aircraft::data::OperationResult ok()
+    {
+        return aircraft::data::OperationResult{
+            aircraft::data::OpStatus::Ok, std::nullopt, std::nullopt};
+    }
+
+    std::string startError_;
+    std::string lastErrorText_;
+};
+
+TEST(SystemInitializerTest, 场景D_真实CAM25取流启动失败即整次启动失败)
+{
+    // §1 的主用例：CAM25 配置为 `imv`，替身 `initialize()` 成功、
+    // **`start()` 失败**，另两路虚拟成功。
+    //
+    // ⚠ 这正是此前会**以整次启动成功收场**的形态：`initializeAll()` 与
+    //    `startAll()` 的判据都是**合计** ≥2 路，CAM50/100 成功时 CAM25
+    //    取流起不来恰好凑够 2 ⇒ `started_ = true; return true` ⇒ 操作者
+    //    以为在跑真实的 25mm 采集，而这一路从未交付过一帧。
+    std::string err;
+    // ⚠ 先落工作目录：本用例**不**经 `Harness`（要自己注入工厂），
+    //   而 `system.yaml` 的 log_dir／output_dir 是按**进程 CWD** 解析的
+    //   —— 少了这一步，日志与输出会落进仓库目录。
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    const std::string dir = imvCam25ConfigDir(err);
+    ASSERT_FALSE(dir.empty()) << err;
+
+    auto cam25 = std::make_shared<StartFailingBackend>(
+        "取流启动失败：IMV_StartGrabbing 返回 -118（设备未连接）");
+
+    ApplicationContext ctx;
+    SystemInitializer  init(ctx);
+
+    // 注入槽（§1 裁决）：**只换 CAM25 那一路**。另两路仍要造出可用的后端
+    // —— 返回空会被判装配失败，**不回落**内置工厂，故这里自己造虚拟后端。
+    ctx.backendFactory =
+        [cam25](const aircraft::data::CameraConfig& cfg, std::string&) {
+            if (cfg.role == aircraft::data::CameraRole::CAM25)
+            {
+                return std::static_pointer_cast<aircraft::device::ICameraBackend>(
+                    cam25);
+            }
+            return std::static_pointer_cast<aircraft::device::ICameraBackend>(
+                std::make_shared<VirtualCameraBackend>(cfg));
+        };
+
+    EXPECT_FALSE(init.initialize(dir))
+        << "CAM25 取流启动失败，整次启动却判了成功";
+    EXPECT_FALSE(init.ready());
+
+    const std::string e = init.errorText();
+    EXPECT_NE(e.find("cam25"), std::string::npos) << "失败原因未点名通道：" << e;
+    // ⚠ 阶段名必须是"取流启动"而**不是**"设备打开"：两者要查的东西不同，
+    //    共用一句会让现场去查接错线序，而根因在 `IMV_StartGrabbing`。
+    EXPECT_NE(e.find("取流启动"), std::string::npos)
+        << "没有说清失败发生在哪个阶段：" << e;
+    EXPECT_EQ(e.find("设备打开"), std::string::npos)
+        << "设备**是**打开成功的，文本不得把阶段搞错：" << e;
+    EXPECT_NE(e.find("IMV_StartGrabbing 返回 -118"), std::string::npos)
+        << "后端自己给出的原因没有传到用户可见文本：" << e;
+
+    // ---- 装配层确实用了注入的那个对象，且只初始化过一次 ----
+    EXPECT_EQ(ctx.backend25, cam25) << "注入的后端不是实际被装配的对象";
+    EXPECT_EQ(cam25->initializeCalls, 1) << "同一个后端被初始化了两遍";
+    EXPECT_EQ(cam25->startCalls, 1);
+
+    // ---- 回滚：两层分开看 ----
+    EXPECT_EQ(cam25->resourceReleases, 1)
+        << "底层资源必须归还，且**恰好一次**（重复释放是无声的破坏）";
+    EXPECT_GE(cam25->stopCalls, 1) << "回滚必须先停流再关设备";
+
+    std::fprintf(stderr,
+                 "  〔§1 证据〕CAM25 替身：initialize=%d start=%d stop=%d "
+                 "close=%d 底层释放=%d；文本：%s\n",
+                 cam25->initializeCalls, cam25->startCalls, cam25->stopCalls,
+                 cam25->closeCalls, cam25->resourceReleases, e.c_str());
+}
+
+TEST(SystemInitializerTest, 场景D_注入工厂返回空即装配失败且不回落内置工厂)
+{
+    // §1 裁决：注入槽一旦设置，**返回空就是结论**，不得回落内置工厂。
+    //
+    // ⚠ 为什么这条必须单独测：回落的表现不是崩溃，而是"启动成功、跑的是
+    //    内置路径造出来的另一批对象" —— 测试断言的替身与实际跑的对象不是
+    //    同一个，于是**在另一条路径上通过**，然后被当成证据。
+    //
+    // ⚠ 配置故意用**原本能正常启动**的全虚拟配置：若发生了回落，
+    //    这次启动会成功、三个后端都非空 ⇒ 本用例当场转红。
+    std::string err;
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    ApplicationContext ctx;
+    SystemInitializer  init(ctx);
+
+    ctx.backendFactory = [](const aircraft::data::CameraConfig&,
+                            std::string& error) {
+        error = "注入槽按用例要求返回空（本次**不得**回落内置工厂）";
+        return std::shared_ptr<aircraft::device::ICameraBackend>{};
+    };
+
+    EXPECT_FALSE(init.initialize("config")) << "注入工厂返回空却被判成装配成功";
+    EXPECT_FALSE(init.ready());
+
+    EXPECT_EQ(ctx.backend25, nullptr) << "回落了内置工厂：这一路被造出来了";
+    EXPECT_EQ(ctx.backend50, nullptr);
+    EXPECT_EQ(ctx.backend100, nullptr);
+    EXPECT_EQ(ctx.cameras, nullptr) << "启动已判失败，却留下了半装配的相机管理器";
+    EXPECT_EQ(ctx.controller, nullptr);
+
+    const std::string e = init.errorText();
+    EXPECT_NE(e.find("CAM25"), std::string::npos) << e;
+    EXPECT_NE(e.find("注入槽按用例要求返回空"), std::string::npos)
+        << "注入方给出的说明必须传到用户可见文本：" << e;
+}
+
+TEST(SystemInitializerTest, 场景D_注入工厂返回空但不给说明时文本仍可执行)
+{
+    // §1 裁决的边角：注入方返回空却**没给说明**时，文本不得留一句空的
+    // 拼接结果（"CAM25 后端装配失败：" 后面什么都没有）——
+    // 指路牌必须是可执行的。
+    std::string err;
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    ApplicationContext ctx;
+    SystemInitializer  init(ctx);
+
+    ctx.backendFactory = [](const aircraft::data::CameraConfig&,
+                            std::string&) {
+        return std::shared_ptr<aircraft::device::ICameraBackend>{};
+    };
+
+    EXPECT_FALSE(init.initialize("config"));
+
+    const std::string e = init.errorText();
+    EXPECT_NE(e.find("未给出错误说明"), std::string::npos)
+        << "空说明被如实写成了「没有」，而不是留一句空拼接：" << e;
+    EXPECT_NE(e.find("cam25"), std::string::npos)
+        << "至少要说清是哪一路：" << e;
 }
 
 }  // namespace

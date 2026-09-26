@@ -2,7 +2,7 @@
 //  src/device/camera/MultiCameraManager.cpp
 //
 //  依据：SYS-06 §5 / §8、SYS-08 §7.5（†见文件末的引用勘误）、
-//        ENG-09 V2.3 §2.5 / §4.3 / §4.4 / §5.6、裁决 C-01 v1.7
+//        ENG-09 V2.4 §2.5 / §4.3 / §4.4 / §5.6、裁决 C-01 v1.7
 //
 //  ⚠ 本批（011-A1）的三项实质改动：
 //   ① **按分类消费取帧失败**（R09 部分修复）：超时/无帧/未就绪/帧损坏
@@ -85,6 +85,89 @@ const char* disableReasonText(data::OpStatus status)
     }
     return "SDK 错误导致禁用（分类未明确）";
 }
+
+// ---------------------------------------------------------------------------
+//  触发前置判定（011-A1 九项缺口 §7 的裁决）
+// ---------------------------------------------------------------------------
+
+/// 本路触发前置检查的结论。
+enum class TriggerPreflight
+{
+    /// 读回完整**且**与请求一致 ⇒ 按**实际读回**的模式执行（仅 Software 发令）。
+    ActOnReadback,
+
+    /// 读回不完整（`reported` 未知）⇒ 本轮**无法确认触发前置条件**。
+    Unconfirmed,
+
+    /// 读回完整但与请求**不一致** ⇒ 契约违背。
+    Mismatch
+};
+
+/// 由读回状态判定本路**能不能继续**，并在不能时给出归属与原因文本。
+///
+/// ⚠ 这里取代上一版的三元表达式：
+///     `reported ? (*reported == Software) : (requested == Software)`
+///   它把"**读回未知**"悄悄换成"按请求值办"，于是"设了却没生效"这件
+///   最该被检出的事被抹平 —— 读不到和读到了错的东西，两种现场动作
+///   完全不同（前者查链路/读回调用，后者查设备配置），却得到同一个
+///   行为：照常发令、照常取帧。回退到请求值还额外制造了一个假事实：
+///   "我们确认过触发前置条件"。
+///
+/// 三分支（按裁决，**逐字**落到措辞上）：
+///   · 读回不完整 ⇒ `NotStarted`／1004，文本"本轮无法确认触发前置条件"；
+///   · 读回完整但与请求不一致 ⇒ `ContractViolation`／1006，记录请求值与实际值；
+///   · 完整且一致 ⇒ 按实际读回模式执行。
+/// 前两种都**不发令、不取帧**，且**都不永久禁用通道** —— 读回失败往往是
+/// 瞬态的，禁用等于把一次可自愈的读失败升级成永久缺相机（R09 的形态）。
+///
+/// ⚠ 判据取 `reported` 而不是拿 `requested` 顶上：一致时二者同值，写成
+///   `reported` 只是让"取值来源"只有一个答案（命令的对象是**设备**，
+///   不是我们的配置）。而 `requested` 是 `FreeRun` 时**不豁免** ——
+///   "请求自由运行就不必确认读回"正是同一个静默退化：读回未知时我们
+///   同样不知道设备在等什么。
+///
+/// @param tms    该路的读回状态（含逐项读回现场）
+/// @param status 输出：不能继续时的归属（`ActOnReadback` 时不动）
+/// @param reason 输出：不能继续时的原因文本（人读，含请求值与实际值）
+/// @return 结论
+TriggerPreflight triggerPreflightOf(const data::TriggerModeState& tms,
+                                    data::OpStatus&               status,
+                                    std::string&                  reason)
+{
+    if (!tms.reported.has_value())
+    {
+        status = data::OpStatus::NotStarted;   // 1004：前置条件未确认
+        // ⚠ 措辞纪律：**不得**写成"设备已停止取流" —— 我们只是**没读到**
+        //    触发配置，设备可能一切正常。把"读不到"说成"已停流"会让现场
+        //    去查一个不存在的问题（同时也把责任从读回调用推到了设备上）。
+        reason = "本轮无法确认触发前置条件：触发模式读回不完整"
+                 "（TriggerSelector／TriggerMode／TriggerSource 三项未能合成"
+                 "出可判别的模式），未发令、未取帧";
+        return TriggerPreflight::Unconfirmed;
+    }
+
+    if (*tms.reported != tms.requested)
+    {
+        status = data::OpStatus::ContractViolation;   // 1006：本地契约违背
+        // ⚠ 请求值与实际值**都**要留下：只说"不一致"的话，现场还得
+        //    自己去猜是哪一头错了（配置写错 vs 设备没接受）。
+        reason = std::string("触发模式读回与请求不一致：请求 ") +
+                 data::triggerModeName(tms.requested) + "，实际读回 " +
+                 data::triggerModeName(*tms.reported) +
+                 "；未发令、未取帧（设置未生效，按未生效的模式取帧会得到"
+                 "与预期不同的曝光时序）";
+        return TriggerPreflight::Mismatch;
+    }
+
+    status = data::OpStatus::Ok;
+    return TriggerPreflight::ActOnReadback;
+}
+
+//  通道诊断文本的格式器**不在本文件**：`data::channelGrabRecordText()`
+//  （`data/CaptureRound.h`）是唯一一份 —— 同一句话还要出现在应用层的
+//  失败说明里（`MeasurementController::updateDegradation` 与
+//  `acquire()` 的失败分支），两份措辞只要差一个字，离线核对时就得先判断
+//  "这两行说的是不是同一件事"。
 }  // namespace
 
 MultiCameraManager::MultiCameraManager(std::shared_ptr<ICameraBackend> cam25,
@@ -118,6 +201,20 @@ void MultiCameraManager::setGrabBudget(uint32_t perGrabTimeoutMs,
 {
     perGrabTimeoutMs_  = perGrabTimeoutMs;
     grabGroupBudgetNs_ = groupBudgetNs;
+}
+
+void MultiCameraManager::setDiagnosticSink(
+    std::function<void(const std::string&)> sink)
+{
+    diagnosticSink_ = std::move(sink);
+}
+
+void MultiCameraManager::emitDiagnostic(const std::string& text)
+{
+    if (diagnosticSink_)
+    {
+        diagnosticSink_(text);
+    }
 }
 
 uint64_t MultiCameraManager::nowNs() const
@@ -332,6 +429,26 @@ bool MultiCameraManager::capture(data::MultiCameraFrame& frame,
         // 而不是复用入口时刻。末次取帧之后越过期限同样要如实留下痕迹
         // （读法：`finishedNs > deadlineNs`），不能因为"已经在收尾"就放过。
         lastRound_.finishedNs = nowNs();
+
+        // ---- 诊断出口（§9）：只输出**需要记录**的事件 ----
+        //
+        // 判据两条：该路 `status != Ok`，**或**本次诊断非空。
+        // ⚠ **正常事实的存在本身不得触发输出**：一轮三路全好时这里
+        //   一行都不写（"三路都采到、帧状态为 0、触发读回一致"是正常
+        //   事实，不是异常）。逐路写 WARN 会让日志被正常帧淹没，
+        //   而"异常才有行"正是它能被当成信号的前提。
+        // ⚠ 这里**不读**后端的 `lastErrorText()`（那可能属于更早的调用），
+        //   文本只由本轮记录拼出。
+        for (const auto& rec : lastRound_.channels)
+        {
+            if (rec.result.status == data::OpStatus::Ok && rec.diagnosis.empty())
+            {
+                continue;
+            }
+            // 文本由 `data::channelGrabRecordText()` 统一给出（含
+            // `skippedReason`），保证此处与应用层失败说明**逐字一致**。
+            emitDiagnostic(data::channelGrabRecordText(rec));
+        }
     };
 
     if (!started_)
@@ -381,22 +498,42 @@ bool MultiCameraManager::capture(data::MultiCameraFrame& frame,
             continue;
         }
 
-        // ---- 预算：三个量在实际等待处取最小（§2.2） ----
+        // ---- 预算：三个量在**每次实际等待处**取最小（§2.2／§3）----
         //
         // ⚠ 期限**只从形参来**，本函数不缓存、成员里也没有期限字段：
         //   缓存会把"上一次的截止时刻"用到这一轮，而两轮之间的期限
         //   通常不同（本轮更晚），表现为"明明还有预算却整轮不取帧"。
-        const uint64_t now              = nowNs();
-        const uint64_t sinceStartNs     = now > startedNs ? now - startedNs : 0;
-        const uint64_t groupRemainingNs = remainingNs(grabGroupBudgetNs_,
-                                                      sinceStartNs);
-        const uint64_t deadlineRemainNs = remainingNs(deadlineNs, now);
+        //
+        // ⚠ 三处检查点**各自重读时钟**（§3 的裁决）：模式读回（真实后端是
+        //   三次阻塞的 SDK 读）与软件触发令本身都要花时间，"入口算出来的
+        //   剩余"到用的时候可能已经过期 —— 若三处复用同一个读数，就会
+        //   拿着一个已经不成立的等待上限去调 SDK，而它恰恰是在**期限之后**
+        //   才生效的。重读后重算，是本项修复的全部内容。
+        uint64_t groupRemainingNs  = 0;
+        uint64_t deadlineRemainNs  = 0;
+        const auto nowNsForBudget  = [&](uint64_t atNow) -> uint64_t {
+            const uint64_t sinceStart =
+                atNow > startedNs ? atNow - startedNs : 0;
+            groupRemainingNs  = remainingNs(grabGroupBudgetNs_, sinceStart);
+            deadlineRemainNs  = remainingNs(deadlineNs, atNow);
+            return minOf3(
+                static_cast<uint64_t>(perGrabTimeoutMs_) * kOneMillisecondNs,
+                groupRemainingNs, deadlineRemainNs);
+        };
+
+        // "无期限"是 `data::kNoDeadlineNs`（极大值，与 `RetryManager` 的
+        // `kNoDeadline` 同值同义），`remainingNs()` 会原样返回它 ⇒
+        // 它**不参与取小**（任何实际预算都小于它），故无需特判；
+        // 而"**已到期**"（`deadline <= now`，含 0）在 `remainingNs()`
+        // 里返回 0 ⇒ 落到下面的 `< 1 ms` 分支。两者由此分开。
 
         if (perGrabTimeoutMs_ == 0)
         {
             // 单次上限配成 0：接口**不接受 0**（§2.2；SDK 对 timeoutMS = 0
             // 的语义未文档化，项目也不定义它），且**不取整成 0** 去调它。
             // 这是本地参数错误 —— 未调用 SDK，故 `sdkError` 为空。
+            // ⚠ 它排在预算判定**之前**：这是配置错，不是"这一轮没预算"，
+            //   报成超时会把现场引到设备侧。
             rec.attempted     = false;
             rec.skippedReason = "grab_timeout_ms 配置为 0（接口不接受 0，未调用 SDK）";
             rec.result        = data::GrabResult{
@@ -404,12 +541,9 @@ bool MultiCameraManager::capture(data::MultiCameraFrame& frame,
             continue;
         }
 
-        const uint64_t perGrabCapNs =
-            static_cast<uint64_t>(perGrabTimeoutMs_) * kOneMillisecondNs;
-        const uint64_t budgetNs =
-            minOf3(perGrabCapNs, groupRemainingNs, deadlineRemainNs);
-
-        if (budgetNs < kOneMillisecondNs)
+        // ---- 检查点 1：入口（**连模式读回都不执行**）----
+        const uint64_t entryBudgetNs = nowNsForBudget(nowNs());
+        if (entryBudgetNs < kOneMillisecondNs)
         {
             // ⚠ **剩余不足 1 ms ⇒ 既不发令也不取帧**，且**不去取整成 0**
             //   再调一个已禁止 0 的接口。
@@ -423,30 +557,71 @@ bool MultiCameraManager::capture(data::MultiCameraFrame& frame,
             //   还是单次上限配得太小；三者的处置完全不同（等下一轮 /
             //   状态该收尾了 / 改配置）。
             rec.skippedReason =
-                std::string("预算耗尽（组剩余 ") +
+                std::string("预算耗尽（入口：组剩余 ") +
                 std::to_string(groupRemainingNs / kOneMillisecondNs) +
                 " ms，距期限 " +
                 std::to_string(deadlineRemainNs / kOneMillisecondNs) +
                 " ms，单次上限 " + std::to_string(perGrabTimeoutMs_) +
                 " ms；三者取小 = " +
-                std::to_string(budgetNs / kOneMillisecondNs) +
+                std::to_string(entryBudgetNs / kOneMillisecondNs) +
                 " ms < 1 ms），未发令、未取帧";
             continue;
         }
 
-        const uint32_t timeoutMs = static_cast<uint32_t>(budgetNs / kOneMillisecondNs);
+        // ---- 触发前置判定（§7；**取代**上一版的三元回退）----
+        //
+        // ⚠ 读回**逐项**带回来（特性名／是否调用过／失败原码／是否返回空串），
+        //   原样进本轮记录：三项走的是同一个 SDK 调用，只有
+        //   `{call, code}` 时说不出失败的是哪一项。
+        const data::TriggerModeState tms = ch->backend->triggerModeState();
+        rec.readbacks                    = tms.readbacks;
+
+        data::OpStatus preflightStatus = data::OpStatus::Ok;
+        std::string    preflightReason;
+        const TriggerPreflight pre =
+            triggerPreflightOf(tms, preflightStatus, preflightReason);
+
+        if (pre != TriggerPreflight::ActOnReadback)
+        {
+            // 读回不完整／不一致：**不发令、不取帧**，且**不永久禁用通道**
+            // （下一次采集允许重新读回 —— 读回失败往往是瞬态的）。
+            rec.attempted     = false;
+            rec.skippedReason = preflightReason;
+            rec.result        = data::GrabResult{preflightStatus, std::nullopt,
+                                                 std::nullopt};
+            continue;
+        }
+
+        // ---- 检查点 2：读回之后、**发令之前**（重读时钟）----
+        const uint64_t preTriggerBudgetNs = nowNsForBudget(nowNs());
+        if (preTriggerBudgetNs < kOneMillisecondNs)
+        {
+            rec.attempted = false;
+            rec.result    = data::GrabResult{
+                {data::OpStatus::Timeout, std::nullopt, std::nullopt}};
+            // ⚠ 与检查点 1 的措辞**必须分开**：这里已经花掉了读回的时间，
+            //   "入口就没预算"与"读回把预算吃掉了"的处置不同（后者说明
+            //   读回本身太慢，是要查的东西）。
+            rec.skippedReason =
+                std::string("发令前预算耗尽（读回耗时计入后：组剩余 ") +
+                std::to_string(groupRemainingNs / kOneMillisecondNs) +
+                " ms，距期限 " +
+                std::to_string(deadlineRemainNs / kOneMillisecondNs) +
+                " ms，单次上限 " + std::to_string(perGrabTimeoutMs_) +
+                " ms；三者取小 = " +
+                std::to_string(preTriggerBudgetNs / kOneMillisecondNs) +
+                " ms < 1 ms），未发令、未取帧";
+            continue;
+        }
+
+        uint32_t timeoutMs = static_cast<uint32_t>(preTriggerBudgetNs /
+                                                  kOneMillisecondNs);
 
         // ---- 软件触发（**唯一执行者**，§2.4）----
         //
-        // 判据取该路**读回**的模式；读回不可用时退回请求值 ——
-        // 理由：读不到时我们手里没有比请求更好的信息，而**不发令**会让
-        // 一台真正处于软件触发的相机永远等不到触发（比"多发一次令"更坏：
-        // 前者是整轮无图，后者最多引起一次无效命令）。
-        const data::TriggerModeState tms = ch->backend->triggerModeState();
-        const bool isSoftware =
-            tms.reported.has_value()
-                ? (*tms.reported == data::CameraTriggerMode::Software)
-                : (tms.requested == data::CameraTriggerMode::Software);
+        // 判据取该路**读回**的模式（上面的前置判定已保证它与请求一致；
+        // 一致时二者同值，取 `reported` 只是让取值来源只有一个答案）。
+        const bool isSoftware = (*tms.reported == data::CameraTriggerMode::Software);
 
         if (isSoftware)
         {
@@ -469,6 +644,32 @@ bool MultiCameraManager::capture(data::MultiCameraFrame& frame,
                 }
                 continue;
             }
+
+            // ---- 检查点 3：**发令返回之后**、取帧之前（重读时钟）----
+            //
+            // ⚠ 这一种**不得**写成"既未发令也未取帧"：令**确实发出去了**，
+            //   这是本轮必须留下的事实（`attempted = true`、
+            //   `rec.trigger` 保留）—— 否则现场会以为设备这一拍没被触发过，
+            //   而它其实已经收到脉冲、只是我们没等帧。
+            const uint64_t preGrabBudgetNs = nowNsForBudget(nowNs());
+            if (preGrabBudgetNs < kOneMillisecondNs)
+            {
+                rec.result = data::GrabResult{
+                    {data::OpStatus::Timeout, std::nullopt, std::nullopt}};
+                rec.skippedReason =
+                    std::string("已发令、未取帧（取帧前预算耗尽：组剩余 ") +
+                    std::to_string(groupRemainingNs / kOneMillisecondNs) +
+                    " ms，距期限 " +
+                    std::to_string(deadlineRemainNs / kOneMillisecondNs) +
+                    " ms，单次上限 " + std::to_string(perGrabTimeoutMs_) +
+                    " ms；三者取小 = " +
+                    std::to_string(preGrabBudgetNs / kOneMillisecondNs) +
+                    " ms < 1 ms）";
+                continue;
+            }
+
+            timeoutMs = static_cast<uint32_t>(preGrabBudgetNs /
+                                              kOneMillisecondNs);
         }
 
         // ---- 取帧（本函数只取帧，绝不发令）----
@@ -476,29 +677,42 @@ bool MultiCameraManager::capture(data::MultiCameraFrame& frame,
 
         uint64_t ts = 0;
         rec.result  = grabOne(*ch, *outputs[i], ts, timeoutMs);
+        // ⚠ 诊断与帧状态原值**原样转发**（§9 的传递路径：
+        //   `SDK 帧视图 → GrabResult（本次诊断） → ChannelGrabRecord → 日志`）。
+        //   管理器**不**读后端的 `lastErrorText()`，也**不**补造
+        //   `{ImvGetFrame, 0}` —— 它调的是 `ICameraBackend::grab()`，
+        //   虚拟/脚本后端可能根本没调用过 SDK，补造会把"未调用"记成"调用过"。
+        rec.diagnosis      = rec.result.diagnosis;
+        rec.frameStatusRaw = rec.result.frameStatusRaw;
 
         if (rec.result.ok())
         {
-            // 修正（011-A1）：`ok()` 是**必要而不足**的条件。
+            // 空图 ⇒ **契约违背**（§8 的裁决），不是"一次成功的取帧"。
             //
-            // `capturedCount` 的冻结判据是"该路 `status == Ok` **且**交付的
-            // 图合法（非空）"（CaptureRound.h、§3.2），而此处原来的实现只数
-            // `ok()`，**从不看图**：于是"每次都取帧成功、但每次都返回空图"的
-            // 后端会被记成"三路全部采到"，`captured >= 2` 也照样成立 ——
-            // 上层据此认为链路正常，而实际上一帧可用数据都没有。
-            // 这正是一个"计数口径与判据不一致"的缺陷：判据写在文档与
-            // 上层（`!image.empty()`），计数写在管理器，两处各说各话。
+            // ⚠ 上一版在这里只 `continue`，`rec.result` 保持 `Ok`
+            //   （`{{Ok, …}}`），于是：
+            //     ① 聚合取严重度最大者 ⇒ 整轮 `aggregate == Ok`，
+            //        "三路全正常"与"三路全给空图"在上层**无法区分**；
+            //     ② 控制器只对 `status != Ok` 的通道拼 `failedDetail` ⇒
+            //        空图的原因**进不了降级说明**，现场只看到"少了两路"。
+            //   接口契约是"`status == Ok` ⇒ 该帧满足一切后置条件"，
+            //   而空图不满足 ⇒ 交付这样一个 `Ok` 本身就是契约违背，
+            //   与设备好坏无关（设备可能一直在正常工作，是我们的
+            //   判据与实现不一致）。
             //
-            // 处置：空图**不计入**有效帧、**不作为**曝光序号的参考路
-            // （`present[]` 的语义是"本轮真的采到了"，空图没采到），
-            // 但 `rec.result` **保持 `Ok`** —— 调用确实成功了，这是事实，
-            // 不得为了凑计数把它改写成失败。原因写在 `skippedReason`
-            // 里供人排查。
+            // ⚠ 归属是 `ContractViolation`（本地契约，1006），**不**改成
+            //   `CorruptFrame`／`Timeout`：它不是设备报的故障，也不是超时。
+            // ⚠ 后端的**调用诊断原样保留**（`rec.diagnosis`／
+            //   `frameStatusRaw`／`sdkError`／`cleanupError` 已在上面转发）：
+            //   管理器**不补造** `{ImvGetFrame, 0}` —— 虚拟/脚本后端可能
+            //   根本没调用过 SDK，补造会把"未调用"记成"调用过"。
             if (outputs[i]->image.empty())
             {
+                rec.result.status = data::OpStatus::ContractViolation;
                 rec.timestampNs   = 0;   // 没有画面，就没有画面时刻
                 rec.skippedReason =
-                    "取帧成功但交付的图为空（不计入本轮有效帧、"
+                    "取帧返回 Ok 但交付的图为空：与接口契约（Ok ⇒ 帧满足"
+                    "全部后置条件）矛盾，记为契约违背（不计入本轮有效帧、"
                     "不作为曝光序号的参考路；通道仍可用）";
                 continue;
             }

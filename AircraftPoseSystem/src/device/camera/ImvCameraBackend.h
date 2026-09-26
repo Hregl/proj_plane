@@ -3,8 +3,8 @@
 // ============================================================================
 //  src/device/camera/ImvCameraBackend.h
 //
-//  依据：SYS-06 §7（ImvCameraBackend）、ENG-09 V2.3 §4.3 / §5.5 / §2.5 / §14 附录 B
-//        SYS-04 V2.4 §6.1（ICameraBackend 签名）、裁决 C-01 v1.7
+//  依据：SYS-06 §7（ImvCameraBackend）、ENG-09 V2.4 §4.3 / §5.5 / §2.5 / §14 附录 B
+//        SYS-04 V2.5 §6.1（ICameraBackend 签名）、裁决 C-01 v1.7
 //
 //  作用：华睿 A7A20MU201 的 SDK 适配层。
 //
@@ -119,6 +119,12 @@ private:
 
     /// 关闭设备：停流 → 关设备 → 销毁句柄，逐项保留失败原因。
     /// 幂等；未打开时返回 `Ok` 且**不调用任何 SDK**。
+    ///
+    /// ⚠ 本方法**不写 `lastErrorText_`**（011-A1 九项缺口 §5）：它是被
+    /// `openDevice()` 的七处失败出口与 `close()` **共用**的收尾动作，
+    /// 若在这里无条件写文本，"独立关闭一个正常设备时失败"就会被贴上
+    /// 上一次初始化失败的原因（那件事与本次无关）。首因文本由**调用方**
+    /// 合并：初始化出口见 `mergeInitCleanup()`，独立 `close()` 自己写。
     data::OperationResult closeDevice();
 
     /// 按 `triggerMode` 写触发配置。Software 时按
@@ -159,6 +165,73 @@ private:
     /// @param frame 仅当合并后仍为 Ok 时才被写入（见 .cpp 的唯一交付点）。
     void mergeCleanup(data::GrabResult&                     result,
                       const std::optional<data::SdkFailure>& cleanup);
+
+    /// `openDevice()` 的**统一失败出口**（011-A1 九项缺口 §5）。
+    ///
+    /// 七处失败出口（打开／取设备信息／身份复核／像素格式／曝光／增益／
+    /// 触发配置）此前一律 `(void)closeDevice();` —— 清理结果被丢弃，
+    /// 于是"设备已经半开、还关不掉"这件事在返回值里**完全看不见**。
+    ///
+    /// 合并规则（与 `mergeCleanup` 同义，方向相反）：`first` 是**本次失败**
+    /// 的局部快照，它占 `status`／`sdkError`；清理失败只进 `cleanupError`。
+    /// 文本 = **本次首因快照**（进入本函数时的 `lastErrorText_`）＋
+    /// （清理失败时）"；清理失败：<调用名> 返回 <码>"。
+    /// ⚠ 首因取自**局部快照**而不是 `closeDevice()` 之后再去读
+    /// `lastErrorText_`：后者在"清理也失败"时已被覆盖，读到的会是清理的
+    /// 原因，而返回值里的 `status` 仍是首因 —— 返回状态与错误文本
+    /// 指向不同原因，正是本项要消除的形态。
+    data::OperationResult mergeInitCleanup(const data::OperationResult& first);
+
+    /// 把**异常路径**的现场写进后端诊断状态（§5）。
+    ///
+    /// ⚠ 为什么不能只写进 `GrabResult`：异常从 `grab()` 抛出后，
+    /// 局部 `GrabResult` 随栈展开销毁，调用方**永远读不到**它 ——
+    /// 于是"帧释放了没有、为什么又失败了"在异常路径上完全不可见。
+    /// 故异常路径的出口是**后端自身的诊断状态**，由既有的
+    /// `lastErrorText()` 读出（不新增接口面）。
+    ///
+    /// ⚠ 本函数**只记录**，不改变任何控制流：原异常必须原样上抛
+    /// （本批**不把异常转成状态码**，那不在九项缺口内、亦未经裁决）。
+    void noteGrabException(const std::string&                     exceptionText,
+                           const std::optional<data::SdkFailure>& cleanup);
+
+    /// 取帧期间的"帧租约"守卫（§5 异常安全）。
+    ///
+    /// 从 `IMV_GetFrame` 返回 `IMV_OK` 的那一刻起，帧归 SDK 持有，
+    /// **必须恰好释放一次**；而其后到 `releaseFrame()` 之间有内存分配
+    /// （复制载荷、OpenCV 建图）⇒ 一旦抛出，原实现会**跳过释放**，
+    /// 未释放的帧会被 SDK 内部缓存复用并污染后续取帧。
+    ///
+    /// 分工（缺一不可）：
+    ///   · 正常出口 —— 函数体显式 `cleanup()`，把释放结果 `mergeCleanup`
+    ///     进返回值（`GetFrame` 成功而 `ReleaseFrame` 失败 ⇒ 整体失败、不交付帧）；
+    ///   · 异常出口 —— 析构兜底**先释放**，诊断经 `noteGrabException()`
+    ///     留在后端诊断状态，**不吞异常**、**不抛新异常**。
+    ///
+    /// ⚠ 为什么是嵌套类而不是 .cpp 里的自由类：它要调 `releaseFrame()`
+    /// 与 `noteGrabException()`（都是私有），而经 `std::function` 之类的
+    /// 间接层会**在守卫构造时引入一次可能失败的分配** ——
+    /// 守卫自己没建起来，帧就没人释放了。
+    class FrameLeaseGuard
+    {
+    public:
+        explicit FrameLeaseGuard(ImvCameraBackend& owner) : owner_(owner) {}
+
+        /// 析构兜底：仍持有租约即释放。**绝不抛异常**
+        /// （栈展开中再抛即 `std::terminate`），也绝不掩盖原异常。
+        ~FrameLeaseGuard();
+
+        /// 显式清理（正常出口与 catch 出口都用它）：释放并解除租约，
+        /// 返回清理失败（`nullopt` = 成功）。**重复调用只释放一次**。
+        std::optional<data::SdkFailure> cleanup();
+
+    private:
+        FrameLeaseGuard(const FrameLeaseGuard&)            = delete;
+        FrameLeaseGuard& operator=(const FrameLeaseGuard&) = delete;
+
+        ImvCameraBackend& owner_;
+        bool              armed_ = true;
+    };
 
     /// 设置/读取失败的统一出口（`SdkCall` + 原码 → `status`）。
     static data::OperationResult sdkFailure(data::SdkCall call, int code);

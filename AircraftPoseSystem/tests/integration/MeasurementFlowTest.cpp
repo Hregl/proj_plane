@@ -230,6 +230,17 @@ public:
     /// 令接下来 N 次采集返回失败（模拟瞬时丢帧）。
     int failNextCaptures = 0;
 
+    /// 上一次失败轮里**后端本次调用**给出的现场（见 `failNextCaptures` 分支）。
+    ///
+    /// ⚠ 默认全空 ⇒ 与改动前逐字段相同（既有用例的既有断言不受影响）。
+    ///   这三项存在的理由：011-A1 九项缺口 §9 要求"设备层算出来的现场数字
+    ///   必须能到达上层唯一的文本出口"，而本桩**替身的是管理器**，
+    ///   管理器对它收到的东西只做转发 —— 故现场必须由用例从这一侧注入，
+    ///   否则测的就不是"转发"而是"桩自己编的文本"。
+    std::optional<aircraft::data::SdkFailure> failureSdkError;
+    std::optional<aircraft::data::SdkFailure> failureCleanupError;
+    std::string                              failureDiagnosis;
+
     bool initializeAll() override { return true; }
     bool startAll() override { return true; }
     void stopAll() override {}
@@ -276,7 +287,12 @@ public:
             {
                 rec.attempted = true;
                 rec.result    = aircraft::data::GrabResult{
-                    {aircraft::data::OpStatus::Timeout, std::nullopt, std::nullopt}};
+                    {aircraft::data::OpStatus::Timeout, failureSdkError,
+                     failureCleanupError}};
+                // 调用诊断由用例注入（默认空 ⇒ 与改动前逐字段相同）。
+                // **只**写进本轮记录：真实管理器做的事就是**原样转发**后端
+                // 本次调用给出的 `sdkError`／`diagnosis`，不补造、不合成。
+                rec.diagnosis     = failureDiagnosis;
                 rec.skippedReason = "桩：本轮瞬时丢帧";
             }
             round_.aggregate = aircraft::data::OpStatus::Timeout;
@@ -326,19 +342,49 @@ public:
             // "这一次该路没有像素"：三路的 frameId 都已自增（它确实是第 N 次
             // 采集），只有指定焦段没有图像数据 —— 模拟 grab 成功但无像素。
             // 与 simulateFault 的区别：**不**禁用该通道，故下一次采集照常。
-            if (static_cast<int>(phaseCaptureCount_) == blankOnPhaseCapture_)
+            const bool blankNow =
+                static_cast<int>(phaseCaptureCount_) == blankOnPhaseCapture_;
+            const bool failedNow =
+                static_cast<int>(phaseCaptureCount_) == failedOnPhaseCapture_;
+
+            if (blankNow || failedNow)
             {
-                switch (blankRole_)
+                switch (failedNow ? failedRole_ : blankRole_)
                 {
                 case CameraRole::CAM50:  frame.cam50.image  = cv::Mat{}; break;
                 case CameraRole::CAM100: frame.cam100.image = cv::Mat{}; break;
                 case CameraRole::CAM25:  frame.cam25.image  = cv::Mat{}; break;
                 }
-                // ⚠ 此处**只**清空图，`result.status` 保持 `Ok`：该路取帧
-                //    确实成功了，只是这一拍没有像素。而"这一路算不算采到"
-                //    由下面的有效帧判据表达（status == Ok **且**图非空）——
+
+                // ⚠ `blankNow` 这条路径**只**清空图，`result.status` 保持
+                //    `Ok`：模拟的是**旧实现**的记录形态（取帧确实成功了，
+                //    只是这一拍没有像素）。而"这一路算不算采到"由下面的
+                //    有效帧判据表达（status == Ok **且**图非空）——
                 //    "取到空图"与"取帧失败"必须能分开，这正是一条
                 //    `Ok` 状态却不算数的记录存在的理由。
+                //    本批**不改**它：`capturedCount` 的判据继续冻结为
+                //    "Ok 且图非空"，不依赖"某个实现当前恰好让两者等价"。
+                if (failedNow)
+                {
+                    // 本桩替身的是 `IMultiCameraManager`，故这里给出的必须
+                    // 是**真实现会给出的**记录形态：该路状态由用例指定
+                    // （默认＝契约违背），调用现场**原样转发**用例注入的
+                    // 那几项，桩自己不补造任何东西。
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        if (roles[k] != failedRole_)
+                        {
+                            continue;
+                        }
+                        aircraft::data::ChannelGrabRecord& rec =
+                            round_.channels[static_cast<std::size_t>(k)];
+                        rec.result.status = failedStatus_;
+                        rec.result.sdkError = failedSdkError;
+                        rec.diagnosis       = failedDiagnosis_;
+                        rec.skippedReason   = failedSkippedReason_;
+                        break;
+                    }
+                }
             }
         }
 
@@ -410,8 +456,33 @@ public:
     }
 
     /// 令 CAPTURE 阶段的**第 N 次**（1 基）采集的指定焦段无像素；-1 = 不注入。
+    /// ⚠ 该路 `result.status` **保持 `Ok`**（旧实现的记录形态），
+    ///    用于验证"交付判据不依赖状态码"。要模拟**本批之后**的真实现
+    ///    （空图 = 契约违背），用下面的 `contractViolationOnPhaseCapture_`。
     int        blankOnPhaseCapture_ = -1;
     CameraRole blankRole_ = CameraRole::CAM25;
+
+    /// 令 CAPTURE 阶段的**第 N 次**（1 基）采集的指定焦段记为**失败**，
+    /// 该路的状态、原因与调用现场由用例逐项注入。
+    ///
+    /// 默认值就是本批 §8 之后的真实现形态：**后端报成功、却交付空图**
+    /// ⇒ `ContractViolation`、`skippedReason` 说明图为空、`sdkError`
+    /// **原样留在 `nullopt`**（虚拟后端／脚本替身根本不调 SDK，
+    /// **不得**补造 `{ImvGetFrame, 0}`）。
+    ///
+    /// ⚠ 为什么状态也要能换：§9 的两条出口要用两种**互不相同**的现场来验 ——
+    ///    ① 空图（没有 SDK 调用可报，只有本地判定）；
+    ///    ② 损坏帧（设备层算出了重算值与 padding，须经调用名 + 原码带出）。
+    ///    两者的共同前提都是"该路**不再**被记成 `Ok`"，否则它在
+    ///    `status != Ok` 那道过滤器后面根本到不了文本（这正是 §8 的本体）。
+    int         failedOnPhaseCapture_ = -1;
+    CameraRole  failedRole_ = CameraRole::CAM50;
+    aircraft::data::OpStatus failedStatus_ =
+        aircraft::data::OpStatus::ContractViolation;
+    std::string failedSkippedReason_ =
+        "桩：后端取帧返回 Ok 但交付的图为空（契约违背）";
+    std::string failedDiagnosis_;   ///< 默认空：与"后端没有 SDK 调用可报"一致
+    std::optional<aircraft::data::SdkFailure> failedSdkError;
 
     bool capturePhase_ = false;
     int  phaseCaptureCount_ = 0;
@@ -855,9 +926,27 @@ public:
     /// 而不是靠每处调用者自觉。
     void tickAt(uint64_t now)
     {
-        injectedNow_ = now;
+        injectedNow_ = now + entrySkewNs_;
         controller_->tick(now);
     }
+
+    /// 让**控制器内部读到的钟**比这一拍传给 `tick()` 的形参快 `deltaNs`。
+    ///
+    /// 生产侧这不是人为构造的：`main.cpp` 把"某次读钟的结果"作为形参传进
+    /// `tick()`，而 `stepCapture()` 在**同一拍内**又经 `nowNs()` 重新读钟 ——
+    /// 两次读数之间真实流逝的时间就是这里注入的量。故"形参 < 内部读数"
+    /// 是生产上的**常态**，二者相差多少取决于那一小段真实耗时。
+    ///
+    /// 夹具默认把它设为 **0**（`tickAt()` 的时基说明：绝大多数用例关心的是
+    /// "同一时基"，且 `run()` 用形参逐拍推进），只有需要让**期限恰好落在
+    /// 这一拍内部**的用例才设置它 —— 例如"入口形参还没到 T_task，而
+    /// `stepCapture()` 第一次重新读钟时已经过了 T_task"。
+    ///
+    /// ⚠ 它不是"为了通过用例而设的后门"：若没有它，"同一拍内跨过期限"
+    ///    这件事在模拟里根本不可表达（形参与内部读数被 `tickAt()` 绑成
+    ///    同一个值），而它恰恰是 `acquireDeadlineNs()` 的"已到期"分支
+    ///    唯一可达的形态。
+    void setClockSkewAheadOfTickParam(uint64_t deltaNs) { entrySkewNs_ = deltaNs; }
 
     /// 在**一次采集之内**把模拟钟推进 `deltaNs`（`afterCapture` 钩子的实参）。
     ///
@@ -1031,6 +1120,11 @@ private:
     /// 只在 `tickAt()` 里被赋值 —— 见那里的说明：它与传给 `tick()` 的
     /// 形参必须是**同一个值**，否则控制器内部会出现两个时间域。
     uint64_t        injectedNow_ = 0;
+
+    /// `injectedNow_` 相对本拍形参的前置量（默认 0）。
+    /// 只有"期限落在这一拍内部"的用例才设它，见
+    /// `setClockSkewAheadOfTickParam()` 的说明。
+    uint64_t        entrySkewNs_ = 0;
 };
 
 /// 已配置的转台行程（±180° / −60°~+60°），使越程判定真正生效。
@@ -2744,4 +2838,283 @@ TEST(MeasurementFlowTest, A1_43_控制器把状态剩余预算作为期限传给
         << (captureTickNs + h.config_.captureTimeoutNs) << "（CAPTURE 起始时刻 "
         << captureTickNs << " + capture_timeout_ns " << h.config_.captureTimeoutNs
         << "）";
+}
+
+// ===========================================================================
+//  §9 采集诊断的**消费出口**：控制器这一侧（011-A1）
+//
+//  与 DeviceLayerTest 的分工：那边从 `StubImvApi` 注入故障，验的是
+//  "设备层算出来的现场能不能穿过真实后端与真实管理器到达 sink 与该轮记录"；
+//  本组验的是**控制器有没有真的去消费**那份记录 —— 它只有两个文本出口：
+//    ① 整轮失败（`capture() == false`）⇒ `lastError()`（在 `acquire()` 的
+//       失败分支里拼接）；
+//    ② 一路不可用但整体继续跑（可用数 ≥ 2）⇒ `degradationNotice()`
+//       （在 `updateDegradation()` 里拼接）。
+//
+//  ⚠ 两个出口**各须一条**：只验一个的话，把另一个出口的拼接整段删掉
+//    也能通过 —— 而它们不是同一条代码路径。
+//
+//  ⚠ 本组的桩**只转发**用例注入的现场（`failureDiagnosis`／
+//    `failedDiagnosis_`／`failedSdkError`）。若断言的是桩自己拼出来的文本，
+//    那测的就不是"控制器消费了本轮的取证"，而是一条恒真的用例。
+//
+//  ⚠ 降级那一条必须让故障落在**最后一次**采集上：`updateDegradation()`
+//    每轮都会重算 `degradationNotice_`，下一轮正常时 `available == 3`
+//    会把它清空。落在末轮才代表"任务结束时的降级说明"。
+// ===========================================================================
+
+TEST(MeasurementFlowTest, A1_43_整轮失败必须把本轮的调用现场带进错误文本)
+{
+    Harness h;
+    h.turntableConfig_ = configuredTurntable();
+    h.turntable_.gain = 0.5;
+
+    // 第一次采集**整轮**失败（三路都拿不到帧 ⇒ 可用数 0 < 2 ⇒ `capture()`
+    // 返回 false）。现场由用例逐项给定，桩只转发。
+    h.cameras_.failNextCaptures = 1;
+    h.cameras_.failureSdkError =
+        aircraft::data::SdkFailure{aircraft::data::SdkCall::ImvGetFrame, 7};
+    h.cameras_.failureDiagnosis =
+        "原始载荷长度与紧凑契约不符：sdk_payload_bytes=64 "
+        "expected_compact_bytes=96 重算=96 padding_x=2";
+    h.build();
+
+    ASSERT_GE(h.run(0, 200), 0);
+
+    const std::string message = h.controller_->lastError().message;
+
+    // 判据一：**调用名 + 原码**。缺了它，运维只能拿一个裸码去猜是哪个 API
+    // 失败的（这正是 `SdkFailure` 存在的理由）。
+    EXPECT_NE(message.find("IMV_GetFrame"), std::string::npos)
+        << "整轮失败的文本里没有调用名 —— 现场在这一层被丢掉了；实际："
+        << message;
+    EXPECT_NE(message.find("返回 7"), std::string::npos)
+        << "整轮失败的文本里没有 SDK 返回的原码；实际：" << message;
+
+    // 判据二：设备层算出来的**数字**（重算长度、padding）。这几个值只有
+    // 设备层算得出来，到了控制器这一层若还不出现，就永远不会有出口。
+    EXPECT_NE(message.find("重算=96"), std::string::npos)
+        << "整轮失败的文本里没有重算值；实际：" << message;
+    EXPECT_NE(message.find("padding_x=2"), std::string::npos)
+        << "整轮失败的文本里没有 padding；实际：" << message;
+
+    // 判据三：三路都要在，且各自带角色名 —— 只写一路会让"另外两路怎么死的"
+    // 无从判断。
+    EXPECT_NE(message.find("CAM25="), std::string::npos) << message;
+    EXPECT_NE(message.find("CAM50="), std::string::npos) << message;
+    EXPECT_NE(message.find("CAM100="), std::string::npos) << message;
+}
+
+TEST(MeasurementFlowTest, A1_43_空图通道的原因必须进入降级说明且不得伪造SDK调用)
+{
+    Harness h;
+    h.turntableConfig_ = configuredTurntable();
+    h.turntable_.gain = 0.5;
+
+    // 末轮的第 5 次采集：CAM50 报成功却交付空图 ⇒ 可用数 2 ⇒ 降级继续。
+    h.cameras_.failedOnPhaseCapture_ = 5;
+    h.cameras_.failedRole_           = CameraRole::CAM50;
+    // 默认即"后端报成功但图为空"的契约违背，且 `sdkError` 留空。
+    h.build();
+
+    ASSERT_GE(h.run(0, 200), 0);
+    ASSERT_EQ(h.controller_->state(), S::COMPLETE);
+
+    EXPECT_TRUE(h.controller_->degraded())
+        << "一路空图 ⇒ 可用数 2，任务应以降级模式跑完而不是失败";
+
+    const std::string message = h.controller_->degradationNotice().message;
+
+    // ⚠ 本用例验的是这条链的**控制器一半**：`status != Ok` 的通道会被
+    //    拼进文本、且拼的是 `channelGrabRecordText`（不是只有角色＋状态）。
+    //    **另一半**（管理器必须把"报成功却交付空图"记成契约违背，否则
+    //    这一路根本进不了这个过滤器）由 `DeviceLayerTest` 直接验
+    //    `MultiCameraManager` 的那条 ---------- 本文件不重复。
+    //
+    // 判据一：**原因**必须出现（这一路少了，"为什么少"就不能丢）。
+    EXPECT_NE(message.find("图为空"), std::string::npos)
+        << "降级说明里没有这一路的失败原因；实际：" << message;
+    EXPECT_NE(message.find("CAM50="), std::string::npos)
+        << "降级说明里没有点明是哪一路；实际：" << message;
+
+    // 判据二：**本地判定**必须与"调用过 SDK"在文本上可区分。
+    // `channelGrabRecordText` 对 `sdkError == nullopt` 写的是
+    // "未调用 SDK（本地判定）"；若谁为了让文本"更完整"而补造
+    // `{ImvGetFrame, 0}`，这一行就会变红 —— 而那句话是假的：
+    // 虚拟后端与脚本替身根本不会调 SDK。
+    EXPECT_NE(message.find("未调用 SDK（本地判定）"), std::string::npos)
+        << "应如实写明本路没有 SDK 调用；实际：" << message;
+    EXPECT_EQ(message.find("调用 IMV_GetFrame"), std::string::npos)
+        << "不得为一次本地判定补造 SDK 调用记录；实际：" << message;
+}
+
+TEST(MeasurementFlowTest, A1_43_一路损坏帧的现场必须进入降级说明)
+{
+    Harness h;
+    h.turntableConfig_ = configuredTurntable();
+    h.turntable_.gain = 0.5;
+
+    // 与上一条的区别：这一路**有**现场数字（真实后端取帧失败时
+    // `GrabResult::diagnosis` 非空），且经过一次真正的 SDK 调用。
+    // 二者合起来才覆盖 §9 要求的"sdkError／cleanupError + diagnosis
+    // 一并进入降级说明"。
+    h.cameras_.failedOnPhaseCapture_ = 5;
+    h.cameras_.failedRole_           = CameraRole::CAM50;
+    h.cameras_.failedStatus_ = aircraft::data::OpStatus::CorruptFrame;
+    h.cameras_.failedSdkError =
+        aircraft::data::SdkFailure{aircraft::data::SdkCall::ImvGetFrame, 0};
+    h.cameras_.failedDiagnosis_ =
+        "原始载荷长度与紧凑契约不符：sdk_payload_bytes=64 "
+        "expected_compact_bytes=96 重算=96 padding_y=3";
+    h.cameras_.failedSkippedReason_ = "桩：本轮该路帧不满足可交付条件";
+    h.build();
+
+    ASSERT_GE(h.run(0, 200), 0);
+    ASSERT_EQ(h.controller_->state(), S::COMPLETE);
+    ASSERT_TRUE(h.controller_->degraded());
+
+    const std::string message = h.controller_->degradationNotice().message;
+
+    EXPECT_NE(message.find("CAM50=CorruptFrame"), std::string::npos)
+        << "降级说明里这一路的状态不对；实际：" << message;
+    // ⚠ 这里是 `{ImvGetFrame, 0}`：SDK **调用成功**（返回 0），失败的是
+    //    "这个帧不合契约"。故文本写"调用 … 返回 0"是**如实**的 ——
+    //    与上一条用例的"未调用 SDK"正好构成一对：调用过与没调用过
+    //    必须在文本上可区分。
+    EXPECT_NE(message.find("调用 IMV_GetFrame 返回 0"), std::string::npos)
+        << "降级说明里丢了调用名／原码；实际：" << message;
+    EXPECT_NE(message.find("重算=96"), std::string::npos)
+        << "降级说明里丢了重算值；实际：" << message;
+    EXPECT_NE(message.find("padding_y=3"), std::string::npos)
+        << "降级说明里丢了 padding；实际：" << message;
+}
+
+// ---------------------------------------------------------------------------
+// §11 §3："已到期"**可达**（F-1）—— 期限落在同一拍内部
+// ---------------------------------------------------------------------------
+
+TEST(MeasurementFlowTest, A1_44_同一拍内跨过任务期限时一次采集都不发起)
+{
+    // 本用例回答的是"`acquireDeadlineNs()` 的『已到期』分支到底可不可达"。
+    //
+    // ⚠ 文档初稿曾把它记成"不可达 ⇒ 仅防御式"，理由是"`tick()` 入口已先判
+    //    `deadlineExceeded()`，故'下一轮看到已到期'的那次钟推进早已被入口
+    //    挡住"。那个论证**漏了一件事**：入口判的是**形参**，而
+    //    `stepCapture()` 每一轮判的是**重新读到的钟**。生产上二者是两次
+    //    读数（`main.cpp` 读一次当作形参传给 `tick()`，`stepCapture()`
+    //    在拍内再读一次），相差的就是那一小段真实耗时 —— 期限落在两次
+    //    读数之间时，入口**判不出来**（形参还差一点，内部读数已经到点）。
+    //
+    // 构造（评审给的场景，逐项落到本夹具上）：
+    //   · 进入 CAPTURE 的那一拍，形参 = T_task − 1 ns ⇒ 入口检查放行；
+    //   · 同一拍内控制器自己读钟 = T_task（`setClockSkewAheadOfTickParam(1)`）
+    //     ⇒ 任务**已到期**；
+    //   · 状态级期限还远（CAPTURE 起始 + `captureTimeoutNs` = 1.5 s），
+    //     故"把已到期当成没有期限"的旧写法会**退化成一份状态预算**继续采。
+    //
+    // 期望：**一次采集都不发起**，且任务仍在 T_task 到点时以 9001 终止。
+    // 恢复旧写法（`taskRemaining > 0` 才取期限）后本用例必须转红 ——
+    // 红在"captureCount 不再是 0"这条判据上（见 §11 的变异 M18）。
+
+    // ---- 阶段一：常规配置跑一遍，只为测出 CAPTURE 落在哪一拍 ----
+    // 本夹具的流程是确定性的（虚拟件 + 固定 1 s 步长），且下面阶段二
+    // 除了 T_task 与注入的钟偏差外与它逐项相同，故这个时刻可以直接复用。
+    uint64_t captureNow = 0;
+    {
+        Harness probe;
+        probe.turntableConfig_ = configuredTurntable();
+        probe.turntable_.gain  = 0.5;
+        probe.build();
+        probe.controller_->startMeasurement(0);
+
+        uint64_t  now   = 0;
+        bool      found = false;
+        for (int i = 0; i < 200 && !probe.finished(); ++i)
+        {
+            if (probe.controller_->state() == S::CAPTURE)
+            {
+                captureNow = now;
+                found      = true;
+                break;
+            }
+            probe.tickAt(now);
+            now += kStepNs;
+        }
+        ASSERT_TRUE(found) << "未进入 CAPTURE，本用例的前提不成立";
+        ASSERT_GT(captureNow, 0u);
+    }
+
+    // ---- 阶段二：T_task 恰好落在 CAPTURE 那一拍**内部** ----
+    Harness h;
+    h.turntableConfig_      = configuredTurntable();
+    h.turntable_.gain       = 0.5;
+    h.config_.taskTimeoutNs = captureNow + 1;   // 形参还差 1 ns，内部读数已到点
+    h.build();
+    h.setClockSkewAheadOfTickParam(1);
+
+    h.controller_->startMeasurement(0);
+
+    uint64_t now                      = 0;
+    bool     reachedCapture           = false;
+    int      capturesBeforeCaptureTick = 0;
+    for (int i = 0; i < 200 && !h.finished(); ++i)
+    {
+        if (h.controller_->state() == S::CAPTURE)
+        {
+            h.cameras_.armCapturePhase();
+            // 判据一的分母：这一拍**之前**已有的采集次数（SEARCH 等状态
+            // 也各有一次 `acquire()`，故它不为 0）。
+            capturesBeforeCaptureTick = h.cameras_.captureCount;
+            h.tickAt(now);
+            reachedCapture = true;
+            break;
+        }
+        h.tickAt(now);
+        now += kStepNs;
+    }
+    ASSERT_TRUE(reachedCapture) << "未进入 CAPTURE，本用例的前提不成立";
+
+    // 判据一（本用例的本体）：**这一拍一次 `capture()` 都没有发起**。
+    //
+    // ⚠ 判据用**增量**而不是"`captureCount == 0`"：SEARCH / ALIGN 等状态
+    //    每次动作也各有一次 `acquire()`（`captureFrameCount` 只在 CAPTURE
+    //    状态连采），故这一拍之前计数早已非零。可变的是"这一拍有没有**再**
+    //    发起一次" —— 旧写法下这里是 1（甚至更多），而那正是
+    //    "已到期被当成没有期限 ⇒ 重新获得一份状态预算"的现场。
+    EXPECT_EQ(h.cameras_.captureCount, capturesBeforeCaptureTick)
+        << "任务已到期的这一拍仍发起了采集：『已到期』被当成了『没有期限』";
+    EXPECT_TRUE(h.cameras_.phaseAcquisitionIds_.empty())
+        << "任务已到期的这一拍仍取到了帧";
+
+    // 判据二：停止这件事**可见**（与 §7.5"降级必须可见"同一条原则）。
+    // 措辞必须是"提前停止：已采 0 / N"——即"剩余预算不足以再发起一次采集"，
+    // 而不是"采满帧后越期"。
+    bool statedStop = false;
+    for (const std::string& n : h.controller_->notices())
+    {
+        if (n.find("因时限提前停止：已采 0 / ") != std::string::npos)
+        {
+            statedStop = true;
+        }
+        EXPECT_EQ(n.find("已采满"), std::string::npos)
+            << "一帧都没采，却说『已采满』：" << n;
+    }
+    EXPECT_TRUE(statedStop)
+        << "『因期限已到而未发起本轮采集』这件事没有任何出口";
+
+    // ---- 阶段三：任务到点仍以 9001 终止（T_task 是唯一硬保证） ----
+    for (int i = 0; i < 200 && !h.finished(); ++i)
+    {
+        h.tickAt(now);
+        now += kStepNs;
+    }
+    ASSERT_TRUE(h.finished()) << "未在 200 个 tick 内终止";
+    EXPECT_EQ(h.controller_->state(), S::FAILED);
+    EXPECT_EQ(h.controller_->lastError().code, aircraft::data::kErrTaskTimeout)
+        << "任务到点必须以 9001 终止；实际：" << h.controller_->lastError().message;
+
+    // 判据三：从那一拍起**再也没有**采集过 —— 一旦那次"续期"发生，
+    // 这里就会多出至少一次（旧写法下 CAPTURE 能把 5 帧采满）。
+    EXPECT_EQ(h.cameras_.captureCount, capturesBeforeCaptureTick)
+        << "越期之后仍拿到了取帧机会：已到期的任务不该再有采集";
 }

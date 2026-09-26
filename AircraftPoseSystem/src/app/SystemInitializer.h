@@ -168,7 +168,7 @@ public:
 
         /// 三路里**实际就绪**（initialize 成功且未被禁用）的数目。
         /// ⚠ 与 `cameraCount` 分开记：「三路都装配了」与「三路都能用」
-        /// 必须分别可见（ENG-09 V2.3 §5.30 第 3 条的装配摘要要求）。
+        /// 必须分别可见（ENG-09 V2.4 §5.30 第 3 条的装配摘要要求）。
         int  cameraReadyCount  = 0;
 
         int  enabledChannels   = 0;    ///< rig 里 enabled 的通道数
@@ -199,6 +199,32 @@ private:
     /// ⇒ 都是失败（**不得**静默换成虚拟后端）。
     std::shared_ptr<device::ICameraBackend> makeBackend(
         const data::CameraConfig& config, std::string& error);
+
+    /// 装配一路后端：**先看测试注入槽** `ApplicationContext::backendFactory`，
+    /// 未设置时退回内置 `makeBackend()`（011-A1 九项缺口 §1 的裁决）。
+    ///
+    /// ⚠ 注入槽一旦设置，其返回值（包括**空**）就是结论：
+    ///   返回空即该路装配失败，**不回落内置工厂**。静默回落会让测试断言的
+    ///   对象与实际运行的对象不是同一个 —— 那种"在另一条路径上通过"的
+    ///   结果比直接失败危险得多（它会被当成证据）。
+    std::shared_ptr<device::ICameraBackend> assembleBackend(
+        const data::CameraConfig& config, std::string& error);
+
+    /// 逐路核对"**配置为 `imv` 的通道**是否真的就绪"，未就绪则整次启动失败。
+    ///
+    /// ⚠ 两处调用（011-A1 九项缺口 §1）：`initializeAll()` 之后、`startAll()`
+    ///    **之前**（初检），以及 `startAll()` **之后**（复检）。
+    ///    复检不可省：`startAll()` 在 `start()` 失败时只把该路 `available`
+    ///    置假，可用数 ≥2 即返回 true —— 于是"CAM25 真实相机**取流启动失败**"
+    ///    会以整次启动成功收场，而操作者以为在跑真实采集。
+    /// ⚠ 检查范围**严格限定**在显式 `imv` 通道：虚拟通道的 `start()` 失败
+    ///    仍按**现行待裁决策略**处理（保留现行待裁决策略，见 Q-D1），
+    ///    本批不触碰该策略、也不改判。
+    ///
+    /// @param stage 用于文本的阶段名（"就绪"／"取流启动"）。
+    /// @return true = 全部就绪（或没有显式 imv 通道）；false 时已写好
+    ///         `errorText_`，**调用方负责** `rollbackDevices()`。
+    bool verifyExplicitImvChannels(const char* stage);
 
     /// 整次启动失败时**逐路回滚**已建立的设备资源（011-A1，§3.4）。
     ///

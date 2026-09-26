@@ -39,6 +39,7 @@
 // ============================================================================
 
 #include <cstdint>
+#include <limits>
 
 #include <time.h>
 
@@ -69,6 +70,23 @@ inline uint64_t monotonicNowNs()
     return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL
          + static_cast<uint64_t>(ts.tv_nsec);
 }
+
+/// "**无期限**"的哨兵值，与 `monotonicNowNs()` 同一时基上使用。
+///
+/// ⚠ 为什么必须是极大值而**不是 0**（011-A1 九项缺口 §3 的裁决）：
+/// 期限相关的判定普遍写成 `now >= deadline`（"到达截止时刻即视为已到"），
+/// 若拿 0 表示"无期限"，该判定在**任何**时刻都为真 ⇒ 一个本不该有期限的
+/// 动作会被立刻判超时。这与 `ErrorInfo::code` 用 0 表示"未设置"方向相反，
+/// 原因不同：那里的 0 是"无错误"，这里需要的是"无穷大的剩余时间"。
+///
+/// ⚠ 放在 data 层的理由与 `monotonicNowNs()` 完全相同（见文件头）：
+/// application 的 `RetryManager` 与 device 的 `MultiCameraManager` 都要用它，
+/// 而 device **不能**依赖 application（ENG-01 §17）⇒ 必须落在最低公共层。
+/// 两处**同值同义**，不得各写一份极大值常量 —— 那样"无期限"就有两个定义。
+///
+/// ⚠ 与它相对的另一个取值是"**已到期**"：`deadline <= now`（含 0）。
+/// 二者必须分开处理：前者**不参与**取小，后者是"预算已耗尽"。
+inline constexpr uint64_t kNoDeadlineNs = (std::numeric_limits<uint64_t>::max)();
 
 }  // namespace data
 }  // namespace aircraft

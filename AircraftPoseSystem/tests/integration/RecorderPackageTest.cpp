@@ -722,6 +722,55 @@ TEST(RecorderPackageTest, EightBitFrameWithoutRawPayloadIsSavedAndLabelledAsImag
     EXPECT_TRUE(frameValid) << "8 位帧没有 raw 是**正常**形态，不是缺帧";
 }
 
+// ===========================================================================
+//  2c 原始载荷的**几何**必须能从结果包本身恢复（011-A1 九项缺口 §4）
+// ===========================================================================
+//
+//  ⚠ 这一节要证明的是"**结果包自足**"：拿一个包、一台没装过本工程的机器，
+//    只按包里写的元数据就能把原始二维图像解出来。
+//    上一版做不到 —— 包内唯一的宽高是 `display_image.width/height`，
+//    而它取自 `image.cols/rows`（**加工产物**，12 位时是右移 4 位的结果），
+//    于是"有原始载荷、没有显示图"的那种包里宽高是 0：载荷完好，
+//    却**没有任何字段说明它是几乘几**。
+
+namespace
+{
+
+/// 位置编码的 Mono12 夹具：`value(x, y) = x * 16 + y`。
+///
+/// ⚠ 为什么不用既有 `makeMono12` 的 `index * 37` 序列：那是一条**一维**
+///   序列。宽高互换后按新几何去扫，得到的序列与原序列不同 —— 但只有在
+///   "某两个位置的值恰好互换"时才会露馅，而且逐位置比对时**期望值要
+///   从原容器里取**，等于拿输入当答案。
+///   位置编码让每个 `(x, y)` 的期望值都能**独立写出来**（`x * 16 + y`
+///   这一条公式即可），与输入缓冲区无关；`width != height`（4×2）则让
+///   "宽高互换"这件事必然在某些位置上取到不同的值。
+Mono12Fixture makeMono12PositionEncoded(uint32_t width, uint32_t height)
+{
+    Mono12Fixture fx;
+    fx.width  = width;
+    fx.height = height;
+    fx.display.create(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
+
+    fx.container.resize(static_cast<std::size_t>(width) * height * 2u);
+    for (uint32_t y = 0; y < height; ++y)
+    {
+        for (uint32_t x = 0; x < width; ++x)
+        {
+            const uint16_t value = static_cast<uint16_t>(x * 16u + y);
+            const std::size_t off =
+                (static_cast<std::size_t>(y) * width + x) * 2u;
+            fx.container[off]     = static_cast<uint8_t>(value & 0xFFu);   // 小端
+            fx.container[off + 1] = static_cast<uint8_t>((value >> 8) & 0xFFu);
+            fx.display.at<unsigned char>(static_cast<int>(y), static_cast<int>(x)) =
+                static_cast<unsigned char>(value >> 4);
+        }
+    }
+    return fx;
+}
+
+}  // namespace
+
 TEST(RecorderPackageTest, Mono12FrameWithRawButNoDisplayImageIsStillSaved)
 {
     TempDir out("mono12nodisp");
@@ -731,36 +780,92 @@ TEST(RecorderPackageTest, Mono12FrameWithRawButNoDisplayImageIsStillSaved)
     // ⚠ 这正是旧判据（`valid = !image.empty()`）会判错的那一格：
     //   按旧判据这份包会说 CAM25 缺帧，而它的原始数据其实完好。
     aircraft::data::MeasurementRecord record = fixtureRecord();
-    const Mono12Fixture             fx     = makeMono12(32, 24);
+    const Mono12Fixture             fx     = makeMono12PositionEncoded(4, 2);
     record.bestFrame.cam25                 = mono12Frame(fx, /*withRaw=*/true);
     record.bestFrame.cam25.image           = cv::Mat();
 
     const std::string dir = saveRecord(out, "config", record);
     ASSERT_FALSE(dir.empty());
 
-    const std::string path = joinPath(dir, "cam25.raw");
-    ASSERT_EQ(fileSize(path), static_cast<long>(fx.container.size()));
-    const std::vector<unsigned char> onDisk = readBytes(path);
-    ASSERT_EQ(onDisk.size(), fx.container.size());
-    EXPECT_EQ(std::memcmp(onDisk.data(), fx.container.data(), fx.container.size()), 0);
-
+    // ---- 从这一行起**只看结果包**，不再碰 `fx` ----
+    //   ⚠ 重建所需的每一个数字都必须来自包里。若这里还去读
+    //     `fx.width` / `fx.container.size()`，那么"包内缺宽高"这件事
+    //     在测试里**永远看不见** —— 正是本节能提供旧版给不出的证据的原因。
     cv::FileStorage fs(joinPath(dir, "result.json"), cv::FileStorage::READ);
     ASSERT_TRUE(fs.isOpened());
     cv::FileNode f0 = fs["best_frame"]["frames"][0];
 
-    std::string source;
+    std::string source, format;
     bool        frameValid = false;
     int         dw = -1, dh = -1;
     f0["data_source"] >> source;
     f0["frame_valid"] >> frameValid;
     f0["display_image"]["width"] >> dw;
     f0["display_image"]["height"] >> dh;
+    f0["pixel_format"] >> format;
 
     EXPECT_EQ(source, "raw");
     EXPECT_TRUE(frameValid)
         << "有原始载荷就是可用帧 —— 判据不得再等同于 `!image.empty()`";
     EXPECT_EQ(dw, 0);
     EXPECT_EQ(dh, 0);
+
+    // ---- ① 原始几何得由包里给出（§4 的核心断言）----
+    //   少了这一条，下面那条 `pkgBytes == pkgW * pkgH * 2` 会在
+    //   "宽高都是 0、长度也是 0"时自洽地成立 —— 而文件明明有 16 字节。
+    EXPECT_FALSE(f0["raw_image"].empty())
+        << "结果包里没有 raw_image —— 有原始载荷却没有它的宽高，"
+           "这份载荷的二维几何**无法**从包内恢复";
+
+    int pkgW = -1, pkgH = -1, pkgBytes = -1;
+    f0["raw_image"]["width"] >> pkgW;
+    f0["raw_image"]["height"] >> pkgH;
+    f0["sdk_payload_bytes"] >> pkgBytes;
+
+    // 已知设计（来自本用例构造的那一帧，不是从包里抄的）：
+    //   `x * 16 + y` 的编码在 4×2 上给出 0,16,32,48 / 1,17,33,49。
+    EXPECT_EQ(pkgW, 4) << "raw_image.width 不是原始载荷的宽度";
+    EXPECT_EQ(pkgH, 2) << "raw_image.height 不是原始载荷的高度";
+    EXPECT_NE(pkgW, pkgH) << "本用例必须用非方形几何：方形的宽高互换看不出来";
+
+    // ---- ② 包里声明的长度就是文件的长度 ----
+    const std::string path = joinPath(dir, "cam25.raw");
+    const std::vector<unsigned char> onDisk = readBytes(path);
+    ASSERT_EQ(onDisk.size(), static_cast<std::size_t>(pkgBytes))
+        << "文件长度与包内声明的 sdk_payload_bytes 不符";
+    ASSERT_EQ(static_cast<std::size_t>(pkgW) * static_cast<std::size_t>(pkgH) * 2u,
+              onDisk.size())
+        << "Mono12 是 2 字节/像素的 16 位容器";
+
+    // ---- ③ 按包内声明的几何与格式逐位置解码 ----
+    //   依据（全部来自包与冻结契约，没有一条来自测试输入）：
+    //     `pixel_format = Mono12` → 2 字节容器、有效位 12；
+    //     `valid_bit_alignment = LsbZeroPadded` → 值在低 12 位；
+    //     `declared_byte_order = LittleEndian` → 低字节在前。
+    EXPECT_EQ(format, "Mono12");
+    std::string alignment, order;
+    f0["valid_bit_alignment"] >> alignment;
+    f0["declared_byte_order"] >> order;
+    ASSERT_EQ(alignment, "LsbZeroPadded");
+    ASSERT_EQ(order, "LittleEndian");
+
+    for (int y = 0; y < pkgH; ++y)
+    {
+        for (int x = 0; x < pkgW; ++x)
+        {
+            const std::size_t off =
+                (static_cast<std::size_t>(y) * static_cast<std::size_t>(pkgW) +
+                 static_cast<std::size_t>(x)) * 2u;
+            const uint16_t value =
+                static_cast<uint16_t>(onDisk[off] |
+                                      (static_cast<uint16_t>(onDisk[off + 1]) << 8));
+            // ⚠ 逐位置断言，而不是"总长度对"：只比长度的话，
+            //   宽高互换（2×4 与 4×2 的字节数相同）照样通过。
+            EXPECT_EQ(static_cast<int>(value & 0x0FFFu), x * 16 + y)
+                << "(" << x << ", " << y << ") 处的解码值不对 —— "
+                   "按包内几何解码得到的不是原始图像";
+        }
+    }
 }
 
 TEST(RecorderPackageTest, RawCarrierShorterThanItsOwnDeclaredLengthIsRefused)
@@ -787,6 +892,221 @@ TEST(RecorderPackageTest, RawCarrierShorterThanItsOwnDeclaredLengthIsRefused)
     EXPECT_TRUE(rec.lastErrorText().find("载体") != std::string::npos)
         << rec.lastErrorText();
     EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+}
+
+// ===========================================================================
+//  2d 落盘的"复检"必须只依据**帧自身的字段**（011-A1 九项缺口 §6）
+// ===========================================================================
+//
+//  ⚠ 上一版的 `decideRawSource` 标称"不信任上游"，实际只读了上游算好的
+//    两个字段（`compactSizeMatches` 与 `expectedCompactBytes`），**从不重算**
+//    —— 于是"上游把期望长度算错"这件事在这里被原样放行，错误的元数据
+//    直接进了结果包。下面五条各自封住一个"转录别人的结论"的入口。
+
+TEST(RecorderPackageTest, CompactSizeMatchesTrueButLengthActuallyWrongIsStillRefused)
+{
+    TempDir out("mono12booltrue");
+
+    // 情形①：上游**转录过来的三个事实全部自洽**（期望＝自报＝载体，
+    // 布尔量为真），而**用它自己的几何重算**得到的是另一个数。
+    // 旧版只看布尔量与上游算好的期望值 ⇒ 放行；本版重算 ⇒ 必须拒绝。
+    //
+    // ⚠ 本用例的**鉴别力全在夹具上**：若改成"把 `expectedCompactBytes`
+    //    ±1"，那个不一致**不需要重算**就能被"期望≠自报"这一条抓住 ⇒
+    //    用例在"删掉重算"的变异下**照样通过**（实测：该变异曾在此夹具上
+    //    保持全绿）。故这里改的是**几何**（`raw.width`），让四个数字里
+    //    只有"重算"这一个能发现问题。
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const Mono12Fixture             fx     = makeMono12(32, 24);
+    record.bestFrame.cam25                 = mono12Frame(fx, /*withRaw=*/true);
+
+    // 改动只有这一处：裸缓冲自报的宽比载体实际承载的少 1 像素
+    //（32×24×2 = 1536 ⇒ 重算 31×24×2 = 1488）。
+    record.bestFrame.cam25.raw.width -= 1;
+
+    // ---- 前提：另外三个数字**完全一致**，布尔量也为真 ----
+    ASSERT_TRUE(record.bestFrame.cam25.raw.compactSizeMatches)
+        << "本用例的前提是**上游布尔量为真**";
+    ASSERT_EQ(record.bestFrame.cam25.raw.expectedCompactBytes,
+              record.bestFrame.cam25.raw.sdkPayloadBytes)
+        << "前提：期望与自报相等（否则不必重算就能发现不一致）";
+    ASSERT_EQ(record.bestFrame.cam25.raw.sdkPayloadBytes,
+              record.bestFrame.cam25.raw.bytes->size())
+        << "前提：自报与载体相等";
+    uint64_t recomputedNow = 0;
+    ASSERT_TRUE(aircraft::data::computeExpectedCompactBytes(
+        31, 24, aircraft::data::PixelFormat::Mono12, recomputedNow));
+    ASSERT_NE(recomputedNow,
+              record.bestFrame.cam25.raw.expectedCompactBytes)
+        << "前提：按几何重算的结果与那三个数字**不等**（这才需要重算）";
+
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+    Recorder rec(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+
+    EXPECT_FALSE(rec.save(record))
+        << "上游布尔量为真、重算却不等 —— 拒绝的判据必须是**重算**，"
+           "而不是转录上游的结论";
+    EXPECT_TRUE(rec.lastErrorText().find("四方不一致") != std::string::npos)
+        << rec.lastErrorText();
+    // 文本要带上**重算值与实到值**，否则离线无法判断差在哪一边。
+    EXPECT_TRUE(rec.lastErrorText().find("重算=") != std::string::npos)
+        << rec.lastErrorText();
+    EXPECT_TRUE(rec.lastErrorText().find("expected_compact_bytes=") !=
+                std::string::npos)
+        << rec.lastErrorText();
+    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+}
+
+TEST(RecorderPackageTest, CompactSizeMatchesFalseWhileFourFactsAgreeIsStillRefused)
+{
+    TempDir out("mono12boolfalse");
+
+    // 情形②：四个长度事实**完全一致**（帧本身没问题），而布尔量是假。
+    // 它必为假 ⇒ 这个组合不可能来自正常上游 ⇒ 是**元数据自相矛盾**。
+    // ⚠ "四方一致就放行、把布尔量放着不管"是另一种错法：它会把这个
+    //   矛盾原样写进结果包，让读包的人拿一个假的字段去做判断。
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const Mono12Fixture             fx     = makeMono12(32, 24);
+    record.bestFrame.cam25                 = mono12Frame(fx, /*withRaw=*/true);
+
+    record.bestFrame.cam25.raw.compactSizeMatches = false;
+    ASSERT_EQ(record.bestFrame.cam25.raw.sdkPayloadBytes,
+              record.bestFrame.cam25.raw.expectedCompactBytes)
+        << "本用例的前提是**四个长度事实一致**";
+
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+    Recorder rec(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+
+    EXPECT_FALSE(rec.save(record)) << "自相矛盾的元数据不得被原样保存";
+    EXPECT_TRUE(rec.lastErrorText().find("compact_size_matches=false") !=
+                std::string::npos)
+        << rec.lastErrorText();
+    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+}
+
+TEST(RecorderPackageTest, BigEndianDeclaredRawPayloadIsRefused)
+{
+    TempDir out("mono12be");
+
+    // 情形③：声明大端。本批适配层**只声明小端**（依据在 ENG-09 §5.28）；
+    // 按小端去解一份大端载荷，得到的是"逐样本字节颠倒"的值 ——
+    // 而它仍是一张**看起来合法的图**，没有任何一处会报错。
+    //
+    // ⚠ `ByteOrder::BigEndian` 在 `PixelFormat.h` 里一直存在，而全仓此前
+    //   **没有任何一处读过它**：这个取值此前完全不参与判断。
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const Mono12Fixture             fx     = makeMono12(32, 24);
+    record.bestFrame.cam25                 = mono12Frame(fx, /*withRaw=*/true);
+    record.bestFrame.cam25.raw.declaredByteOrder =
+        aircraft::data::ByteOrder::BigEndian;
+
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+    Recorder rec(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+
+    EXPECT_FALSE(rec.save(record));
+    EXPECT_TRUE(rec.lastErrorText().find("BigEndian") != std::string::npos)
+        << rec.lastErrorText();
+    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+}
+
+TEST(RecorderPackageTest, Mono8DeclaredWithThreeChannelImageIsRefused)
+{
+    TempDir out("mono8bgr");
+
+    // 情形④：格式说单通道、图是三通道。写出去的是 `rows × cols × 3` 字节，
+    // 元数据却写 `Mono8` ⇒ 离线按元数据解码得到一张"宽度对、每行只取
+    // 前 1/3"的错位图 —— 而它看起来完全像一张正常的图。
+    //
+    // ⚠ 上一版的回落分支只查 `depth() == CV_8U`，**通道数完全不参与判断**。
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+
+    aircraft::data::ImageFrame f;
+    f.role          = CameraRole::CAM25;
+    f.cameraId      = "cam25";
+    f.frameId       = 102;
+    f.captureFormat = aircraft::data::PixelFormat::Mono8;
+    f.rawPolicy     = aircraft::data::RawDataPolicy::RawOptional;
+    f.image         = cv::Mat(3, 4, CV_8UC3, cv::Scalar(1, 2, 3));
+    record.bestFrame.cam25 = f;
+
+    ASSERT_EQ(record.bestFrame.cam25.image.depth(), CV_8U);   // 深度这一关是过的
+    ASSERT_EQ(record.bestFrame.cam25.image.channels(), 3);
+
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+    Recorder rec(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+
+    EXPECT_FALSE(rec.save(record));
+    EXPECT_TRUE(rec.lastErrorText().find("通道数") != std::string::npos)
+        << rec.lastErrorText();
+    EXPECT_TRUE(rec.lastErrorText().find("Mono8") != std::string::npos)
+        << rec.lastErrorText();
+    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+}
+
+TEST(RecorderPackageTest, FallbackMetadataDescribesTheImageActuallyWritten)
+{
+    TempDir out("fallbackmeta");
+
+    // 情形⑤（**正**用例）：一份合法回落所写出的元数据，必须**逐键**描述
+    // 它实际写出的那个文件。
+    //
+    // ⚠ 上一版从 `raw` 取格式四件套 —— 而回落路径**根本没有 raw**，
+    //   取到的是 `RawImagePayload` 的**默认值**（恰好是 `Mono8/8/Unpacked`）。
+    //   于是 `captureFormat = BGR8` 的 3 通道图会被描述成 Mono8 单通道文件。
+    //   本用例断的就是这个：`pixel_format` 必须是 `BGR8`。
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+
+    aircraft::data::ImageFrame f;
+    f.role          = CameraRole::CAM25;
+    f.cameraId      = "cam25";
+    f.frameId       = 103;
+    f.captureFormat = aircraft::data::PixelFormat::BGR8;
+    f.rawPolicy     = aircraft::data::RawDataPolicy::RawOptional;
+    f.image         = cv::Mat(4, 6, CV_8UC3, cv::Scalar(7, 8, 9));
+    record.bestFrame.cam25 = f;
+
+    const std::string dir = saveRecord(out, "config", record);
+    ASSERT_FALSE(dir.empty());
+
+    cv::FileStorage fs(joinPath(dir, "result.json"), cv::FileStorage::READ);
+    ASSERT_TRUE(fs.isOpened());
+    cv::FileNode f0 = fs["best_frame"]["frames"][0];
+
+    std::string source, format, packing, alignment, order;
+    int         validBits = -1, dw = -1, dh = -1;
+    f0["data_source"] >> source;
+    f0["pixel_format"] >> format;
+    f0["packing"] >> packing;
+    f0["valid_bit_alignment"] >> alignment;
+    f0["declared_byte_order"] >> order;
+    f0["valid_bits"] >> validBits;
+    f0["display_image"]["width"] >> dw;
+    f0["display_image"]["height"] >> dh;
+
+    EXPECT_EQ(source, "image") << "没有原始载荷 ⇒ 如实标注 image";
+    EXPECT_EQ(format, "BGR8")
+        << "元数据的格式取自 `raw` 的默认值（Mono8）而不是实际写出的图";
+    EXPECT_EQ(validBits, 8);
+    EXPECT_EQ(packing, "Unpacked");
+    EXPECT_EQ(alignment, "LsbZeroPadded");
+    EXPECT_EQ(order, "LittleEndian");
+    EXPECT_EQ(dw, 6);
+    EXPECT_EQ(dh, 4);
+
+    // ⚠ 回落路径**不得**写 `raw_image`：那份文件就是显示图，
+    //   写出这个键会让人以为存在一份原始载荷（本包没有）。
+    EXPECT_TRUE(f0["raw_image"].empty())
+        << "回落路径写出了 raw_image —— 本包没有原始载荷";
+
+    // 元数据与文件**同源**的最后一道：按元数据算出的长度就是文件长度。
+    const long expected = 6L * 4L * 3L;   // 宽 × 高 × 3 通道（BGR8 的布局）
+    EXPECT_EQ(fileSize(joinPath(dir, "cam25.raw")), expected)
+        << "按元数据（BGR8、6×4）算出的长度与文件不符 —— 那是元数据在描述"
+           "另一份文件";
 }
 
 // ===========================================================================

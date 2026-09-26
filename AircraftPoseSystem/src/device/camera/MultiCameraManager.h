@@ -46,6 +46,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 
 #include "data/CameraChannel.h"
 #include "data/CaptureRound.h"
@@ -110,6 +111,24 @@ public:
     /// ⚠ 生产与测试**各自只用一种来源**，不得在同一段逻辑里混用：
     /// 控制器、管理器、测试共用同一个时间域。
     void setClock(std::function<uint64_t()> clock);
+
+    /// 注入**采集诊断**的出口（默认空 ⇒ 什么都不做）。
+    ///
+    /// ⚠ 为什么是注入而不是本类直接写日志：`src/device/` 全树**不包含**
+    /// `Logger.h`（ENG-01 §17：device 不依赖 infrastructure），而本类
+    /// 恰恰是**唯一**掌握"这一路取帧现场"的地方（`GrabResult::diagnosis`、
+    /// 触发读回、长度不符的具体数值）。若不给出出口，这些现场就只剩
+    /// "留在后端内部、管理器从不读"这一条路 —— 于是离线排查看不到
+    /// 任何可核对的数字。注入把"记录"这件事交给上层（app 层接到
+    /// `Logger::warn("device", …)`），分层不变。
+    ///
+    /// ⚠ 形状照抄 `setClock`（本仓唯一的注入先例）。
+    ///
+    /// ⚠ 输出**只针对需要记录的事件**（该路 `status != Ok` 或本次诊断
+    /// 非空时才输出）：全部正常的一轮**不产生任何输出** ——
+    /// 逐路写 WARN 会让日志被正常帧淹没，而"异常才有行"正是它能被
+    /// 当成信号的前提。
+    void setDiagnosticSink(std::function<void(const std::string&)> sink);
 
     /// 设置取帧预算（由装配点从 `MeasurementConfig` 注入）。
     ///
@@ -195,6 +214,12 @@ private:
     Channel&       channelOf(data::CameraRole role);
     const Channel& channelOf(data::CameraRole role) const;
 
+    /// 把一条**本轮采集诊断**交给出口（未注入时为 no-op）。
+    ///
+    /// ⚠ 单一出口：本类写诊断**只经本方法**，使"设备层不直接持有日志"
+    /// 这条分层约束在一处可核。
+    void emitDiagnostic(const std::string& text);
+
     /// 当前时间（ns），来自 `clock_`。
     ///
     /// ⚠ 全类**只经本方法**读时间，且**不缓存**任何时刻：
@@ -268,6 +293,11 @@ private:
     /// 当前时间的来源（注入）。默认单调钟，测试注入假钟。
     /// 只读不改：本成员**不缓存任何期限**（期限只从 capture() 的形参来）。
     std::function<uint64_t()> clock_;
+
+    /// 采集诊断的出口（注入）。默认空 ⇒ no-op。
+    /// ⚠ 本类**不缓存诊断文本**：它表达的是"刚刚发生了什么"，
+    /// 缓存会让下一次读取拿到一条已经不成立的现场描述。
+    std::function<void(const std::string&)> diagnosticSink_;
 
     /// 单次取帧上限（ms）。默认 100 —— 与 MeasurementConfig 的默认值一致，
     /// 使未显式注入的既有调用方行为不变。

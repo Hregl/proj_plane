@@ -49,6 +49,7 @@
 // ============================================================================
 
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -213,6 +214,28 @@ public:
     std::shared_ptr<device::ICameraBackend> backend50;
     std::shared_ptr<device::ICameraBackend> backend100;
     std::unique_ptr<device::MultiCameraManager> cameras;
+
+    /// 装配用后端工厂（**测试注入槽**，011-A1 九项缺口 §1 的裁决）。
+    ///
+    /// 签名：`(配置, 错误输出) → 后端`；返回空即**该路装配失败**，错误文本
+    /// 由第二参数带出（与内置 `makeBackend` 完全同形，故装配层不必区分
+    /// 两种来源）。
+    ///
+    /// ⚠ 为空 ⇒ 走 `SystemInitializer` 的内置装配（`virtual` → 虚拟后端，
+    ///   `imv` → 真实后端）。**生产路径恒为空** —— 它不是配置项，没有
+    ///   配置文件键，只能由进程内的调用方（测试）在 `initialize()` 之前设置。
+    ///
+    /// ⚠ **一旦设置，返回空就到此为止：不得回落内置工厂。** 理由：本槽的
+    ///   全部用途是"把某一路换成可观测的替身"，而静默换回真实实现会让
+    ///   测试断言的对象与实际跑的对象不是同一个 —— 那种失败比直接失败
+    ///   危险得多（测试会在**另一条**路径上通过，然后被当成证据）。
+    ///
+    /// ⚠ 这是 **app 内部装配能力**，**不增加设备 ICD 接口**：`ICameraBackend`
+    ///   的签名、`IMultiCameraManager` 的方法面都不因它而变；它只决定
+    ///   "装配点用谁去造后端"。
+    std::function<std::shared_ptr<device::ICameraBackend>(
+        const data::CameraConfig&, std::string& error)>
+        backendFactory;
 
     /// 5. 触发与转台（M1 阶段一律虚拟后端，见 11.md §六的 mock 清单）。
     std::unique_ptr<device::VirtualTriggerController> trigger;
