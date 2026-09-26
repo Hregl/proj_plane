@@ -59,11 +59,14 @@
 各模块目录为空时构建脚本会打印"暂无源文件，跳过生成"，这是设计行为而非故障
 ——见 §4。
 
-> **当前测试基线（2026-09-24，R02 / R04 / R05 / R06 收尾批后）**：
-> **11 个套件 250 个用例，0 失败断言 / 0 异常** —— `flowtest` 37 · `RecorderPackageTest` 7 ·
+> **当前测试基线（2026-09-26，CAM25 接入与数据契约批后）**：
+> **11 个套件 310 个用例，0 失败断言 / 0 异常** —— `flowtest` 41 · `RecorderPackageTest` 12 ·
 > `RecorderAdapterTest` 7 · `StateMachineTest` 27 · `AlgorithmStageTest` 23 · `PipelineTest` 28 ·
-> `DeviceLayerTest` 21 · `OpticalLayerTest` 38 · `PreviewLayerTest` 39 · `AlignmentControllerTest` 21 ·
-> `sysinittest` 2。
+> `DeviceLayerTest` 62 · `OpticalLayerTest` 38 · `PreviewLayerTest` 40 · `AlignmentControllerTest` 21 ·
+> `sysinittest` 11。
+> ⚠ 上一条基线（2026-09-24）记的是 **11 套件 / 250 用例**；本批新增与迁移共 +60
+> （`flowtest` +4、`RecorderPackageTest` +5、`DeviceLayerTest` +41、`PreviewLayerTest` +1、
+> `sysinittest` +9），全部为**新增或迁移的用例**，没有把既有用例删掉凑数。
 > 上表按**阶段**记录的是各阶段当时的数字（application 67 / algorithm 45 等），
 > 两者不矛盾：阶段数字是"那一阶段验证了什么"，此处是"当前全部用例的总数"。
 > 其中 `RecorderPackageTest` 是 C-02 Step 5 新建的套件（结果包落盘的**解析级**验证，
@@ -76,12 +79,12 @@
 > 把**真实 `SystemInitializer.cpp`** 编进目标、真实装配、**零桩**，用真实单调时钟逐拍驱动，
 > 覆盖"按状态/分支的采集归属"与"ALIGN 越程 ⇒ 同拍 FAILED 的终态切换边界"（见 §6 第 92 行）。
 >
-> ⚠ **"250 个用例通过"的适用范围（2026-09-24 收尾批更正，与 §1 一致）**：
+> ⚠ **"310 个用例通过"的适用范围（2026-09-24 收尾批更正、2026-09-26 更新数字，与 §1 一致）**：
 > 数字与执行路径必须**分开记账**，一句话说"全部实跑通过"是过宽的：
 
 | 验证内容 | 实际执行路径 |
 |---|---|
-| 上表 11 套件 / 250 用例 | **GTest 垫片**（`GoogleTest` 未安装，见 §3.6；`/tmp/gtshim/build_tests.sh`） |
+| 上表 11 套件 / 310 用例 | **GTest 垫片**（`GoogleTest` 未安装，见 §3.6；`/tmp/gtshim/build_tests.sh`） |
 | 两条安装自检（`install_check` / `install_launch_check`） | **CTest**，真跑（干净前缀 + 四条启动判据，见 §4.6） |
 | 新增 `test_system_initializer` 的**原生 GoogleTest／CMake 目标** | **未验证** —— 缺 `GoogleTest` 时 `tests/CMakeLists.txt` 直接 `return()`，任何测试目标都不生成（与既有 10 个目标同命运） |
 
@@ -369,9 +372,16 @@ R02（2026-09-24 审查报告）发现全工程 `install(TARGETS ...)` 实体 **
      入口只证明"进入了该函数"）。它使验收口径从"进程活着"精确到
      **"初始化完成，事件循环至少完成了一次应用定时回调"**。持续响应与长期
      稳定性仍归后续测试（本批**不**扩到 8 小时框架）。
-   · **预览线程一并被验**：该回调走完意味着 `PreviewWorker` 已启动且未死锁，
-     进程能被 `timeout` 杀掉则说明它的析构**会 join**（实测：用例结束时
-     `ApplicationContext` 正常析构，进程不挂）。
+   · **不能由它推出的事**（2026-09-26 删去原第 4 条 bullet）：首拍标记
+     **不能**证明 `PreviewWorker` 这个**异步预览线程**已经处理并发布了图像
+     —— 该回调只说明"初始化完成 + 事件循环至少完成一次应用定时回调"这
+     一条因果链，预览线程的推进不在其中。`timeout` 发出的是**信号**，
+     它不保证执行 C++ 析构函数，故也不能据此断言"预览线程的析构会 join"
+     （这正是上一版那条 bullet 的两处越界，都已删）。
+   · 可以够得着的两条**各自表述**，不再合并成一条更强的结论：
+     ① 安装自检证明的是**初始化完成 + 事件循环至少完成一次应用定时回调**；
+     ② **测试用例正常退出**是该**测试路径**下析构收尾的证据（测试替身
+        路径，与安装自检不是同一条路径，不得互相代替）。
 
 ---
 
@@ -394,13 +404,43 @@ $ cmake ..
 |---|---|---|
 | Qt5 5.15.8 | ✅ | — |
 | OpenCV 4.6.0 | ✅ | — |
-| GoogleTest | ❌ 未安装 | `sudo apt install libgtest-dev`，装后重跑 `cmake ..` 即自动启用。⚠ 当前 250 个用例是**临时 GTest 垫片**下跑的，正式 GoogleTest／CTest 验证待完成（见 §1） |
+| GoogleTest | ❌ 未安装 | `sudo apt install libgtest-dev`，装后重跑 `cmake ..` 即自动启用。⚠ 当前 310 个用例是**临时 GTest 垫片**下跑的，正式 GoogleTest／CTest 验证待完成（见 §1） |
 | ImvSdk | ⚠ **已解包到工程开发目录**（`third_party/imvsdk/`），**查找、链接及版本调用通过**；**尚未完成实机采集验收** | 见 [核验报告](V2.1-011A0.1_ImvSDK环境核验报告.md)（§6.3 端到端探针）。实机采集属 **011-A1**；`VirtualCameraBackend` 仍是当前装配的实际件 |
 | TurntableSdk | ❌ 未安装 | ENG-08 §11：第一阶段不实现 Peko_D，属预期状态；真实转台受 PH-01 阶段归属待裁决约束 |
 
 **GoogleTest 不装则 1.md 第一阶段范围的 "✅ GoogleTest框架" 与 ENG-08 §5
 Sprint 1 的"测试框架"两项交付无法达成。** 该缺失不影响 `cmake`/`make` 通过
 （依赖查找刻意用 `QUIET`），但会在配置输出中显著警告，不静默降级。
+
+### 5.1 装配模式与新增的两个预算键（2026-09-26 批）
+
+**装配模式是显式的，不靠探测。** `config/camera.yaml` 每个通道新增 `backend:` 键：
+
+| `backend:` | 装配出的后端 | 说明 |
+|---|---|---|
+| `virtual` | `VirtualCameraBackend` | 无设备也能跑通全流程（当前开发机默认） |
+| `imv` | `ImvCameraBackend` | 真实 SDK 路径；**打不开 ⇒ 启动失败**，明确报告接入失败 |
+
+⚠ **缺 `backend:` 键 = 配置错误，启动失败** —— 刻意不设隐式默认，避免"检测到 SDK 就自动切换"
+这类不可见的行为变化；**也不得**在真实相机打开失败后静默换虚拟件。
+∴ 当前开发机上"有相机"与"用相机"是**两件事**，装配摘要行（启动即打印）会逐路写明
+**实际装配的后端类型**与设备回报的型号／序列号（见 `011-A1_...验收清单.md` §4）。
+
+**`measurement.yaml` 新增两个取帧预算键**（都在 `capture:` 段）：
+
+| 键 | 默认 | 含义 |
+|---|---|---|
+| `grab_timeout_ms` | `100` | **单次**取帧上限（后端传给 SDK 的 `IMV_GetFrame` 超时实参） |
+| `grab_group_budget_ns` | `3.0e8`（300 ms） | **一次 `capture()` 三路**的总预算 |
+
+实际等待时长取**三者最小**：`min(grab_timeout_ms, 组剩余 ms, 距本轮绝对期限的剩余 ms)`；
+距期限 **< 1 ms 时既不发软件触发令、也不取帧**（避免"发出了脉冲却收不回帧"），
+该路如实记 `Timeout`＋"预算耗尽"而不是伪装成设备错误。
+
+⚠ **时限余量是已知问题**：`capture_frame_count = 5` × `grab_timeout_ms = 100` × 3 路
+与 `capture_timeout_ns = 1.5e9` 的关系**零余量**（复制／格式转换／评分的耗时未计入）
+⇒ CAPTURE 在真实相机上**可能被时限截断**。这属时限体系的冻结值问题，
+登记在 [待裁决问题汇总.md](待裁决问题汇总.md) **Q-D2**，本批**不改**这些值，只把事实测出来。
 
 ---
 
@@ -410,17 +450,17 @@ Sprint 1 的"测试框架"两项交付无法达成。** 该缺失不影响 `cmak
 
 | 文档 | 管辖范围 |
 |---|---|
-| **ENG-01** | 工程目录结构（本仓库目录布局的权威） |
+| **ENG-01** | 工程目录结构（本仓库目录布局的权威）；V2.1，其 `RetryManager` 段有一处 `§7.x` 勘误标记 |
 | **ENG-02** | C++ 类与文件规划 |
 | **ENG-03** | CMake 规范（本仓库构建脚本的权威） |
-| **ENG-04** | 核心类设计 |
+| **ENG-04** | 核心类设计（V2.1，其 §10 有一处 `§7.x` 勘误标记） |
 | **ENG-06** | 测试工程设计 |
 | **ENG-08** | 第一阶段开发任务清单（Sprint 1~6） |
-| **ENG-09** | 类型与命名冻结表（**类型/命名/单位的唯一权威**） |
+| **ENG-09** | 类型与命名冻结表（**类型/命名/单位的唯一权威**）；当前版本 **V2.3（A1 数据契约版）**，新增 §5.28~§5.33 与附录 A/B |
 | **ENG-10** | 算法链接口与配置注入设计 |
-| **SYS-08 §7** | 重试 / 超时权威 |
+| ~~**SYS-08 §7**~~ | ⚠ **本行原写"重试 / 超时权威"，该依据 2026-09-26 核实为无效** —— SYS-08 V2.1 的 `# 7` 是 **TARGET_FOUND 状态**（§7.1 状态说明／§7.2 执行动作／§7.3 输出／§7.4 失败处理），`§7.5`／`§7.6`／`§7.7` **不存在**。重试／超时/降级的现行约定见下方**勘误块**与 [SYS-08-§7引用勘误.md](SYS-08-§7引用勘误.md) |
 | **SYS-15 §4** | 误差预算合成规则权威 |
-| **SYS-04** | 接口控制文件 ICD（接口权威） |
+| **SYS-04** | 接口控制文件 ICD（接口权威）；当前版本 **V2.4（取帧契约与诊断出口版）** |
 | **SYS-01 §24** | **软件生命周期阶段**与逐阶段完成判据（阶段权威） |
 | **SYS-02 §5** | **各阶段的需求范围**与虚拟 / 真实件构成（阶段范围权威） |
 | **SYS-18 §3** | **各阶段部署形态及相应约束**（部署形态权威） |
@@ -429,6 +469,25 @@ Sprint 1 的"测试框架"两项交付无法达成。** 该缺失不影响 `cmak
 > `SYS-02 §5` 回答"**该阶段需要什么**"，`SYS-18 §3` 回答"**该阶段如何部署**"。
 > 三者合起来才是对"当前该做什么"的完整回答；单独引任何一条都会缺一角
 > （三个入口的互相冲突另见 [待裁决问题汇总.md](待裁决问题汇总.md) PH-01）。
+
+> ### ⚠ 勘误块：SYS-08 `§7.x` 为悬空／撞号引用（2026-09-26 复核）
+>
+> **本 README 全篇（以及本仓库 `src/`／`tests/` 的注释）长期引用的 `SYS-08 §7.1`～`§7.7`，经核实全部无效**：
+>
+> - `§7.1`／`§7.2`／`§7.3`／`§7.4` —— **节号存在但内容是别的**（`# 7` 是 TARGET_FOUND 状态：
+>   状态说明／执行动作／输出／失败处理），本仓库引用的"三级超时／失败三分类／次数表／回退预算"
+>   与其**毫无关系**（**节号碰撞**）；
+> - `§7.5`（硬件降级）／`§7.6`（`RetryManager` 接口）／`§7.7`（恢复路径汇总）—— **节根本不存在**
+>   （SYS-08 V2.1 只到 `# 22`，每个 `# N` 最多到 `.4`）；
+> - 另：`# 17 异常处理设计`（§17.1 相机异常）原文是"**断连／无帧／超时 ⇒ 进入 FAILED**"，
+>   与本仓库现行的"2 路可用 ⇒ 降级继续"**正面冲突**。
+>
+> **处置**：不裁定策略（待裁决 **Q-D1**／**Q-D2**），但**让每个引用可见地失效** ——
+> 正文规范性引用处带 `〔引用无效·依据待裁决·见 Q-D2〕`，含描述性引用的源码文件各加一行文件头勘误块。
+> 逐条登记、四类处置与实测分布见 **[SYS-08-§7引用勘误.md](SYS-08-§7引用勘误.md)**。
+>
+> ⚠ **引用本文档 §6 的任何一行时**：那些"依据 SYS-08 §7.x"的处置**仍然有效**（它们是已实施的工程决定，
+> 有对应代码与测试），但**其"冻结依据"是空的** —— 不得据其引用反推"冻结文档里规定过"。
 
 ### 偏离登记
 
@@ -468,12 +527,12 @@ Sprint 1 的"测试框架"两项交付无法达成。** 该缺失不影响 `cmak
 | 14 | 6.md §五：队列容量由调用方给定 | 构造时夹取到 **[3, 5]** 并置 `clamped()` 供上层记录 | SYS-09 §13.1 冻结容量 3~5。容量 1 会让丢帧率随 UI 刷新率上升，容量 100 会让"实时预览"延迟到秒级——两种错配都不报错，只是名不副实 |
 | 15 | 7.md：`MeasurementController::run()` 用 `while (running_)` 阻塞循环 | 改为**事件驱动** `bool tick(uint64_t nowNs)`，由调用方（009 阶段的 QTimer）驱动 | SYS-08 §9 把状态机放在 Application 线程，而 ENG-03 §12.6 冻结 application **不链接 Qt**——阻塞循环跑在哪个线程都会冻结 UI 60 s；且 `while` + 普通 `bool running_` 是数据竞争（SYS-09 §9 禁止）。§7.6 约束 3 本就要求"每次事件循环检查 `deadlineExceeded()`"，即事件驱动是该节的设计意图 |
 | 16 | 7.md：`tick()` 自行读时钟 | `tick(nowNs)` / `startMeasurement(nowNs)` 由调用方注入时刻 | 没有注入就没有 SYS-08 §10 要的收敛性测试："T_task = 60 s ±1 s 内终止"在真实时钟下只能靠睡眠等待，而注入后可在毫秒内**精确**判定（见 tests/integration 的 60 s 用例）。§10 原文只要求"`T_task` 必须可注入"，时刻注入是同一意图的延伸 |
-| 17 | 7.md：`MeasurementState state()` | `data::MeasurementState state() const` | 仅加 `const`。全部冻结调用点仍编译通过（§7.6 的查询族本就都是 const），且使"从 const 控制器读状态"成为可能 |
+| 17 | 7.md：`MeasurementState state()` | `data::MeasurementState state() const` | 仅加 `const`。全部冻结调用点仍编译通过（§7.6〔引用无效·依据待裁决·见 Q-D2〕 的查询族本就都是 const），且使"从 const 控制器读状态"成为可能 |
 | 18 | `MeasurementController.h` 的公开面 | 新增 `IRecorderSink` 抽象（`bool save(const MeasurementTask&)`）与 `notices()` | SYS-04 §265 要求 `MeasurementController → MeasurementTask（值传递） → RecorderWorker`，而 RecorderWorker 属 infrastructure（009 阶段），application 不得依赖它（ENG-01 §17）。以最小抽象反向注入是唯一不破坏依赖图的接法；`notices()` 承载"降级/限位未生效/未挂记录器"等**必须可见**的既成事实（§7.5 要求降级在 UI 可见） |
 | 19 | SYS-08 §5.26 `MeasurementTask` 无 `degraded` / `cameras_available` 字段 | **`MeasurementTask` 仍按冻结定义不改**；两个字段改由 **`MeasurementRecord`（data 层，C-002 新建）** 承载，测量结束时**取值冻结**，`result.json` 由 Recorder 从 `record.degraded` / `record.camerasAvailable` 读出 | §7.5 要求 result.json 记录 `degraded=true` 与 `cameras_available`，但 ENG-09 §5.26 / SYS-05 §12 冻结的结构体里没有对应字段。**2026-09-23 裁决修正了原处置**：原先"由 Recorder 落盘时去问控制器"**不成立** —— 控制器持有的是**瞬态**，任务结束后 `degraded()` 反映的是"此刻"而非"这次测量当时"，若期间发生过任何一次降级变化，写进包里的就是错的值**且不报错**。裁定"这两个字段不是状态机状态，而是**本次测量事实**"，与 `taskId` 同级，故进 `MeasurementRecord`（改 data 层结构已走 C-002 裁决，未动 `MeasurementTask`）。见 [C-02 §12.1](V2.1-C02_实施设计说明.md) |
-| 20 | SYS-08 §7.5："2 路降级" 的可用相机数来源 | 由同步帧中**图像是否为空**判定，不经 `IMultiCameraManager` 查询 | 冻结的 `IMultiCameraManager` 无可用性查询方法，而 `MultiCameraFrame` 的三路 `ImageFrame` 天然携带"这一路是否取到图"。用空图表达"不可用"不新增接口，也与 SYS-08 §7.5"禁用故障相机"的语义一致 |
-| 21 | SYS-08 §7.3 / §7.4 的"取先到者" | 保留原样，但实测确认 **9002 在 §10 的两个用例中均不可达**（先到者恒为某个状态的次数上限） | §7.3 的次数上限、§7.4 的双预算、§7.6 约束 2（"**所有状态进入时**必须调用 `beginAttempt()`"）三条同时生效时，§7.4 的边预算几乎总被更早触发。逐 tick 追踪结果见 `tests/integration/MeasurementFlowTest.cpp` 用例 3 / 用例 4 的注释。**这不是实现取舍**：本仓库严格实现了 §7.6 约束 2。需要一条裁决指明 9002 何时才应可观测（或调整 §10 用例 3 的期望码）。实测可到达 9002 的唯一路径是 `CAPTURE → MEASURE_SELECT` 边（CAPTURE 是唯一上限 > 2 的回退起点），已由 `tests/unit/StateMachineTest.cpp` 覆盖 |
-| 22 | SYS-08 §5.3 / §7.7 未给 `TARGET_FOUND` 失败路径 | 该状态失败**就地 FAILED**（码 0，消息指明状态），不设回退边 | §7.7 是无恢复行的状态即无经批准的恢复动作。曾实现"回退至 SEARCH"，但 §7.3 给 `TARGET_FOUND` 的上限 1 与 §7.6 约束 2/5 叠加后，该状态在一生中只能被进入一次——回退到 SEARCH 会使唯一前进边被永久拒绝，任务空转到 T_task 并报出**指向错误方向**的 9001。需要一条裁决：§7.3 的"上限 1"是否只约束**状态内重试**而不约束回退后的再次进入 |
+| 20 | SYS-08 §7.5："2 路降级" 的可用相机数来源 | 由同步帧中**图像是否为空**判定，不经 `IMultiCameraManager` 查询 | 冻结的 `IMultiCameraManager` 无可用性查询方法，而 `MultiCameraFrame` 的三路 `ImageFrame` 天然携带"这一路是否取到图"。用空图表达"不可用"不新增接口，也与 SYS-08 §7.5〔引用无效·依据待裁决·见 Q-D2〕"禁用故障相机"的语义一致 |
+| 21 | SYS-08 §7.3 / §7.4 的"取先到者" | 保留原样，但实测确认 **9002 在 §10 的两个用例中均不可达**（先到者恒为某个状态的次数上限） | §7.3 的次数上限、§7.4 的双预算、§7.6 约束 2（"**所有状态进入时**必须调用 `beginAttempt()`"）三条同时生效时，§7.4 的边预算几乎总被更早触发。逐 tick 追踪结果见 `tests/integration/MeasurementFlowTest.cpp` 用例 3 / 用例 4 的注释。**这不是实现取舍**：本仓库严格实现了 §7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 2。需要一条裁决指明 9002 何时才应可观测（或调整 §10 用例 3 的期望码）。实测可到达 9002 的唯一路径是 `CAPTURE → MEASURE_SELECT` 边（CAPTURE 是唯一上限 > 2 的回退起点），已由 `tests/unit/StateMachineTest.cpp` 覆盖 |
+| 22 | SYS-08 §5.3 / §7.7 未给 `TARGET_FOUND` 失败路径 | 该状态失败**就地 FAILED**（码 0，消息指明状态），不设回退边 | §7.7 是无恢复行的状态即无经批准的恢复动作。曾实现"回退至 SEARCH"，但 §7.3 给 `TARGET_FOUND` 的上限 1 与 §7.6 约束 2/5 叠加后，该状态在一生中只能被进入一次——回退到 SEARCH 会使唯一前进边被永久拒绝，任务空转到 T_task 并报出**指向错误方向**的 9001。需要一条裁决：§7.3〔引用无效·依据待裁决·见 Q-D2〕 的"上限 1"是否只约束**状态内重试**而不约束回退后的再次进入 |
 | 23 | SYS-08 §7.3 的"不设上限" | 哨兵值取 **-1**，不用 0 | 0 会让配置里任何一处把上限误写成 0 变为**无限重试**，只在 T_task 到点时以无指向性的 9001 收场；-1 使配置中的 0 恢复字面语义"一次都不放行"，与 §7.4 对预算 0 的处置（首次回退即拒绝）一致 |
 | 24 | SYS-10 §8：`Δθ = arctan(Δpixel / f)` 的前置校验 | 增加两条：靶面尺寸必须已知；`fx > imageWidth/2`（视场 < 90°） | `data::CameraCalibration` 的默认构造给出 3x3 单位阵 + 尺寸 0，即 **fx = 1**。fx=1 代入 §8 公式得 arctan(200/1) ≈ 89.68°——一个"算得出来"、看上去合法、转台会真的照做的大角度命令。未标定时静默下发 90° 指令是本能导致机械事故的路径，故宁可拒绝并报警（码 0 + 消息）。判据取几何本身而非经验阈值 |
 | 25 | SYS-08 §5.7："多帧采集（5~10 frames），**选择最佳帧**" | `selectBestFrame()` **确实执行了评分**，但其结果 `bestFrameIndex_` **只写不读**；PnP 的实际输入是 `lastFrame_`（**最后一次**采集） | 实测：`MeasurementController.cpp:735` 评分 → `:752` 写入成员 → `:790` 用的是 `lastFrame_`；全仓库 `grep bestFrameIndex_` 仅"清零 + 赋值"两处。即**"选择"没有作用到结果上**：M1 的姿态来自第 5 帧，而 `lastQuality_` 描述的是**评分最高的那一帧**——两者不同帧时**记录与被解算的图像对不上，且不报错**。**✅ 已裁决并修复**（2026-09-23）：见 [V2.1-C02_实施设计说明.md](V2.1-C02_实施设计说明.md) §10.1（D-C02-1，已实施并做变异验证）。**本行登记的行为修正是：PnP 输入由"第 5 帧"变为"评分最佳帧"，姿态数值随之变化，状态机轨迹不变**；C-02 顺带修掉同一链上的 D-C02-2（只存选定焦段一路，破坏 raw 与 result.json 的同一次测量追溯）、D-C02-3（空帧跳过导致索引错位）、D-C02-4（成员注释与实现不符）、D-C02-5（`selectedScore` 算完即丢），并新增 D-C02-6（三路 `frameId` 一致性判据，**真实硬件前提见 C-02 §11.4，需在 011-A1 前裁决**） |
@@ -512,7 +571,9 @@ V2.3 解决的是这个根问题 —— **从"设计预期接口"回归到"代�
   （`CalibrationPackage` / `CameraRigTransform` / `RigShipTransform` /
   `ErrorCode` / `ScaleEstimate`），3 个虚构接口类名去 `I` 前缀收敛为具体类名
   （`ICalibrationManager` → `CalibrationManager` 等）；
-* **对齐真实数据结构** —— `ImageFrame` 删 `gain`/`valid`、
+* **对齐真实数据结构** —— `ImageFrame` 删 `gain`/`valid`（⚠ V2.4 起 `ImageFrame`
+  **重新增了三个字段**：`raw`/`captureFormat`/`rawPolicy` —— 与本行不矛盾：
+  本行删的是"代码里没有的 `gain`/`valid`"，V2.4 加的是"代码里真实存在的新字段"）、
   `MeasurementRecord` 由 6 概念补为 14 字段、
   `MeasurementController` 公开面补全。
 
@@ -525,6 +586,12 @@ V2.3 解决的是这个根问题 —— **从"设计预期接口"回归到"代�
 | `项目文档/系统设计/archive/SYS-04_接口控制文件ICD_V2.2_多相机闭环测量版.md` | 已归档，保留审计链，**不再作为接口依据** |
 
 > ⚠ 归档而非删除：项目当前无版本管理仓库，直接删除冻结文档会同时失去历史与审计链。
+
+> ⚠ **本节已被后续批次取代**（2026-09-26 补）：SYS-04 已升版至
+> **`项目文档/系统设计/SYS-04_接口控制文件ICD_V2.4_取帧契约与诊断出口版.md`** ——
+> **它才是当前的接口权威**，V2.3 已 `cp -p` 归档进同级 `archive/`。
+> 上表"V2.3 为唯一有效版本"的表述是**该批次的当时状态**，此处**保留原样不追改**
+> （历史引用不全局替换编号），只加本行指向现行版本。
 
 **未随本次修正关闭的两项**（见 V2.3 §26）：
 
@@ -689,7 +756,7 @@ SYS-02 阶段需求 → SYS-18 部署阶段 → 011-A1 真实相机」的顺序�
 | 81 | 未规定标定装载策略与相机焦距的配置键 | 新增 `optical_rig.calibration_mode`（`file` / `synthetic`）与通道级 `focal_length`，并在 `ConfigManager.h` 注明"009 引入的装载策略" | 两者都不在 `OpticalRigConfig` / `CameraChannel` 的冻结字段表中。`calibration_mode` 是 M1/M2 打通链路所必需（无真实标定文件），且合成模式会**打 WARN 说明结果无物理意义**。已登记为 **Q-B9** |
 | 82 | SYS-04 §265 要求 `MeasurementController → MeasurementTask → RecorderWorker` 落盘 | 实现 `infrastructure::Recorder` + `app::RecorderSinkAdapter` 桥接 | `Recorder` 的归属被 ENG-03 §12.7 冻结在 infrastructure，而 `IRecorderSink` 定义在 application/`MeasurementController.h`，两者方向相反（ENG-01 §17/§18）。**实测确认 `MeasurementTask` 的信息量不足以产出 SYS-04 §6.4 要求的结果包**（无原图、无转台角度、无 `degraded`），已登记为 **Q-B2**（高） |
 | 83 | 10.md §十 的场景未提及 `FileMatchStatsStore` 的写入 | 实现 `FileMatchStatsStore` 并注入 pipeline，但**没有任何调用点写 `record()`** | C-21 把接口下沉到 data、007 预留了 `IMatchStatsStore*` 注入，009 的职责是"让它真正生效" —— 实测发现只完成了"读"的一半：`record()` **零调用者**，`successRate()` 永远返回冷启动先验 0.5，**ENG-10 §4.1 的整套历史统计机制实际未生效**，而"冷启动"是**合法状态**故不会有任何告警暴露它。已登记为 **Q-B3**（高） |
-| 84 | 10.md §八 的 `main.cpp` 未规定配置目录、界面刷新节拍与退出顺序 | `argv[1]` 指定配置目录（默认 `config`）；16 ms `QTimer` 同时驱动 `tick()` 与界面刷新；`ctx`/`init`/`window` 全部用**栈对象** | 16 ms 的取值由 SYS-08 §7.6 约束 3 反推（须远小于最短状态超时 100 ms，取 6 倍余量）。栈对象是为了让析构顺序由语言保证：`ctx` 若为堆对象则先于 `window` 销毁，而 window 的定时器仍在访问已销毁的 `preview` —— 表现为**关闭程序时偶发段错误** |
+| 84 | 10.md §八 的 `main.cpp` 未规定配置目录、界面刷新节拍与退出顺序 | `argv[1]` 指定配置目录（默认 `config`）；16 ms `QTimer` 同时驱动 `tick()` 与界面刷新；`ctx`/`init`/`window` 全部用**栈对象** | 16 ms 的取值由 SYS-08 §7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 3 反推（须远小于最短状态超时 100 ms，取 6 倍余量）。栈对象是为了让析构顺序由语言保证：`ctx` 若为堆对象则先于 `window` 销毁，而 window 的定时器仍在访问已销毁的 `preview` —— 表现为**关闭程序时偶发段错误** |
 | 85 | 10.md 各节的提交要求 | **未提交**（本目录不是 git 仓库） | 同第 45/69 行：001~009 各阶段均未 `git init` / 提交，用户未要求过提交 |
 
 ### 010 第一次完整编译运行闭环（11.md）
@@ -713,7 +780,7 @@ SYS-02 阶段需求 → SYS-18 部署阶段 → 011-A1 真实相机」的顺序�
    约束 2（"**所有状态进入时**必须调用 `beginAttempt()`"）+ 约束 5（"计数器
    **不因进入新状态而清零**"）四条同时生效时，§7.4 的边预算恒被更早触发，
    于是 **§10 用例 3 / 用例 4 期望的 9002 实际不可达**。本仓库严格实现了
-   §7.6 约束 2（它是四条里最具体的一条），故以状态次数上限收场（用例 3
+   §7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 2（它是四条里最具体的一条），故以状态次数上限收场（用例 3
    报 MEASURE_SELECT 用尽、用例 4 报错误方向的 9001）。逐 tick 追踪见
    `tests/integration/MeasurementFlowTest.cpp` 用例 3 / 用例 4 的注释。
    可到达 9002 的唯一路径是 `CAPTURE → MEASURE_SELECT` 边（CAPTURE 是唯一
@@ -728,10 +795,10 @@ SYS-02 阶段需求 → SYS-18 部署阶段 → 011-A1 真实相机」的顺序�
 5. SYS-08 §5.3 未列 `TARGET_FOUND` 的失败行，§7.7 的恢复表也没有该状态，
    而 §7.3 又把它的次数上限定为 1。三条叠加的结果是：该状态一旦失败，
    **既无经批准的恢复动作，也无重新进入的可能**。本仓库取"就地 FAILED"
-   （上表第 22 行）。**需要一条裁决**：§7.3 的"上限 1"是否只约束状态内
+   （上表第 22 行）。**需要一条裁决**：§7.3〔引用无效·依据待裁决·见 Q-D2〕 的"上限 1"是否只约束状态内
    重试，而不约束回退后再进入。
 6. ENG-09 §5.26 / SYS-05 §12 的 `MeasurementTask` 没有 `degraded` 与
-   `cameras_available` 字段，而 SYS-08 §7.5 要求 result.json 记录这两项。
+   `cameras_available` 字段，而 SYS-08 §7.5〔引用无效·依据待裁决·见 Q-D2〕 要求 result.json 记录这两项。
    本仓库不改 data 层结构（需走 ENG-09 §8 流程），改由 Recorder 从控制器
    读取（上表第 19 行）。**建议**在下次 ENG-09 修订时为 `MeasurementTask`
    补两个字段，或在 SYS-05 §12 明确它们属于 result.json 的**外层**字段。
@@ -787,7 +854,7 @@ SYS-02 阶段需求 → SYS-18 部署阶段 → 011-A1 真实相机」的顺序�
 - `data` 必须链接 OpenCV（上表第 4 行）。建议在 ENG-03 §12.1 补一行
   OpenCV，使其与 §12.2~§12.8 的写法一致；在修订落地前，`libdata` 的
   PUBLIC 链接就是事实基线。
-- 冻结的 `IMultiCameraManager` 没有可用性查询方法，而 SYS-08 §7.5 要求
+- 冻结的 `IMultiCameraManager` 没有可用性查询方法，而 SYS-08 §7.5〔引用无效·依据待裁决·见 Q-D2〕 要求
   统计可用相机数。本仓库以"同步帧中该路图像是否为空"判定（上表第 20 行），
   未新增接口。若将来 §7.5 的降级判据需要更细的区分（例如"相机在线但
   曝光失败"与"相机离线"），需要在 SYS-04 补一个查询方法。
@@ -809,7 +876,7 @@ R03 / R08 / R09 / R10 / R11 与 A1 契约、验收清单补正留待后续阶段
 |---|---|---|---|
 | 91 | **R02**：全工程 `install(TARGETS ...)` 实体 **0 处**（7 处 `install(` 全是 `install(DIRECTORY`），故 `deploy/` 只有空的 config/models/calibration，**没有 bin/、没有 lib/**；而 `install_check` 只跑 `cmake --install`、不校验任何产物，所以该缺陷不被任何检查覆盖 | `install(TARGETS)` 写进 `src/CMakeLists.txt` 的 `aps_add_module_library()`（**10 个模块库**）与 `src/app/CMakeLists.txt`（可执行文件）；并在**同文件、紧随其后**加 `install(CODE ...)` 断言（bin/ 有可执行文件且可执行、lib/ 下每个模块库都在）；新增 `install_launch_check`。约定写进 §4.6。**裁决条文：C-014** | 见 §4.6 的三方分工与两个陷阱。**分工修正**：`cmake/InstallRules.cmake` 原文写"各模块 → 各自的 `install(TARGETS ...)`"，描述的是一个**从未实现的约定** —— 约定写了不等于做了，故该段现在只描述代码里**实际存在**的分工。落点：`ctest -R 'install_check\|install_launch_check'`，自检打印 `…/lib 下 10 个模块库齐备` 与 `安装自检通过：…/bin/AircraftPoseSystem`；变异（注释掉 `src/app` 的 `install(TARGETS ...)`）后 `install_check` 必转红。**⚠ R04 收尾加强（2026-09-24 复审）**：`install_check` 先 `cmake -E rm -rf` 清空自检前缀再安装（"本次运行全新安装"），`install_launch_check` 判**四条**（124 + `启动完成` + 首拍标记 `APP_FIRST_TICK_COMPLETED` + 无 `启动失败`）并把日志留在 `${前缀}/launch_check.log`，失败即 `cat`。依据是一次**实测复现的假通过**：停用整段 R02 安装规则、保留陈旧前缀 ⇒ 两条自检仍全绿（0.01 s / 3.00 s），而全新安装根本没有主程序；加强后同一变异立即转红（退出码 127）。两条约定见 §4.6 第 3、4 条 |
 | 92 | **R04**：`MeasurementController` 持有 `preview_` 却**从未调用 `submitFrom()`**；生产代码里唯一的调用点在 `SystemInitializer::pumpIdlePreview()`，而它只在 IDLE/COMPLETE/FAILED 执行 ⇒ **测量期间画面空白**。（`SystemInitializer` 的注释声称"controller 每拍自己采集并提交预览"—— 该假设自写下来就从未实现） | 在 `acquire()` 内 `capture()` 成功之后、`updateDegradation()` **之前**投递预览，抽 `submitPreview()` 让"唯一投递点"成为一个可 grep 的符号 | **为什么在 `updateDegradation()` 之前**：降级越界会就地 FAILED，补帧若排在后面，**导致任务终止的那一帧永远到不了屏幕**，而那一刻画面正是唯一的现场证据。**⚠ 双重采集的判据已更正（R04 收尾，2026-09-24 复审），原论证作废**：本行原写"两个状态集**恰好互补**（12 = 3 + 9）⇒ 任一 tick 至多一次 `capture()`"，两处错 —— ① **前提不成立**：`stepCapture` 本来就一拍内连采 `captureFrameCount`（默认 5）帧，"至多一次 `capture()`"从来不是系统的不变量；② **推理越界**：控制器对空闲态早返回、app 只在空闲态补帧，这两条只能推出"空闲补帧不与活动态采集同拍"，**推不出**"活动态采集不可能当拍转入终态"—— 后者才是重复采集真正的入口。**真实可达路径**：ALIGN 的对准命令**越程**（`AlignmentController::calculate()` 在 `azimuth` 超出 `azimuthMax` 时置 `commandValid_ = false`、码 2002）⇒ `handleFailure(CAPABILITY)` ⇒ `makeFail` 不重试 ⇒ **同拍 FAILED**，而这一拍**已经采集成功**。故现行规则是两条：空闲与否按**推进后**状态判定（AUTO 映射必须跟上），但**本拍推进了状态就不补帧**（`!stateAdvanced`）—— 即"转入终态当拍不补帧，下一拍恢复"。**采集归属按状态与分支列账**（不再用状态集互补去推；实测值）：IDLE/COMPLETE/FAILED **1**（本拍未推进时）、SEARCH **1**、TARGET_FOUND **0**（复用 `lastFrame_`）、ALIGN **1**（等待到位/超时分支 0）、STABILIZE **1**（MOVING/超时分支 0）、MEASURE_SELECT **1**、CAPTURE **`captureFrameCount`**（默认 5）、POSE_SOLVE/VALIDATE/SAVE **0**。落点：原有 `R04_测量期间预览必须有生产者`（断言帧号**严格递增**、且提交的角色等于**当时**的显示源）、`R04_未注入预览时不崩`；**新增** `tests/integration/SystemInitializerTest.cpp`（**真实装配、零桩、真实单调时钟**，两个用例）—— 场景 A 逐状态核对上表的增量，场景 B 用 `ctx.turntable->setInitialAngles(azimuthMax, 0)` 与 CAM50 `setTargetPixelOffset(居中阈值 + 50 px)` 摆出越程，断言**终止当拍**三路增量 == 1 且 `idleFrames` 不变、**下一拍**三路 +1 且 `idleFrames` +1；撤掉 `!stateAdvanced` 后该拍增量变 2 ⇒ 用例转红（实测：5 条断言同时红，场景 A 的终态拍另红 1 条） |
-| 93 | **R05**：`stepValidate` 把 `validate()` 的 `false` 读成"验证过程失败" → `handleFailure` → **提前 return**，使 `validationResult_ = validation` 与 `strategy_.excludeCamera(...)` **两步都执行不到**。真实 `PoseValidator` 判不合格就返回 false ⇒ 生产路径必然踩中；而测试桩**恒 `return true`**，所以这条断点从未在任何测试里出现过 | 契约统一为 **`bool ≡ out.valid ≡ "是否通过全部判据"`**（不是"过程是否执行成功"）；加**对账分支**（返回值与 `out.valid` 不一致 = 违背契约 ⇒ **可见地 FAILED**，不静默按任一方继续）；`validationResult_ = validation` 提到整段**最前**；`IPosePipeline::validate` 补 `@return` 注释（该接口原本**没有任何** `@return`，是歧义的源头）；测试桩改为 `return out.valid` —— **必须与控制器同批落地**，否则旧桩会命中新对账分支。**裁决条文：C-013** | **对称性**：`solvePose` 的 `false` = 没算出结果，`validate` 的 `false` = 算出来了但不合格，两者语义不同，故各自写明。⚠ **实施中更正了设计稿的一处**：设计稿说"把 `validationResult_ = validation;` 提到**分支之前**"，照字面放在**对账分支之后**会在新的失败通路上**原样复现 R05 要修的缺陷**，故位置钉死为**整段最前**（详见 C-01 §C-013）。落点：`R05_验证契约被违背时必须可见失败且详情仍留存`（用**故意自相矛盾**的桩逼出对账分支，并内建因果对照 —— 撤掉那个谎之后必须走完 COMPLETE）、`用例3_回退预算_VALIDATE恒不通过时的有界性` 判据四（`valid == false` + `0.42 / 0.91 / 0.88` 三个**来自桩**的实测值，即"细节不再丢失"）。**⚠ R05 收尾（2026-09-24 复审）**：对账分支原实现走 `handleFailure(TRANSIENT, ...)`，那是**实现偏离了裁决** —— C-013 第 2 条原文是"控制器必须**可见地** FAILED"，而 VALIDATE 的 TRANSIENT 处置是**回退**，违约与失败之间隔着若干次重试与回退，期间状态机在用一份自相矛盾的实现继续跑（原用例用**持续违约**的桩，靠回退预算耗尽才失败，证明的是"迟早失败"而非"当次 FAILED"）。现改为新增私有 `failTerminal()`（= `recordFailureCause()` + `failWith()`），并在注释里写明为什么不套 §7.2 的三分类：那三类描述的是**设备与运行条件**，而契约违背是**实现缺陷**，重试只是再调一次同一个坏实现、回退则是用自相矛盾的实现跑完测量。用例相应改为**逐拍驱动**并断言违约那**一刻**即为 FAILED、`rollbackCount() == 0`；桩由"持续违约"改为**只违约一次**（回退语义下它会恢复并跑完 COMPLETE，故能区分"当次终止"与"迟早失败"）。变异（换回 `handleFailure(TRANSIENT)`）→ 3 条断言转红 |
+| 93 | **R05**：`stepValidate` 把 `validate()` 的 `false` 读成"验证过程失败" → `handleFailure` → **提前 return**，使 `validationResult_ = validation` 与 `strategy_.excludeCamera(...)` **两步都执行不到**。真实 `PoseValidator` 判不合格就返回 false ⇒ 生产路径必然踩中；而测试桩**恒 `return true`**，所以这条断点从未在任何测试里出现过 | 契约统一为 **`bool ≡ out.valid ≡ "是否通过全部判据"`**（不是"过程是否执行成功"）；加**对账分支**（返回值与 `out.valid` 不一致 = 违背契约 ⇒ **可见地 FAILED**，不静默按任一方继续）；`validationResult_ = validation` 提到整段**最前**；`IPosePipeline::validate` 补 `@return` 注释（该接口原本**没有任何** `@return`，是歧义的源头）；测试桩改为 `return out.valid` —— **必须与控制器同批落地**，否则旧桩会命中新对账分支。**裁决条文：C-013** | **对称性**：`solvePose` 的 `false` = 没算出结果，`validate` 的 `false` = 算出来了但不合格，两者语义不同，故各自写明。⚠ **实施中更正了设计稿的一处**：设计稿说"把 `validationResult_ = validation;` 提到**分支之前**"，照字面放在**对账分支之后**会在新的失败通路上**原样复现 R05 要修的缺陷**，故位置钉死为**整段最前**（详见 C-01 §C-013）。落点：`R05_验证契约被违背时必须可见失败且详情仍留存`（用**故意自相矛盾**的桩逼出对账分支，并内建因果对照 —— 撤掉那个谎之后必须走完 COMPLETE）、`用例3_回退预算_VALIDATE恒不通过时的有界性` 判据四（`valid == false` + `0.42 / 0.91 / 0.88` 三个**来自桩**的实测值，即"细节不再丢失"）。**⚠ R05 收尾（2026-09-24 复审）**：对账分支原实现走 `handleFailure(TRANSIENT, ...)`，那是**实现偏离了裁决** —— C-013 第 2 条原文是"控制器必须**可见地** FAILED"，而 VALIDATE 的 TRANSIENT 处置是**回退**，违约与失败之间隔着若干次重试与回退，期间状态机在用一份自相矛盾的实现继续跑（原用例用**持续违约**的桩，靠回退预算耗尽才失败，证明的是"迟早失败"而非"当次 FAILED"）。现改为新增私有 `failTerminal()`（= `recordFailureCause()` + `failWith()`），并在注释里写明为什么不套 §7.2〔引用无效·依据待裁决·见 Q-D2〕 的三分类：那三类描述的是**设备与运行条件**，而契约违背是**实现缺陷**，重试只是再调一次同一个坏实现、回退则是用自相矛盾的实现跑完测量。用例相应改为**逐拍驱动**并断言违约那**一刻**即为 FAILED、`rollbackCount() == 0`；桩由"持续违约"改为**只违约一次**（回退语义下它会恢复并跑完 COMPLETE，故能区分"当次终止"与"迟早失败"）。变异（换回 `handleFailure(TRANSIENT)`）→ 3 条断言转红 |
 | 94 | **R06**：`MeasurementController.h` 的成员 `selection_` **从未被赋真实值**，全文件只有 reset 置空与 `record.selectedScore = selection_.score` 两处引用；两处 `selectCamera()` 调用都写进**局部变量** ⇒ **"选了哪台"对、"得分"恒 0**，又一个"字段合法但语义不成立" | 抽 `adoptSelection()` 私有助手，把 `selectedCamera_` / `selection_` / `setAutoCamera()` 三件事**收口到一处**，两个调用点各换一行 | **为什么必须成对写回**：分开赋时将来任一处被单独改动，就会得到"新角色 + 旧得分"—— 两个值都合法、都不报错，正是 D-C02-5 换个位置复现。修复后可给出穷尽式论证：`selectedCamera_` 全仓只有 3 个赋值点。落点：`R06_记录里的选中得分必须来自选择结论`、`R06_换机路径的得分也必须写回`（后者覆盖失败包一侧；得分由测试**自己的桩**给出 ⇒ 输入侧预言机，读回实现成员无法伪装）。**⚠ R06 收尾（2026-09-24 复审）**：桩原先给**所有**通道同一个 `1.0`，故"新角色配旧得分"照样能过 —— 预言机分辨不出通道。现改为按通道取分（CAM25 = 0.31 / CAM50 = 0.72 / CAM100 = 0.90），并新增 `solveFailTimes`（前 N 次 `solvePose` 失败）以构造"首次 PnP 失败 → 换机后成功"这条路径，断言 `selectedCamera == CAM50` 且 `selectedScore == 0.72`（旧得分会是 0.31）；两条既有用例的期望值也改为 `scoreOf(record.selectedCamera)`（与角色交叉校验）。变异（换机处只写角色、不写 `selection_`，即 D-C02-5 的原形）→ 得分断言转红 |
 | 95 | **R07**：`σ_px / W` 是**比值**（两者同为 pixel）⇒ `predictedError` 的量纲是**弧度**，而注释与冻结文档都写"单位角分"，差 `180/π×60 ≈ 3437.7468` 倍。后果：`eRatio ≈ 0`、`eNorm ≈ 1`，E 分项**退化为常数**，通道排序被改变 | 补回换算因子（`kRadToArcmin`，含推导注释），使算式与**它自己那一页的表格**同量纲；冻结文档同步升版为 **ENG-09 V2.2 / ENG-10 V2.2**（旧版 `cp -p` 归档进 `archive/`，见下） | **是"把公式对齐到表格"，不是改表格** —— `ENG-10 §2.1` 的数值（W=1930→0.19、W=386→0.93 角分）自 V2.1 起一直是对的，错的是算式，**同页自相矛盾正是该缺陷的形态**。落点：`MeasurementSelector.EFollowsEng10Formula`（期望值取自 §2.1 表格，**不是**抄实现）、`PredictedErrorIsArcminNotRadians`（量纲回归，删掉换算因子即以 ≈3437.75 倍当场转红）。⚠ **本次修复只重建了单位一致性，不证明整个误差模型已通过实机标定** —— 见下方 Q-C5 |
 
@@ -1002,7 +1069,7 @@ C-001 / C-003 与 F 并行。
 ⚠ **本段于 2026-09-23 二次改写**：原先把 `010.5 CadLocatorBenchmark` 排在 011 之前
 （"评审要求插入，优先级已提高"）。**该排序已撤销** —— 评审认定那是
 **"设计验证过度"**，偏离了近期最有价值的工程目标。**注意这不是新增阶段，而是回到冻结顺序**：
-[ENG-08](项目文档/) **§6 Sprint 2 = 真实单相机 SDK 接入**，**§10 Sprint 6 = 算法链接入
+[ENG-08](../项目文档/软件工程设计/ENG-08_第一阶段开发任务清单_V2.1_多相机闭环测量版.md) **§6 Sprint 2 = 真实单相机 SDK 接入**，**§10 Sprint 6 = 算法链接入
 （才含 `CadStructureLocator` 可行性验证）** —— 冻结文档本就要求先接真实相机。
 010.5 的插入把它提到了 Sprint 2 之前，是**对冻结顺序的颠倒**。
 本计划的依据、现状盘点与验收判据见
