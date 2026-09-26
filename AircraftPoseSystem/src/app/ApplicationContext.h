@@ -48,6 +48,7 @@
 //    不认识这些类型就没有办法装配。其他任何模块这么做都会破坏 ENG-01 §18。
 // ============================================================================
 
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
@@ -144,8 +145,29 @@ private:
 class ApplicationContext
 {
 public:
-    ApplicationContext()  = default;
-    ~ApplicationContext() = default;
+    ApplicationContext() = default;
+
+    /// 关闭时**逐路归还设备资源**（011-A1，§3.4）。
+    ///
+    /// ⚠ 为什么 `= default` 不够：`unique_ptr`／`shared_ptr` 的析构只释放
+    ///    **内存**，对 SDK 侧的"相机还开着 / 还在取流"没有任何作用 ——
+    ///    `IMV_StopGrabbing` / `IMV_Close` / `IMV_DestroyHandle` 都不会被调用。
+    ///    后端自身的析构确实会兜底调一次 `close()`（幂等，见 ICameraBackend.h），
+    ///    但兜底是**防漏调**的保险，不能当成主路径：
+    ///    主路径必须是拥有者在关闭时显式停流、关设备，顺序才可读、结果才可记。
+    ///
+    /// ⚠ 顺序：先 `stop()`（停流）再 `close()`（关设备 + 销毁句柄）——
+    ///    反过来是向一个已销毁的句柄停流。三路**逆装配序**处理，
+    ///    与 `SystemInitializer::rollbackDevices()` 一致。
+    ///
+    /// ⚠ 这里**不**经 `MultiCameraManager`：加一层 `closeAll()` 转发会让
+    ///    "谁负责释放"更模糊，而本类已直接持有三个后端（§3.4 明确否掉了
+    ///    `closeAll()`）。`stopAll()` 的语义仍是"只停流、允许重复调用"，
+    ///    不因本析构而改变。
+    ~ApplicationContext()
+    {
+        closeBackends();
+    }
 
     ApplicationContext(const ApplicationContext&)            = delete;
     ApplicationContext& operator=(const ApplicationContext&) = delete;
@@ -261,6 +283,39 @@ public:
 
     /// 启动过程中的告警（不致命，但必须可见）。
     std::vector<std::string> warnings;
+
+private:
+    /// 逐路停流并关设备（析构调用，见上文析构的说明）。
+    ///
+    /// 幂等：`stop()`／`close()` 的契约各自保证"未 start／未 initialize／
+    /// 已 close 时调用无副作用"，故这里**不判状态**、直接调 ——
+    /// 判状态会让"到过哪一步"这个只有后端自己知道的事泄漏进装配层。
+    ///
+    /// ⚠ 关设备失败只写 stderr、**不外抛也不吞掉**：析构函数没有返回值，
+    ///    但它**有能力**把"资源没还回去"这条事实说出来。吞掉才是错的
+    ///    （§2.2 修正 4 的同一条理由：清理失败必须可见）。
+    void closeBackends()
+    {
+        const std::shared_ptr<device::ICameraBackend> order[] = {
+            backend100, backend50, backend25};
+
+        for (const std::shared_ptr<device::ICameraBackend>& b : order)
+        {
+            if (!b)
+            {
+                continue;
+            }
+            b->stop();
+            const data::OperationResult r = b->close();
+            if (!r.ok())
+            {
+                std::fprintf(stderr,
+                             "[WARN ] [app] 关闭相机后端失败：%s（码 %d）\n",
+                             data::opStatusName(r.status),
+                             r.sdkError ? r.sdkError->code : 0);
+            }
+        }
+    }
 };
 
 }  // namespace app

@@ -15,13 +15,28 @@
 //  2. **告警必须落到 warnings_ 与日志两处**，不得只在其中一处。
 //     只写日志的告警在窗口里看不见（操作者不会去翻日志）；
 //     只进界面warnings的告警在事后离线排查时找不到（现场只留日志文件）。
-//     静默的告警等于没有告警 —— 这是 SYS-08 §7.5"降级必须可见"的同一要求。
+//     静默的告警等于没有告警 —— 这是 SYS-08 §7.5〔引用无效·依据待裁决·见 Q-D2〕"降级必须可见"的同一要求。
 //
-//  3. **失败时的清理靠 unique_ptr**，不写手工回滚。
-//     本类不 `new` 任何东西（全部经 make_unique 存入 ctx_），因此
-//     `initialize()` 中途返回 false 时，已建成的对象由 ApplicationContext
-//     的析构统一收拾。手工回滚的代码在"第 7 步失败"这种路径上几乎不可能
-//     被测到，写出来只会是一段永远没运行过的代码。
+//  3. **失败时的清理分层**：内存靠 unique_ptr，**设备资源靠显式回滚**。
+//
+//     ⚠ 本约定在 011-A1 被**收窄**（原文为"失败时的清理靠 unique_ptr，
+//       不写手工回滚"，理由是"手工回滚的代码几乎不可能被测到"）。
+//       该理由对**内存**成立 —— 本类确实不 `new` 任何东西，全部经
+//       make_unique 存入 ctx_，`initialize()` 中途返回 false 时由
+//       ApplicationContext 的析构统一收拾。
+//       但它对**设备资源**不成立：`unique_ptr` 的析构**不会**替你调用
+//       `IMV_StopGrabbing` / `IMV_Close` / `IMV_DestroyHandle` ——
+//       真实后端持有的句柄与已建立的流是 SDK 侧的状态，
+//       不还回去就是"进程退了、相机还开着"。
+//       ∴ 启动被判失败时由 `rollbackDevices()` 逐路显式
+//       `stop()` → `close()`（逆序），而"这条路测不到"这件事由
+//       §4.4 的用例解决（替身记录底层 open/close 次数），
+//       不靠"不写它"来回避。
+//       内存那一半保持原样：仍然不写手工 free/delete。
+// ============================================================================
+
+// ============================================================================
+//  ⚠ 本文件引用的 SYS-08 §7.x 经核实为悬空／撞号引用（2026-09-26 复核），依据待裁决，见《待裁决问题汇总》Q-D2 与《SYS-08-§7引用勘误.md》；正文引用仅描述现行行为，不作为冻结依据。
 // ============================================================================
 
 #include "app/SystemInitializer.h"
@@ -29,6 +44,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
+#include <limits>
+#include <memory>
 #include <sstream>
 
 #include <unistd.h>
@@ -36,6 +53,8 @@
 #include "algorithm/pipeline/PosePipeline.h"
 #include "data/ErrorInfo.h"
 #include "data/MonotonicClock.h"
+#include "device/camera/ICameraBackend.h"
+#include "device/camera/ImvCameraBackend.h"
 #include "device/camera/VirtualCameraBackend.h"
 #include "infrastructure/FileUtil.h"
 
@@ -105,6 +124,53 @@ std::string noticeText(const std::vector<std::string>& notices)
     if (notices.size() > 1)
     {
         out += "（另有 " + std::to_string(notices.size() - 1) + " 条，见日志）";
+    }
+    return out;
+}
+
+/// 角色名（"CAM25"…）。形状照抄仓内既有各处（`MeasurementController.cpp:74`、
+/// `PreviewManager.cpp:25`、`Recorder.cpp:150`），**不新造公共接口** ——
+/// 这些地方各自持有副本是本仓的既有约定（理由见 Recorder.cpp 的说明）。
+const char* roleText(data::CameraRole role)
+{
+    switch (role)
+    {
+    case data::CameraRole::CAM25:  return "CAM25";
+    case data::CameraRole::CAM50:  return "CAM50";
+    case data::CameraRole::CAM100: return "CAM100";
+    }
+    return "CAM??";
+}
+
+/// 把一个 OperationResult 压成"状态 + 首因/清理因"一行。
+///
+/// ⚠ 不复用 `data::opStatusName` **不足以**表达这件事：那句只给状态名，
+///    而 §2.2 修正 4 要求清理失败**同时带操作名与返回码**（同为 −119，
+///    `IMV_GetFrame` 超时与 `IMV_ReleaseFrame` 超时是完全不同的故障）。
+///    故此处组合使用仓内既有的 `data::opStatusName` / `data::sdkCallName`
+///    （`data/OpStatus.h:172`／`:203`），**不新写一份枚举名表** ——
+///    本仓已有五份状态名副本的教训（见上方 noticeText 的说明）。
+///
+/// ⚠ 首因与清理因**分列**，不合写成一句：两者同现时的处置不同（§2.2 修正 4），
+///    合写会让"主操作失败"与"清理失败"看起来是同一件事。
+std::string resultText(const data::OperationResult& r)
+{
+    std::string out = data::opStatusName(r.status);
+    if (r.status == data::OpStatus::Unset)
+    {
+        // Unset 是**缺陷指示**（漏赋值），不是一种失败；打印时点名，
+        // 免得日志里一个孤零零的 "Unset" 被当成"没做"。
+        out += "（未赋值——缺陷）";
+    }
+    if (r.sdkError)
+    {
+        out += std::string("，失败调用 ") + data::sdkCallName(r.sdkError->call) +
+               "（码 " + std::to_string(r.sdkError->code) + "）";
+    }
+    if (r.cleanupError)
+    {
+        out += std::string("，清理失败 ") + data::sdkCallName(r.cleanupError->call) +
+               "（码 " + std::to_string(r.cleanupError->code) + "）";
     }
     return out;
 }
@@ -285,47 +351,163 @@ bool SystemInitializer::buildOptical()
 //  步骤 4~5：设备（ENG-08 §3 的虚拟/真实切换点）
 // ---------------------------------------------------------------------------
 
+std::shared_ptr<device::ICameraBackend> SystemInitializer::makeBackend(
+    const data::CameraConfig& config, std::string& error)
+{
+    const std::string where = "（通道 " + config.cameraId + "）";
+
+    if (config.backend == "virtual")
+    {
+        return std::make_shared<device::VirtualCameraBackend>(config);
+    }
+
+    if (config.backend == "imv")
+    {
+        // ⚠ 先问"本次构建有没有 SDK"，而不是构造一个注定初始化失败的后端：
+        //   两者都以启动失败告终，但**消息完全不同** —— "本次构建未接入 SDK，
+        //   请用 -DIMV_SDK_ROOT=… 重新配置"是操作者能立刻执行的动作，
+        //   而"初始化失败：NotImplemented"会把人引向设备与线缆。
+        //   这正是 011-A0 裁定"两种不可用必须给不同文本"的同一条理由。
+        std::shared_ptr<device::IImvApi> api = device::makeRealImvApi();
+        if (!api)
+        {
+            error = "通道 " + config.cameraId +
+                    " 配置为真实后端（backend: imv），但**本次构建未接入 SDK**。"
+                    "请用 -DIMV_SDK_ROOT=<SDK 根目录> 重新配置后重建；"
+                    "若本轮只想跑软件闭环，请把该通道的 backend 改为 \"virtual\""
+                    "（本程序**不会**替你静默切换）。";
+            return nullptr;
+        }
+        return std::make_shared<device::ImvCameraBackend>(config, api);
+    }
+
+    // 取值合法性已在 ConfigManager 拦过一次；此处仍如实失败，因为
+    // CameraConfig 可以被**绕过配置加载**直接构造（测试、将来的其它入口），
+    // 而"装配一个 backend 字段为空的后端"没有合理的兜底动作。
+    error = "通道 " + config.cameraId + " 的 backend 取值非法：\"" +
+            config.backend + "\"（允许 \"virtual\" / \"imv\"）" + where;
+    return nullptr;
+}
+
 bool SystemInitializer::buildDevices()
 {
     // ┌────────────────────────────────────────────────────────────────────┐
-    // │ 虚拟 / 真实的唯一切换点（ENG-08 §3、ENG-10 §5.1）。                 │
-    // │ 010 接入 ImvSdk 时只改这一段：把三个 VirtualCameraBackend 换成     │
-    // │ ImvCameraBackend（构造参数为设备号 + CameraConfig），其余不动。    │
-    // │ ENG-08 §3 的过渡形态是"CAM25 真实 + CAM50/100 虚拟"，即三个       │
-    // │ make_shared 各自独立选择，本段的结构已为此留好位置。                │
+    // │ 显式装配点（ENG-08 §3、ENG-10 §5.1；011-A1 改为按配置逐个选择）。  │
+    // │                                                                    │
+    // │ **不**"检测到 SDK 就切真实"，**不**在真实相机打不开时静默换虚拟。  │
+    // │ 每一路由 camera.yaml 的 `backend` 键决定，缺键即配置错误（启动前   │
+    // │ 已由 ConfigManager 拦下）。ENG-08 §3 的过渡形态"CAM25 真实 +      │
+    // │ CAM50/100 虚拟"因此就是三行各自独立的配置，不需要额外机制。        │
     // └────────────────────────────────────────────────────────────────────┘
     const data::CameraConfig& c25  = ctx_.config->camera(data::CameraRole::CAM25);
     const data::CameraConfig& c50  = ctx_.config->camera(data::CameraRole::CAM50);
     const data::CameraConfig& c100 = ctx_.config->camera(data::CameraRole::CAM100);
 
-    ctx_.backend25 =
-        std::make_shared<device::VirtualCameraBackend>(c25);
-    ctx_.backend50 =
-        std::make_shared<device::VirtualCameraBackend>(c50);
-    ctx_.backend100 =
-        std::make_shared<device::VirtualCameraBackend>(c100);
-
-    for (const auto& b : {ctx_.backend25, ctx_.backend50, ctx_.backend100})
+    std::string backendError;
+    ctx_.backend25 = makeBackend(c25, backendError);
+    if (!ctx_.backend25)
     {
-        if (!b->initialize())
-        {
-            errorText_ = "相机后端初始化失败（虚拟后端不应失败，"
-                         "请检查 CameraConfig 的分辨率与曝光是否为合法值）";
-            return false;
-        }
+        errorText_ = "CAM25 后端装配失败：" + backendError;
+        return false;
+    }
+    ctx_.backend50 = makeBackend(c50, backendError);
+    if (!ctx_.backend50)
+    {
+        errorText_ = "CAM50 后端装配失败：" + backendError;
+        return false;
+    }
+    ctx_.backend100 = makeBackend(c100, backendError);
+    if (!ctx_.backend100)
+    {
+        errorText_ = "CAM100 后端装配失败：" + backendError;
+        return false;
     }
 
     ctx_.cameras = std::make_unique<device::MultiCameraManager>(
         ctx_.backend25, ctx_.backend50, ctx_.backend100);
 
+    // ---- 初始化与启动：**只有这一处**调用 initialize() ----------------------
+    //
+    // ⚠ 上一版在此处**逐个** `b->initialize()`，紧接着 `initializeAll()` 又
+    //   各自初始化一次 —— 同一个后端被初始化两遍。虚拟后端下这看不出问题，
+    //    而真实后端下第二遍会重复枚举设备、重复 `IMV_Open`，句柄与打开状态
+    //    的归属随之失去唯一责任人（"谁负责关"由"谁先成功"决定，而那是
+    //    运行期才知道的事）。故本批起 `initializeAll()` 是**唯一**的初始化
+    //    责任方，装配层只负责**造**后端。
     if (!ctx_.cameras->initializeAll())
     {
-        errorText_ = "MultiCameraManager::initializeAll 失败";
+        errorText_ = "MultiCameraManager::initializeAll 失败（" +
+                     ctx_.cameras->lastError().message + "）";
+        rollbackDevices();
         return false;
     }
+
+    // ---- 启动失败边界：**显式请求的真实后端打不开 ⇒ 整次启动失败** --------
+    //
+    // ⚠ 这一条不能用 `initializeAll()` 的返回值代替：它的判据是**合计**
+    //    ≥2 路（§7.5 的降级下限）。"CAM25 真实 + CAM50/100 虚拟"这一形态下，
+    //    真实那一路打不开时合计恰好是 2 ⇒ 达标 ⇒ 启动会被判成功，而
+    //    "真实接入成功"这件事**并不成立** —— 操作者以为在跑真实采集，
+    //    实际三路全是虚拟图。故逐路核对**配置为 imv 的那几路**。
+    // ⚠ 迭代的是 (配置, 后端) **成对**的槽位，而不是只有配置（2026-09-26 改）：
+    //    要如实说出"这一路为什么没就绪"，必须拿得到**该路后端自己**的
+    //    说明（`lastErrorText()`）—— 例如按序列号匹配失败时，那里有
+    //    完整的枚举结果（型号／序列号／厂商／设备键），正是操作者查
+    //    接错线序所需的全部信息。只迭代配置就拿不到它。
+    struct Slot
+    {
+        const data::CameraConfig*                      cfg;
+        const std::shared_ptr<device::ICameraBackend>* backend;
+    };
+    const Slot slots[] = {{&c25, &ctx_.backend25},
+                          {&c50, &ctx_.backend50},
+                          {&c100, &ctx_.backend100}};
+    for (const Slot& slot : slots)
+    {
+        const data::CameraConfig* c = slot.cfg;
+        if (c->backend != "imv")
+        {
+            continue;
+        }
+        if (!ctx_.cameras->channelAvailable(c->role))
+        {
+            // ⚠ 走到这里时**管理器**的 `lastError()` 通常是**空**的：
+            //    `initializeAll()` 开头就把它清空，而
+            //    `availableCameraCount() >= 2` 又不触发它写 1001 —— 即
+            //    "一路真实相机没打开"这件事在管理器里**不产生**错误文本
+            //    （那一路的失败是瞬态、可降级的，见 `shouldDisableChannel`）。
+            //
+            //    ⚠ 上一版据此写的是"（无附加说明——单路初始化失败的明细见
+            //    各后端自身日志）"，**那是一个假的指路牌**：后端并不写
+            //    那种日志，实测（`backend: imv` + 本机不存在的序列号）
+            //    进程级输出里除了"未能就绪"什么都没有 —— 而后端手里明明
+            //    有枚举结果，`计划 §3.2` 要求"把枚举到的型号／序列号全列进
+            //    错误信息"。故本批把**后端自己的说明**接到这里来。
+            //
+            // 取值顺序：后端自身的说明 → 管理器的错误文本 → "后端自身未给出
+            // 说明"。最后一条如实说"没有"，且**不再指向任何不存在的日志**。
+            const std::string backendDetail = (*slot.backend)->lastErrorText();
+            const std::string managerDetail = ctx_.cameras->lastError().message;
+            const std::string detail =
+                !backendDetail.empty()
+                    ? backendDetail
+                    : (!managerDetail.empty() ? managerDetail
+                                              : std::string("（后端自身未给出说明）"));
+            errorText_ = "真实相机接入失败：通道 " + c->cameraId +
+                         "（backend: imv，目标序列号 \"" + c->serialNumber +
+                         "\"）未能就绪。设备层报告：" + detail +
+                         "。本程序**不会**用其它通道或虚拟后端来让本次启动"
+                         "看起来成功。";
+            rollbackDevices();
+            return false;
+        }
+    }
+
     if (!ctx_.cameras->startAll())
     {
-        errorText_ = "MultiCameraManager::startAll 失败";
+        errorText_ = "MultiCameraManager::startAll 失败（" +
+                     ctx_.cameras->lastError().message + "）";
+        rollbackDevices();
         return false;
     }
 
@@ -359,11 +541,137 @@ bool SystemInitializer::buildDevices()
         return false;
     }
 
-    summary_.cameraCount = 3;
+    // 装配摘要的两个数由**实际对象与设备回报**推出，不写常数（§3.4）：
+    //   cameraCount      = 真的造出来的后端数（少一路就是 2，不是 3）
+    //   cameraReadyCount = 初始化成功且未被禁用的路数
+    // ⚠ 两者都要如实：只报前者会把"三路都装配了"说成"三路都能用"。
+    summary_.cameraCount = 0;
+    for (const auto& b : {ctx_.backend25, ctx_.backend50, ctx_.backend100})
+    {
+        if (b)
+        {
+            ++summary_.cameraCount;
+        }
+    }
+    summary_.cameraReadyCount = ctx_.cameras->availableCameraCount();
 
-    log("app", "设备：3 路虚拟相机已启动（25/50/100 mm）、"
-               "虚拟触发已使能、虚拟转台已就绪");
+    // 预览与测量共用同一套取帧预算（装配点是唯一的注入处，ENG-10 §5.2）。
+    const data::MeasurementConfig& mcfg = ctx_.config->measurement();
+    ctx_.cameras->setGrabBudget(mcfg.grabTimeoutMs, mcfg.grabGroupBudgetNs);
+
+    logAssemblySummary();
+
+    log("app", "设备：触发已使能、转台已就绪；取帧预算 " +
+                   std::to_string(mcfg.grabTimeoutMs) + " ms/路，组预算 " +
+                   std::to_string(mcfg.grabGroupBudgetNs / 1000000ULL) + " ms");
     return true;
+}
+
+// ---------------------------------------------------------------------------
+//  装配摘要与回滚（011-A1，§3.4）
+// ---------------------------------------------------------------------------
+
+void SystemInitializer::rollbackDevices()
+{
+    // 顺序＝建立顺序的**逆序**：先转台/触发（本批无资源需归还），
+    // 再相机逐路 stop() → close()。
+    //
+    // ⚠ 为什么每一步都要求"幂等、允许未初始化时调用"：本函数在**启动失败**
+    //    时被调用，而失败点可能在启动序列的任何一步 —— 有的后端已 start、
+    //    有的只 initialize 过、有的压根没造出来。"先判断它到过哪一步"
+    //    会让回滚逻辑与启动序列耦合，故转而要求被调方自己吃下这些情形
+    //    （`stop()`／`close()` 的契约已如此冻结）。
+    //
+    // ⚠ 逆序不是形式：`close()` 关设备、销毁句柄，之后 `stop()` 已无处可停。
+    //    反过来（先 close 再 stop）在真实后端上会向一个已销毁的句柄停流。
+    const std::shared_ptr<device::ICameraBackend> order[] = {
+        ctx_.backend100, ctx_.backend50, ctx_.backend25};
+
+    for (const auto& b : order)
+    {
+        if (!b)
+        {
+            continue;
+        }
+        b->stop();    // 停流；未 start 时无副作用
+        const data::OperationResult r = b->close();
+        if (!r.ok())
+        {
+            // 回滚本身失败**不覆盖**启动失败的原因（首因优先，§2.2 修正 4）：
+            // errorText_ 已由调用方写好。这里只如实记一条，因为
+            // "资源没还回去"是操作者需要知道的事实。
+            warn("回滚：" + resultText(r) +
+                 "（清理失败的原码见设备层日志）");
+        }
+    }
+
+    // 先停流再销毁管理器：`stopAll()` 语义不变（只停流、允许重复调用），
+    // 上面已逐路 stop 过，这里不再重复调 —— 重复调用虽安全，但会让
+    // "回滚到底跑了哪些步骤"变得难以从日志读出来。
+    ctx_.cameras.reset();
+}
+
+void SystemInitializer::logAssemblySummary()
+{
+    // 一行一路，四件事分开写（§3.4）：
+    //   角色 / 逻辑 cameraId / 后端类型 / 设备身份（型号＋序列号或"未取得"）
+    //   / **配置里的目标序列号单独一栏** / 可用性
+    //
+    // ⚠ 目标序列号必须独立成栏，**不得**与设备回报的序列号合成一格：
+    //    本批的核心修正之一就是"型号匹配不能替代设备身份匹配"，
+    //    若把"配置想要谁"与"实际连上谁"印成同一个字段，
+    //    一份"配置写 A、连上 B"的错误装配会看起来完全正常。
+    struct Row
+    {
+        data::CameraRole                role;
+        const data::CameraConfig*       cfg;
+        const std::shared_ptr<device::ICameraBackend>* backend;
+    };
+    const Row rows[] = {
+        {data::CameraRole::CAM25,  &ctx_.config->camera(data::CameraRole::CAM25),  &ctx_.backend25},
+        {data::CameraRole::CAM50,  &ctx_.config->camera(data::CameraRole::CAM50),  &ctx_.backend50},
+        {data::CameraRole::CAM100, &ctx_.config->camera(data::CameraRole::CAM100), &ctx_.backend100},
+    };
+
+    log("app", "装配摘要：");
+    for (const Row& r : rows)
+    {
+        const std::shared_ptr<device::ICameraBackend>& b = *r.backend;
+
+        if (!b)
+        {
+            log("app", "  · " + std::string(roleText(r.role)) + "（" +
+                           r.cfg->cameraId + "）：未装配"
+                           "（backend=\"" + r.cfg->backend + "\"）");
+            continue;
+        }
+
+        // 后端类型由**实际动态类型**得出，不由配置声明抄一遍 ——
+        // 抄配置的话，装配代码一旦接错（把 imv 建成虚拟），摘要会跟着一起错。
+        const char* type = (std::dynamic_pointer_cast<device::ImvCameraBackend>(b))
+                               ? "真实（ImvCameraBackend）"
+                               : "虚拟（VirtualCameraBackend）";
+
+        const data::DeviceIdentity id = b->deviceIdentity();
+        const std::string identity =
+            id.queried
+                ? ("型号 \"" + (id.modelName.empty() ? std::string("未取得")
+                                                     : id.modelName) +
+                   "\"、序列号 \"" +
+                   (id.serialNumber ? *id.serialNumber : std::string("未取得")) +
+                   "\"")
+                : std::string("未查询（本后端不连设备）");
+
+        log("app", "  · " + std::string(roleText(r.role)) + "（" +
+                       r.cfg->cameraId + "）：" + type + "；设备身份 " + identity +
+                       "；配置目标序列号 \"" +
+                       (r.cfg->serialNumber.empty() ? std::string("（未绑定）")
+                                                    : r.cfg->serialNumber) +
+                       "\"；可用性 " +
+                       (ctx_.cameras && ctx_.cameras->channelAvailable(r.role)
+                            ? "就绪"
+                            : "不可用"));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -616,7 +924,7 @@ void SystemInitializer::selfCheck()
 
     // ---- 降级起点 ----
     // 启动时不应处于降级态；若可用相机数不是 3，说明设备层已经出了问题，
-    // 而 SYS-08 §7.5 要求这必须在第一秒就可见。
+    // 而 SYS-08 §7.5〔引用无效·依据待裁决·见 Q-D2〕 要求这必须在第一秒就可见。
     summary_.degradedAtStart = false;
     if (ctx_.cameras && ctx_.cameras->degraded())
     {
@@ -691,8 +999,20 @@ bool SystemInitializer::pumpIdlePreview(uint64_t nowNs)
     // 空闲态：状态机不推进任何采集动作，此处的采集**只**为预览服务。
     // 显示源由 AUTO 映射给出（IDLE → CAM25，见 PreviewManager
     // mapStateToCamera），submitFrom 会据此挑出那一路。
+    //
+    // ⚠ 期限（011-A1，§3.2）：预览路径**没有**状态机时限可借，故用
+    //    "本次预览采集"的期限＝现在 + 组预算。两条纪律：
+    //      · 只用 `nowNs`（本拍的时刻，由调用方注入）不用真实钟 ——
+    //        否则测试注入的假时间会被墙钟判过期（与控制器同一条理由）；
+    //      · 期限**算在这里**、每拍重算，不由管理器缓存（§2.2 修正 3）。
+    const uint64_t budgetNs = ctx_.config->measurement().grabGroupBudgetNs;
+    const uint64_t deadlineNs =
+        (nowNs > (std::numeric_limits<uint64_t>::max)() - budgetNs)
+            ? (std::numeric_limits<uint64_t>::max)()
+            : nowNs + budgetNs;
+
     data::MultiCameraFrame frame;
-    if (!ctx_.cameras->capture(frame))
+    if (!ctx_.cameras->capture(frame, deadlineNs))
     {
         return false;
     }
@@ -720,10 +1040,16 @@ bool SystemInitializer::tick(uint64_t nowNs)
     // 2) 空闲态补帧（见文件头说明）。规则两条：
     //    ① 空闲与否按**推进后**的状态判定 —— 本拍刚转入终态时，
     //       画面正是操作者最需要看到的那一帧；
-    //    ② **本拍推进了状态就不补帧**（R04 收尾）：`stateAdvanced` 为真
-    //       意味着这一拍内控制器已经跑过活动态采集并提交了帧
-    //       （acquire() 是活动态预览的唯一生产者），此时再补一次就是
-    //       同一拍两次 capture()。下一拍状态不再推进，空闲预览自然恢复。
+    //    ② **转入终态当拍统一跳过空闲补帧**（R04 收尾；判据是 `stateAdvanced`
+    //       即"本拍状态是否推进"，**不是**"本拍有没有采集"）：这类当拍
+    //       已采集的分支（SEARCH / ALIGN / CAPTURE）再补一次就是同一拍
+    //       两次 capture()。下一拍状态不再推进，空闲预览自然恢复。
+    //
+    //       ⚠ 上一版这里写的理由是"`stateAdvanced` 为真意味着这一拍内
+    //          控制器已经跑过活动态采集并提交了帧" —— **该推断不成立**：
+    //          `POSE_SOLVE` / `VALIDATE` / `SAVE` 会推进状态却**不采集**
+    //          （它们消费上一拍留下的帧）。规则本身不变（按状态推进判定
+    //          是对的，见 .h 的说明），只是不能拿"已经采集过"当它的理由。
     //
     //    ⚠ ② 挡的是一条**真实可达**的边界，不是假想：
     //    "活动态采集成功、当拍转入终态"就发生在 ALIGN ——

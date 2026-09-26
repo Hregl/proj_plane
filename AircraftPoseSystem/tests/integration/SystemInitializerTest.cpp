@@ -57,12 +57,17 @@
 //    `/tmp/gtshim/build_tests.sh`（见 README §6）。
 // ============================================================================
 
+// ============================================================================
+//  ⚠ 本文件引用的 SYS-08 §7.x 经核实为悬空／撞号引用（2026-09-26 复核），依据待裁决，见《待裁决问题汇总》Q-D2 与《SYS-08-§7引用勘误.md》；正文引用仅描述现行行为，不作为冻结依据。
+// ============================================================================
+
 #include <gtest/gtest.h>
 
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -72,13 +77,16 @@
 
 #include "app/ApplicationContext.h"
 #include "app/SystemInitializer.h"
+#include "data/DeviceIdentity.h"
 #include "data/ErrorInfo.h"
 #include "data/MeasurementConfig.h"
 #include "data/MeasurementState.h"
 #include "data/MonotonicClock.h"
 #include "data/TurntableConfig.h"
+#include "device/camera/ICameraBackend.h"
 #include "device/camera/VirtualCameraBackend.h"
 #include "infrastructure/FileUtil.h"
+#include "infrastructure/config/ConfigManager.h"
 #include "preview/PreviewQueue.h"
 
 #ifndef APS_SOURCE_DIR
@@ -546,6 +554,545 @@ TEST(SystemInitializerTest, 场景B_ALIGN越程当拍FAILED且当拍不补帧)
     EXPECT_EQ(next.c50, 1u);
     EXPECT_EQ(next.c100, 1u);
     EXPECT_EQ(next.idleFrames, 1u);
+}
+
+// ===========================================================================
+//  场景 C：取帧预算的两个配置键（011-A1 §3）
+//
+//  ---- 这一组证明了什么 ----
+//
+//  `grab_timeout_ms` / `grab_group_budget_ns` 是 `capture()` 里"三者取小"
+//  的两个直接来源（见 MultiCameraManager::capture）。若它们只被
+//  `MeasurementConfig` 默认值填充、而 yaml 里的键根本没被解析，症状是
+//  **静默**的：改配置文件不生效，一切照默认值跑，没有任何一处报错。
+//  故这里断言的不是"结构体字段存在"，而是"**yaml 里的字面值真的进来了**"。
+//
+//  ---- 为什么不走 SystemInitializer ----
+//
+//  配置加载是 **infrastructure** 层的事，`ConfigManager::load(dir)` 本身就
+//  接受目录参数 ⇒ **不需要 chdir、不需要 7 个文件之外的任何东西**，
+//  故本组用绝对路径直接加载，与场景 A/B 的临时工作目录互不干扰
+//  （加载失败与成功都不改变进程 CWD）。
+// ===========================================================================
+
+/// 把一个 yaml 原文里的 `from` 换成 `to`，并**断言确实换到了**。
+///
+/// ⚠ 换不到就返回空串（调用方据此判失败），**不**静默返回原文：
+///    若将来 yaml 里的写法变了，这里的替换会变成空操作，而"改坏的配置"
+///    仍是好配置 ⇒ 负例会变成"加载居然成功了"这种看不出原因的失败。
+///    宁可在此处显式报"未命中"。
+std::string replaceOnce(const std::string& text, const std::string& from,
+                        const std::string& to)
+{
+    const std::size_t pos = text.find(from);
+    if (pos == std::string::npos)
+    {
+        return std::string();
+    }
+    std::string out = text;
+    out.replace(pos, from.size(), to);
+    return out;
+}
+
+std::string readFile(const std::string& path)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+    {
+        return std::string();
+    }
+    return std::string((std::istreambuf_iterator<char>(in)),
+                       std::istreambuf_iterator<char>());
+}
+
+/// 建一个临时目录、把仓库 `config/` 的 7 个 yaml 拷进去，再用 `overrideText`
+/// 覆盖其中的 `overrideFile`。返回目录路径（空串 = 失败）。
+///
+/// ⚠ **不 chdir**：`ConfigManager::load()` 收目录参数，故负例不需要把整个
+///    进程搬进临时目录 —— 那会与场景 A/B 的工作目录语义纠缠在一起。
+///    `SystemInitializer::initialize(dir)` 同样收目录，而 yaml 里的相对路径
+///    （log_dir / output_dir / model_dir）按**进程 CWD** 解析 —— 那是本套件
+///    的临时工作目录（`prepareWorkspace`），故不必再 chdir 一次。
+std::string makeConfigVariantForFile(const std::string& overrideFile,
+                                     const std::string& overrideText,
+                                     std::string&       err)
+{
+    char        tmpl[] = "/tmp/aps_cfg_XXXXXX";
+    char* const dir    = ::mkdtemp(tmpl);
+    if (dir == nullptr)
+    {
+        err = "mkdtemp 失败";
+        return std::string();
+    }
+    const std::string tmp = dir;
+    for (const char* const f : kConfigFiles)
+    {
+        const std::string src = std::string(APS_SOURCE_DIR) + "/config/" + f;
+        const std::string dst = tmp + "/" + f;
+        if (f == overrideFile)
+        {
+            std::ofstream out(dst, std::ios::binary);
+            out << overrideText;
+            if (!out.good())
+            {
+                err = "写 " + overrideFile + " 失败：" + dst;
+                return std::string();
+            }
+            continue;
+        }
+        if (!copyFile(src, dst))
+        {
+            err = "拷贝失败：" + src;
+            return std::string();
+        }
+    }
+    return tmp;
+}
+
+std::string makeConfigVariant(const std::string& measurement, std::string& err)
+{
+    return makeConfigVariantForFile("measurement.yaml", measurement, err);
+}
+
+/// 仓库 `config/` 下某个 yaml 的原文（负例的替换底本）。
+std::string repoYaml(const char* name)
+{
+    return readFile(std::string(APS_SOURCE_DIR) + "/config/" + name);
+}
+
+/// 仓库 measurement.yaml 的原文（负例的替换底本）。
+std::string repoMeasurementYaml()
+{
+    return repoYaml("measurement.yaml");
+}
+
+TEST(SystemInitializerTest, 场景C_取帧预算键被读到)
+{
+    // ---- 判别式用例：两个键都改成与结构体默认值**不同**的值 ----
+    //
+    // ⚠ 为什么不能直接断仓库现值：仓库现值（100 / 3.0e8）与
+    //    `MeasurementConfig` 的默认值**完全相同** ⇒ "解析了"与
+    //    "压根没解析、全程吃默认值"两种情形给出同一个断言结果，
+    //    这正是一个看不出差别的用例。故先改成别的数再断。
+    std::string text = replaceOnce(repoMeasurementYaml(), "grab_timeout_ms: 100",
+                                   "grab_timeout_ms: 250");
+    ASSERT_FALSE(text.empty()) << "未命中 grab_timeout_ms 那一行，本用例的底本已失效";
+    text = replaceOnce(text, "grab_group_budget_ns: 3.0e8", "grab_group_budget_ns: 4.0e8");
+    ASSERT_FALSE(text.empty()) << "未命中 grab_group_budget_ns 那一行，本用例的底本已失效";
+
+    std::string err;
+    const std::string dir = makeConfigVariant(text, err);
+    ASSERT_FALSE(dir.empty()) << err;
+
+    aircraft::infrastructure::ConfigManager cfg;
+    ASSERT_TRUE(cfg.load(dir)) << "改动后的配置本应加载成功";
+
+    const aircraft::data::MeasurementConfig& m = cfg.measurement();
+    EXPECT_EQ(m.grabTimeoutMs, 250) << "grab_timeout_ms 未按 yaml 的字面值解析";
+    EXPECT_EQ(m.grabGroupBudgetNs, 400000000ULL)
+        << "grab_group_budget_ns（4.0e8）未按 yaml 的字面值解析";
+}
+
+TEST(SystemInitializerTest, 场景C_仓库现值的零余量事实必须可见)
+{
+    // 仓库现值（100 / 3.0e8）与默认值相同，故本用例**不**用它们证明解析；
+    // 它证明的是另一件事：**当前这份配置的余量事实不得静默**。
+    // 5 帧 × 3 路 × 100 ms = 1500 ms = capture_timeout_ns，且未计入
+    // 复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断。
+    // ⚠ 只警告、不判启动失败 —— 取值余量属《待裁决问题汇总》Q-D2，
+    //   本批不自行放宽冻结值。
+    aircraft::infrastructure::ConfigManager cfg;
+    ASSERT_TRUE(cfg.load(std::string(APS_SOURCE_DIR) + "/config"))
+        << "仓库 config/ 加载失败";
+
+    EXPECT_EQ(cfg.measurement().grabTimeoutMs, 100);
+    EXPECT_EQ(cfg.measurement().grabGroupBudgetNs, 300000000ULL);
+
+    bool sawWarning = false;
+    for (const std::string& w : cfg.warnings())
+    {
+        if (w.find("取帧预算无余量") != std::string::npos)
+        {
+            sawWarning = true;
+        }
+    }
+    EXPECT_TRUE(sawWarning) << "取帧预算已无余量，却没有给出告警（该事实不得静默）";
+}
+
+TEST(SystemInitializerTest, 场景C_取帧预算余量充足时不告警)
+{
+    // ---- 正对照：告警是**有条件**的，不是一句永远都印的话 ----
+    //
+    // 只把 capture_timeout_ns 放宽到 3.0 s（另两项不动，
+    // 5 × 3 × 100 = 1500 ms < 3000 ms ⇒ 有余量），告警必须消失。
+    // 缺了这条用例，把告警写成"无条件 push"也能让上一条用例通过。
+    const std::string text = replaceOnce(repoMeasurementYaml(),
+                                         "capture_timeout_ns: 1.5e9",
+                                         "capture_timeout_ns: 3.0e9");
+    ASSERT_FALSE(text.empty()) << "未命中 capture_timeout_ns 那一行，本用例的底本已失效";
+
+    std::string err;
+    const std::string dir = makeConfigVariant(text, err);
+    ASSERT_FALSE(dir.empty()) << err;
+
+    aircraft::infrastructure::ConfigManager cfg;
+    ASSERT_TRUE(cfg.load(dir)) << "余量充足的那份配置本应加载成功";
+
+    for (const std::string& w : cfg.warnings())
+    {
+        EXPECT_EQ(w.find("取帧预算无余量"), std::string::npos)
+            << "余量充足却报了余量告警：" << w;
+    }
+    // 该项放宽后仍须读回放宽后的值（防止"替换了却没生效"被误判成通过）。
+    EXPECT_EQ(cfg.measurement().captureTimeoutNs, 3000000000ULL);
+}
+
+TEST(SystemInitializerTest, 场景C_grab_timeout_ms为零即启动失败)
+{
+    // `IMV_GetFrame` 对 timeoutMS = 0 的语义在 SDK 中**未文档化**
+    // （ENG-09 V2.3 §2.5），项目不定义它、后端会拒绝 0 ⇒ 配置层必须拦。
+    // 若此处只是"取默认值"或"静默接受"，故障会推迟到第一次取帧才出现，
+    // 且表现为"相机取不到帧"这种把人引向设备侧的假象。
+    const std::string text =
+        replaceOnce(repoMeasurementYaml(), "grab_timeout_ms: 100", "grab_timeout_ms: 0");
+    ASSERT_FALSE(text.empty()) << "未命中 grab_timeout_ms 那一行，本用例的底本已失效";
+
+    std::string err;
+    const std::string dir = makeConfigVariant(text, err);
+    ASSERT_FALSE(dir.empty()) << err;
+
+    aircraft::infrastructure::ConfigManager cfg;
+    EXPECT_FALSE(cfg.load(dir)) << "grab_timeout_ms = 0 应判为取值越界、启动失败";
+
+    bool named = false;
+    for (const std::string& e : cfg.errors())
+    {
+        if (e.find("grab_timeout_ms") != std::string::npos)
+        {
+            named = true;
+        }
+    }
+    EXPECT_TRUE(named) << "失败原因未点名 grab_timeout_ms";
+}
+
+TEST(SystemInitializerTest, 场景C_grab_group_budget_ns为零即启动失败)
+{
+    // 组预算为 0 ⇒ 每路都判"预算耗尽"、一次 SDK 调用都不发生，
+    // 表现为"三路全部取帧失败"，而实际是配置把预算配没了。
+    const std::string text = replaceOnce(repoMeasurementYaml(),
+                                         "grab_group_budget_ns: 3.0e8",
+                                         "grab_group_budget_ns: 0");
+    ASSERT_FALSE(text.empty()) << "未命中 grab_group_budget_ns 那一行，本用例的底本已失效";
+
+    std::string err;
+    const std::string dir = makeConfigVariant(text, err);
+    ASSERT_FALSE(dir.empty()) << err;
+
+    aircraft::infrastructure::ConfigManager cfg;
+    EXPECT_FALSE(cfg.load(dir)) << "grab_group_budget_ns = 0 应判为取值越界、启动失败";
+
+    bool named = false;
+    for (const std::string& e : cfg.errors())
+    {
+        if (e.find("grab_group_budget_ns") != std::string::npos)
+        {
+            named = true;
+        }
+    }
+    EXPECT_TRUE(named) << "失败原因未点名 grab_group_budget_ns";
+}
+
+// ===========================================================================
+//  场景 D：显式装配、启动失败边界与生命周期归属（011-A1 §4.4）
+//
+//  ⚠ 与场景 A/B 的关键差别：本组**故意让启动失败**，故每个用例自建
+//    `ApplicationContext` 与 `SystemInitializer`，**不**复用 `Harness`
+//    （它的 `build()` 要求 `ready()` 为真）。失败路径上 `ctx.controller`
+//    等成员保持为空，正是要断言的事。
+// ===========================================================================
+
+/// 生命周期序列拼成一行（断言失败时人能一眼看出多/少了哪一次调用）。
+std::string joinLog(const std::vector<std::string>& log)
+{
+    std::string s;
+    for (const std::string& e : log)
+    {
+        if (!s.empty())
+        {
+            s += " -> ";
+        }
+        s += e;
+    }
+    return s.empty() ? std::string("（空）") : s;
+}
+
+/// 一路后端的生命周期序列。
+///
+/// ⚠ `isVirtual == false` 与"虚拟后端一个调用都没收到"必须分开表达：
+///    前者才是"这一路压根不是虚拟后端"（有 SDK 的构建下真的造出了
+///    `ImvCameraBackend`，它没有这份记录），后者只在"造出来了但一次没调"
+///    时才成立。混成一个空序列会让"没记录"看起来像"没调用"。
+struct BackendLog
+{
+    bool                     isVirtual = false;
+    std::vector<std::string> entries;
+};
+
+BackendLog backendLogOf(const std::shared_ptr<aircraft::device::ICameraBackend>& b)
+{
+    BackendLog r;
+    const std::shared_ptr<VirtualCameraBackend> vb =
+        std::dynamic_pointer_cast<VirtualCameraBackend>(b);
+    if (vb)
+    {
+        r.isVirtual = true;
+        r.entries   = vb->lifecycleLog();
+    }
+    return r;
+}
+
+/// cam25 显式配置为真实后端的配置目录（其余两路仍为虚拟）。
+///
+/// `serial` 必须一并给出：`backend: "imv"` 而 serial 为空会在
+/// **ConfigManager** 处被更早拦下（"按序列号绑定设备"那条规则），
+/// 而本组要测的是**装配层**的失败边界，不是配置校验。
+/// 换言之：这份配置本身是合法的，失败必须来自"设备打不开"。
+std::string imvCam25ConfigDir(std::string& err)
+{
+    std::string text = replaceOnce(repoYaml("camera.yaml"),
+                                   "backend: \"virtual\"", "backend: \"imv\"");
+    if (text.empty())
+    {
+        err = "未命中 cam25 的 backend 行，本用例的底本已失效";
+        return std::string();
+    }
+    text = replaceOnce(text, "serial: \"\"", "serial: \"SN-CAM25-TEST-0001\"");
+    if (text.empty())
+    {
+        err = "未命中 cam25 的 serial 行，本用例的底本已失效";
+        return std::string();
+    }
+    return makeConfigVariantForFile("camera.yaml", text, err);
+}
+
+TEST(SystemInitializerTest, 场景D_全虚拟启动时每个后端恰好初始化一次)
+{
+    std::string err;
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    Harness h;
+    ASSERT_TRUE(h.build()) << "全虚拟配置本应启动成功：" << h.init->errorText();
+
+    struct Row
+    {
+        const char*                                    name;
+        std::shared_ptr<aircraft::device::ICameraBackend> b;
+    };
+    const Row rows[] = {{"CAM25", h.ctx.backend25},
+                        {"CAM50", h.ctx.backend50},
+                        {"CAM100", h.ctx.backend100}};
+
+    for (const Row& r : rows)
+    {
+        const BackendLog l = backendLogOf(r.b);
+
+        // ---- 正对照：三路都**确实是**虚拟后端 ----
+        // 缺了它，"日志里恰好一次 initialize"会在"这一路根本不是虚拟后端、
+        // 压根没有日志"时也成立 —— 而"按配置装配"正是本用例要保的东西。
+        ASSERT_TRUE(l.isVirtual)
+            << r.name << " 在 camera.yaml 里配置为 virtual，却不是 VirtualCameraBackend";
+
+        // ---- 判别式断言：`initialize` **恰好一次** ----
+        // 本批从装配层修掉的缺陷是"同一个后端被初始化两遍"
+        // （`buildDevices()` 先逐路 `initialize()`，`initializeAll()` 又各自
+        //  初始化一次）。虚拟后端上这完全幂等、终态相同、除本记录外没有
+        //  任何痕迹 —— 故只有调用序列能把"修好了"与"缺陷回来了"分开。
+        EXPECT_EQ(joinLog(l.entries), "initialize -> start")
+            << r.name << " 的生命周期序列不是「initialize -> start」："
+                        "`initialize` 出现两次即双重初始化回来了";
+    }
+
+    // 装配摘要的数由实际对象推出（不写常数）：三路都造出来了。
+    EXPECT_EQ(h.init->summary().cameraCount, 3);
+}
+
+TEST(SystemInitializerTest, 场景D_显式请求真实后端不可用即启动失败且不静默换虚拟)
+{
+    std::string err;
+    const std::string dir = imvCam25ConfigDir(err);
+    ASSERT_FALSE(dir.empty()) << err;
+
+    ApplicationContext ctx;
+    SystemInitializer  init(ctx);
+
+    EXPECT_FALSE(init.initialize(dir)) << "真实相机打不开却判了启动成功";
+    EXPECT_FALSE(init.ready());
+
+    const std::string& e = init.errorText();
+    EXPECT_NE(e.find("cam25"), std::string::npos) << "失败原因未点名通道：" << e;
+    EXPECT_NE(e.find("imv"), std::string::npos)
+        << "失败原因未说明该通道声明的后端是 imv：" << e;
+
+    // 两条失败文本**都可能**出现，且两者都必须让操作者知道下一步该做什么：
+    //   · "本次构建未接入 SDK…请用 -DIMV_SDK_ROOT=… 重新配置" —— 动作在**构建**；
+    //   · "真实相机接入失败：通道 cam25…未能就绪" —— 动作在**设备与配置**。
+    // 只断"失败"而不断"哪一类失败"，这条用例就分不出这两种截然不同的处境。
+    //
+    // ⚠ 走哪一条**不取决于**本文件是否被垫片编译，而取决于链接进来的
+    //    `libdevice_camera.a` 里 `makeRealImvApi()` 是哪个定义（该函数在
+    //    `ImvApiReal.cpp` 里由 `APS_HAVE_IMVSDK` 二选一）—— 本机
+    //    `third_party/imvsdk/` 存在、库按"已接入 SDK"构建，故实测走的是
+    //    **边界那条**（下面的打印把它记在运行记录里，不靠推断）。
+    const bool namedSdkMissing = e.find("未接入 SDK") != std::string::npos;
+    const bool namedAccessFail = e.find("接入失败") != std::string::npos;
+    EXPECT_TRUE(namedSdkMissing || namedAccessFail)
+        << "失败原因既没说「未接入 SDK」、也没说「接入失败」，操作者无法据此"
+           "判断该改构建还是该查设备："
+        << e;
+
+    if (namedAccessFail)
+    {
+        // 后端**自己知道的原因**必须真的出现在用户可见的文本里
+        // （011-A1 §3.2：按序列号匹配不到 ⇒ "把枚举到的型号／序列号
+        // 全列进错误信息"；§4.4 的"未取得序列号如实记"）。
+        //
+        // ⚠ 上一版这里只有"（无附加说明——单路初始化失败的明细见各后端
+        //    自身日志）"，而**后端并不写那种日志**：实机失败路径实测
+        //    （进程级运行，`backend: imv` + 本机不存在的序列号）除
+        //    "未能就绪"之外什么都没有。操作者据此分不清"线序接错"
+        //    与"相机没上电"，而枚举结果就在后端手里。故本条断言钉住
+        //    "后端 → 装配层 → 用户"这条通路确实接通了。
+        EXPECT_NE(e.find("未找到序列号为"), std::string::npos)
+            << "后端给出了匹配失败的原因，装配层却没把它带进用户可见文本："
+            << e;
+        EXPECT_EQ(e.find("无附加说明"), std::string::npos)
+            << "失败文本仍在指向一个并不存在的「各后端自身日志」：" << e;
+
+        std::fprintf(stderr,
+                     "  〔失败分支〕本次走的是「启动失败边界」：后端**造得出来**，"
+                     "初始化拿不到设备后由 buildDevices 判失败。文本：%s\n",
+                     e.c_str());
+    }
+    else
+    {
+        std::fprintf(stderr,
+                     "  〔失败分支〕本次走的是「makeBackend 直接失败」"
+                     "（构建未接入 SDK）。文本：%s\n",
+                     e.c_str());
+    }
+
+    // ---- 不部分启动 ----
+    // 设备没就绪就不得把管理器与控制器交出去：`initialize()` 返回 false 之后
+    // 任何 `ctx.X` 都不得处于"半装配"状态。
+    EXPECT_EQ(ctx.cameras, nullptr) << "启动已判失败，却留下了半装配的相机管理器";
+    EXPECT_EQ(ctx.controller, nullptr);
+
+    // ---- 不静默换虚拟（本用例的核心）----
+    // 这一路显式声明了 imv，打不开就必须**失败**。若被悄悄换成虚拟后端，
+    // 本次启动会看起来成功，而三路图全是合成的 —— 这是本批最要防的失效形态。
+    // 垫片与有 SDK 两种构建下 `ctx.backend25` 都非空，故两处断言都成立。
+    ASSERT_TRUE(ctx.backend25 != nullptr)
+        << "真实后端被造出来过（或压根没造），两种情形都要能看出它**不是**虚拟后端";
+    EXPECT_EQ(std::dynamic_pointer_cast<VirtualCameraBackend>(ctx.backend25), nullptr)
+        << "显式请求的真实后端不可用时被静默换成了虚拟后端";
+
+    // ---- 设备身份不得从配置复制 ----
+    // 没有读到设备时，报告里必须是"未取得"，而**不得**把配置里的目标序列号
+    // 抄成实际身份 —— 抄了的话"配置写 A、实际连 B"这类错装配在摘要里
+    // 会看起来完全正常（§2.3）。
+    const aircraft::data::DeviceIdentity id = ctx.backend25->deviceIdentity();
+    EXPECT_FALSE(id.serialNumber.has_value() &&
+                 *id.serialNumber == "SN-CAM25-TEST-0001")
+        << "后端把配置里的目标序列号当成了实际读到的设备身份";
+}
+
+TEST(SystemInitializerTest, 场景D_缺backend键即启动失败)
+{
+    // 缺键**不得**取默认值：一份没写 backend 的配置若被静默当成 virtual，
+    // 那么 SDK 装好、真实相机接上之后，它仍会跑虚拟图而看起来一切正常。
+    // 这与"检测到 SDK 就自动切真实"是同一个问题的两面。
+    std::string text = replaceOnce(repoYaml("camera.yaml"),
+                                   "      backend: \"virtual\"\n", "");
+    ASSERT_FALSE(text.empty())
+        << "未命中 cam25 的 backend 行（缩进或写法已变），本用例的底本已失效";
+
+    std::string err;
+    const std::string dir = makeConfigVariantForFile("camera.yaml", text, err);
+    ASSERT_FALSE(dir.empty()) << err;
+
+    ApplicationContext ctx;
+    SystemInitializer  init(ctx);
+
+    EXPECT_FALSE(init.initialize(dir)) << "缺 backend 键却判了启动成功";
+    EXPECT_FALSE(init.ready());
+    EXPECT_NE(init.errorText().find("backend"), std::string::npos)
+        << "失败原因未点名 backend 键：" << init.errorText();
+
+    // 措辞要能把"**没写**这个键"与"写了但写错了"分开（011-A0 的同一条纪律：
+    // 两种不可用必须给不同文本）。只断"提到了 backend"，则"缺键"被降格成
+    // "类型不对"也照样通过 —— 而前者要改的是配置缺项，后者要改的是取值。
+    EXPECT_NE(init.errorText().find("backend 缺失"), std::string::npos)
+        << "失败原因未写明是**缺键**：" << init.errorText();
+    EXPECT_EQ(ctx.controller, nullptr);
+}
+
+TEST(SystemInitializerTest, 场景D_启动失败时已建立资源逐路回滚)
+{
+    std::string err;
+    const std::string dir = imvCam25ConfigDir(err);
+    ASSERT_FALSE(dir.empty()) << err;
+
+    ApplicationContext ctx;
+    SystemInitializer  init(ctx);
+    ASSERT_FALSE(init.initialize(dir)) << "本用例的前提是启动失败";
+
+    // ---- 回滚要证明的两件事（§3.4）----
+    //  ① **停流先于关设备**：两种顺序的终态相同（`READY` vs `UNKNOWN`，
+    //     且都幂等），只有调用序列能把它们分开。反过来做（先 `close()`
+    //     再 `stop()`）在真实后端上是向一个已销毁的句柄停流。
+    //  ② 走到过 `initialize` 的那几路**必须终以 `close`**：
+    //     "资源没还回去"不该只体现在一条 warn 里。
+    //
+    // ⚠ **跨通道的逆序不在本用例里**：`rollbackDevices()` 按
+    //    {CAM100, CAM50, CAM25} 逐路停关，但每个后端只能看到**自己**的调用，
+    //    "谁先谁后"没有逐对象证据。那一条由该函数的数组字面量固定，
+    //    本用例**不声称覆盖**它（不拿"三路各自有序"冒充"跨路有序"）。
+    struct Row
+    {
+        const char*                                    name;
+        std::shared_ptr<aircraft::device::ICameraBackend> b;
+    };
+    const Row rows[] = {{"CAM25", ctx.backend25},
+                        {"CAM50", ctx.backend50},
+                        {"CAM100", ctx.backend100}};
+
+    int checked = 0;
+    for (const Row& r : rows)
+    {
+        const BackendLog l = backendLogOf(r.b);
+        if (!l.isVirtual)
+        {
+            // 非虚拟后端（有 SDK 的构建下 cam25 就是真实后端）没有这份记录。
+            continue;
+        }
+        ++checked;
+        EXPECT_EQ(joinLog(l.entries), "initialize -> stop -> close")
+            << r.name << " 的回滚序列不是「initialize -> stop -> close」"
+                        "（先 stop 再 close）";
+    }
+
+    if (checked == 0)
+    {
+        std::fprintf(stderr,
+                     "  〔本构建下不可达〕没有一路虚拟后端走到过 initialize ⇒ "
+                     "rollbackDevices() 未产生可断言的记录；该路径的证据须来自"
+                     "后端已装配的那一种构建\n");
+    }
+    else
+    {
+        std::fprintf(stderr, "  〔回滚证据〕%d 路虚拟后端记录了 stop -> close 的先后\n",
+                     checked);
+    }
 }
 
 }  // namespace
