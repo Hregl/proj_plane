@@ -861,23 +861,49 @@ bool Recorder::writeResultJson(const data::MeasurementRecord& record,
                << ", \"height\": " << raw.height << "},\n";
         }
 
+        // ⚠ 键集**按数据来源分组**（011-A1 缺口 6 的收尾项，本批补齐）：
+        //   回落路径（`data_source == "image"`）**没有**原始载荷，也没有
+        //   任何一次 SDK 调用产生过它的元数据，故下列事实**一律不写**：
+        //     `sdk_payload_bytes` / `expected_compact_bytes` /
+        //     `compact_size_matches` / `sdk_pixel_format_code` /
+        //     `sdk_padding_x` / `sdk_padding_y`。
+        //   上一版只给 `raw_image` 做了这件事，这六个键却照样写出，
+        //   值还是 `raw` 的**默认值**（0／false）—— 读包的人会看到
+        //   "载荷 0 字节、长度相符=false"配着一份 512 字节的显示图文件，
+        //   与 §4 给 `raw_image` 的理由（"写 0 会误导"）**完全同构**。
+        //   "不存在的键"胜过"值不对的键"：缺键一眼看得出没有这项事实，
+        //   而 `0` 会被当成一个测出来的数字。
+        //   ∴ 真身路径写全（它刚刚已由 `decideRawSource` 四方校验），
+        //     回落路径只写**这份文件自己**的描述（来自已校验的
+        //     `captureFormat` 与 `image`）。
         os << "       \"pixel_format\": \"" << pixelFormatName(fileFormat)
            << "\", \"valid_bits\": " << fileValidBits
            << ", \"packing\": \"" << packingName(filePacking)
            << "\",\n"
            << "       \"valid_bit_alignment\": \""
-           << bitAlignmentName(fileAlignment) << "\",\n"
-           << "       \"sdk_payload_bytes\": " << raw.sdkPayloadBytes
-           << ", \"expected_compact_bytes\": " << raw.expectedCompactBytes
-           << ",\n"
-           << "       \"compact_size_matches\": "
-           << jsonBool(raw.compactSizeMatches) << ",\n"
-           << "       \"declared_byte_order\": \""
-           << byteOrderName(fileByteOrder) << "\",\n"
-           << "       \"sdk_pixel_format_code\": " << raw.sdkPixelFormatCode
-           << ", \"sdk_padding_x\": " << raw.sdkPaddingX
-           << ", \"sdk_padding_y\": " << raw.sdkPaddingY << "}"
-           << (i < 2 ? "," : "") << "\n";
+           << bitAlignmentName(fileAlignment) << "\",\n";
+
+        if (isRawBytes)
+        {
+            os << "       \"sdk_payload_bytes\": " << raw.sdkPayloadBytes
+               << ", \"expected_compact_bytes\": " << raw.expectedCompactBytes
+               << ",\n"
+               << "       \"compact_size_matches\": "
+               << jsonBool(raw.compactSizeMatches) << ",\n";
+        }
+
+        os << "       \"declared_byte_order\": \""
+           << byteOrderName(fileByteOrder) << "\"";
+
+        if (isRawBytes)
+        {
+            os << ",\n"
+               << "       \"sdk_pixel_format_code\": " << raw.sdkPixelFormatCode
+               << ", \"sdk_padding_x\": " << raw.sdkPaddingX
+               << ", \"sdk_padding_y\": " << raw.sdkPaddingY;
+        }
+
+        os << "}" << (i < 2 ? "," : "") << "\n";
     }
     os << "    ]\n";
     os << "  },\n";

@@ -2126,14 +2126,15 @@ uint64_t MeasurementController::acquireDeadlineNs(uint64_t nowNs) const
 {
     // ⚠ 011-A1 九项缺口 §3：**不能再用 `deadline == 0` 当"还没有期限"的哨兵**。
     //
-    // 上一版就是那样写的，而 `nowNs` 之外的另一个 0 也走同一条判断 ——
-    // 任务级期限算出来等于 `nowNs`（**任务已到期**）时，`deadline` 恰好
-    // 回到 0 的值域起点以上/以下都无从区分：`taskDeadline` 明明已算出，
-    // 却因为末尾那句 `if (deadline == 0)` 被**当成"两个都不可得"**，
-    // 于是**重新获得一份组预算**（`nowNs + grabGroupBudgetNs`）。
-    // T_task 是"任务必然终止"的唯一依据，在这里给它续期等于让一次
-    // 已经超时的采集照样跑满一轮 —— 而且现场完全看不见（`deadline` 是
-    // 个普通数值，没有第二个字段记录它从哪来）。
+    // 上一版就是那样写的（末尾一句 `if (deadline == 0) deadline = nowNs +
+    // grabGroupBudgetNs;`），而**算出来的期限本身就可能恰好是 0**：
+    // 任务级期限＝`nowNs + taskRemaining`，当 `taskRemaining == 0`
+    // （**任务已到期**）而 `nowNs` 也恰为 0 时，两个不同的原因
+    // ——"还没算出来"与"已经到期"—— **落在同一个值上**，判据无从区分。
+    // 于是一次**已经超时**的采集被当成"两个都不可得"，**重新获得一份
+    // 组预算**：T_task 是"任务必然终止"的唯一依据，在这里给它续期等于让
+    // 超时的采集照样跑满一轮 —— 而且现场完全看不见（`deadline` 只是个
+    // 普通数值，没有第二个字段记录它从哪来）。
     // ∴ 改用**独立的 `haveDeadline`** 表达"算出来了没有"，`deadline` 只存值。
     bool     haveDeadline = false;
     uint64_t deadline     = 0;
@@ -2173,7 +2174,14 @@ uint64_t MeasurementController::acquireDeadlineNs(uint64_t nowNs) const
     }
     else if (taskRemaining == 0)
     {
-        // 已到期：期限＝此刻。取小后必然胜出或持平（nowNs ≤ 任何未来时刻）。
+        // 已到期：期限＝此刻。
+        // ⚠ **不得**写成"取小后必然胜出"（评审 C 类勘误）：取小用的是
+        //    `taskDeadline < deadline`，而状态级候选（`actionStartNs_ + stateLimit`）
+        //    **可能落在过去** —— 状态自己的时限早就用光时，那个候选比 `nowNs`
+        //    更小 ⇒ 留下的仍是它，任务级这个 **不生效**。
+        //    但**结果等价**：两个候选都 ≤ `nowNs`，无论留哪个，下游拿到的
+        //    都是"已经到期"⇒ 一样地不发任何调用。写成"必然胜出"会让人
+        //    以为这条分支保证了什么，而它保证的只是"不会更晚"。
         deadline     = nowNs;
         haveDeadline = true;
     }

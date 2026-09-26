@@ -69,18 +69,73 @@
 //
 // ⚠ 实现方式是替换全局 `operator new` —— 这会作用于**本测试可执行文件
 //    （含它链接的静态库）**。故注入器默认**关闭**（倒计时 0），
-//    只在单个用例里由 `StubImvApi::failNextAllocationAfterFrame` 打开，
-//    且只对**紧随其后的一次**分配生效，用完即归零。
+//    只在单个用例里由替身的开关打开（`failNextAllocationAfterFrame` ＝
+//    紧随其后的一次；`secondaryFailureCount` ＝ 紧随其后的那几次改用
+//    另一种异常种类），用完即归零；用例捕获异常后的第一条语句再显式
+//    撤防一次，确保倒计时不会漏进测试框架自身的分配。
 namespace
 {
-/// 距离下一次分配失败还有几次分配；**0 表示关闭**。
-int g_allocFailCountdown = 0;
+/// 还要让接下来多少次分配失败；**0 表示关闭**。
+int g_allocFailRemaining = 0;
+
+/// 注入失败时抛出的异常种类：`0` = `std::bad_alloc`，`1` = `std::length_error`。
+///
+/// ⚠ 为什么要**两种**种类（V2.5 新增）：只注入一种异常时，"原异常被二次
+///   异常顶掉"与"原异常正常上抛"是**同一个类型**，用例根本分辨不出自己
+///   看到的是哪一个 —— 那样的用例即使全绿也证明不了"保住了原异常"。
+///   两种种类让这两件事可区分：原异常是 `bad_alloc`，而"描述异常／写诊断
+///   这两步自己失败"造成的是 `length_error`。
+int g_allocThrowKind = 0;
+
+/// 第一段用尽后自动装载的第二段（次数、种类）。
+int g_allocFailPhase2Remaining = 0;
+int g_allocThrowKindPhase2     = 1;
+
+/// 两段式布防：接下来 `firstCount` 次分配抛 `firstKind`，
+/// **紧接着的** `restCount` 次抛 `restKind`。
+///
+/// ⚠ 为什么必须"两段"：异常出口的三步里，第 ① 步（描述异常）紧跟在
+///   抛出之后、**早于**任何替身回调 —— 若只布一种种类，"
+///   原异常被二次异常顶掉"与"原异常正常上抛"就是同一个类型，用例
+///   分辨不出自己收到的是哪一个。两段式让**原异常**（第一段，
+///   `bad_alloc`）与**二次失败**（第二段，`length_error`）可区分，
+///   且各自的落点可控（复制载荷 / 描述 / 写诊断）。
+/// ⚠ 消息用短字面量（`"SECONDARY"`，9 字符 < SSO 上限）：**抛异常本身
+///   也可能分配**，若它再撞上还没用完的倒计时就会自我递归。
+void armAllocFailurePhased(int firstCount, int firstKind, int restCount,
+                           int restKind)
+{
+    g_allocFailRemaining       = firstCount;
+    g_allocThrowKind           = firstKind;
+    g_allocFailPhase2Remaining = restCount;
+    g_allocThrowKindPhase2     = restKind;
+}
+
+/// 撤防（用例在捕获到异常后的**第一条**语句就调用它）。
+void disarmAllocFailure()
+{
+    g_allocFailRemaining       = 0;
+    g_allocThrowKind           = 0;
+    g_allocFailPhase2Remaining = 0;
+}
 }  // namespace
 
 void* operator new(std::size_t size)
 {
-    if (g_allocFailCountdown > 0 && --g_allocFailCountdown == 0)
+    if (g_allocFailRemaining > 0)
     {
+        const int kind = g_allocThrowKind;
+        if (--g_allocFailRemaining == 0)
+        {
+            // 第一段用尽 ⇒ 装载第二段（可能有，也可能没有）。
+            g_allocFailRemaining       = g_allocFailPhase2Remaining;
+            g_allocThrowKind           = g_allocThrowKindPhase2;
+            g_allocFailPhase2Remaining = 0;
+        }
+        if (kind == 1)
+        {
+            throw std::length_error("SECONDARY");
+        }
         throw std::bad_alloc();
     }
     if (void* p = std::malloc(size == 0 ? 1 : size))
@@ -207,6 +262,16 @@ public:
 
     /// 令该路在同一轮内**取帧成功但图为空**（一次"取到空图"）。
     bool returnEmptyImage = false;
+
+    /// 令该路的结果带上**清理失败**（帧缓冲**释放未获确认**）。
+    ///
+    /// ⚠ V2.5 起它与主状态**分开记录**，而管理器的通道处置**只看它** ——
+    ///    本桩据此如实给出两种形态（见 `applyCleanupFailure`）：
+    ///      · 主操作成功 + 清理失败 ⇒ 整体失败（`SdkError`）、帧不交付；
+    ///      · 已有主失败 + 清理失败 ⇒ **保留首因**，失败只进 `cleanupError`。
+    ///    上一版这两条路径分别落在 `sdkError` 与 `cleanupError`，
+    ///    于是同一种"释放未获确认"在管理器那里拿到了两种处置。
+    std::optional<data::SdkFailure> cleanupFailure;
 
     /// `grab()` 被调用的次数（断言"未尝试时一次都没有"）。
     int grabCalls = 0;
@@ -368,18 +433,23 @@ public:
             const data::OpStatus st = failStatusQueue.front();
             failStatusQueue.erase(failStatusQueue.begin());
             // 失败路径**不碰 frame**（接口契约）。
-            return data::GrabResult{{st, std::nullopt, std::nullopt}};
+            return applyCleanupFailure(
+                data::GrabResult{{st, std::nullopt, std::nullopt}}, frame);
         }
         if (failNextGrabs > 0)
         {
             --failNextGrabs;
-            return data::GrabResult{
-                {data::OpStatus::Timeout, std::nullopt, std::nullopt}};
+            return applyCleanupFailure(
+                data::GrabResult{
+                    {data::OpStatus::Timeout, std::nullopt, std::nullopt}},
+                frame);
         }
         if (frameIds_.empty())
         {
-            return data::GrabResult{
-                {data::OpStatus::Timeout, std::nullopt, std::nullopt}};
+            return applyCleanupFailure(
+                data::GrabResult{
+                    {data::OpStatus::Timeout, std::nullopt, std::nullopt}},
+                frame);
         }
 
         const std::size_t i = std::min(cursor_, frameIds_.size() - 1);
@@ -405,10 +475,33 @@ public:
         {
             ok.frameStatusRaw = 0;
         }
-        return ok;
+        return applyCleanupFailure(ok, frame);
     }
 
 private:
+    /// 把 `cleanupFailure` 注入应用到一条结果上（V2.5 的两种形态见字段说明）。
+    data::GrabResult applyCleanupFailure(data::GrabResult r,
+                                         data::ImageFrame& frame) const
+    {
+        if (!cleanupFailure.has_value())
+        {
+            return r;
+        }
+        r.cleanupError = cleanupFailure;
+        if (r.ok())
+        {
+            // 忠实模拟真实后端 `mergeCleanup` 的输出：主操作成功而必要清理
+            // 失败 ⇒ **整体返回失败**，以该清理调用为错误来源，帧**不交付**。
+            // （`classify(ImvReleaseFrame, −119)` 就是 `SdkError`，与这里
+            //   写死的分类一致；本桩不调 SDK，故按同一映射给出同一结果。）
+            r.status   = data::OpStatus::SdkError;
+            r.sdkError = cleanupFailure;
+            r.frameStatusRaw.reset();
+            frame = data::ImageFrame{};
+        }
+        return r;
+    }
+
     data::CameraRole       role_;
     std::vector<uint64_t>  frameIds_;
     std::size_t            cursor_ = 0;
@@ -757,6 +850,114 @@ struct ScriptedRig
 };
 
 }  // namespace
+
+TEST(MultiCameraManagerTest, ReleaseUnconfirmedStopsChannelEvenWhenFrameChecksPassed)
+{
+    // V2.5 的统一规则：**释放未获确认 ⇒ 停止该路后续采集**，且**不覆盖首因**。
+    // 本用例是"帧检查**通过**、而释放失败"那一行（A1 不一致的两行之一）：
+    //   · 主状态被提升为失败（`SdkError`）—— 帧**不交付**、不计入有效帧；
+    //   · 通道**停止**；
+    //   · 措辞必须是"释放未获确认"，**不得**写成"分类未明确" ——
+    //     后者会让人去查设备，而真正该查的是**缓冲归属**。
+    ScriptedRig rig;
+    rig.cam100->cleanupFailure =
+        data::SdkFailure{data::SdkCall::ImvReleaseFrame, -119};
+
+    data::MultiCameraFrame frame;
+    EXPECT_TRUE(rig.mgr->capture(frame, kFakeEpochNs + 300000000ULL));
+
+    EXPECT_FALSE(rig.mgr->channelAvailable(data::CameraRole::CAM100))
+        << "释放未获确认的通道必须停止后续采集";
+    EXPECT_TRUE(rig.mgr->channelAvailable(data::CameraRole::CAM25))
+        << "正常通道不得被牵连";
+
+    const data::CaptureRound      r   = rig.mgr->lastCaptureRound();
+    const data::ChannelGrabRecord& rec = r.channel(data::CameraRole::CAM100);
+    EXPECT_EQ(rec.result.status, data::OpStatus::SdkError)
+        << "主操作成功而必要清理失败 ⇒ 整体失败（帧不交付）";
+    ASSERT_TRUE(rec.result.cleanupError.has_value())
+        << "释放未获确认必须进 cleanupError（管理器的处置只看它）";
+    EXPECT_EQ(rec.result.cleanupError->call, data::SdkCall::ImvReleaseFrame);
+    EXPECT_NE(rec.skippedReason.find("未获确认"), std::string::npos)
+        << rec.skippedReason;
+    EXPECT_EQ(rec.skippedReason.find("分类未明确"), std::string::npos)
+        << "释放问题不得被写成「分类未明确」：" << rec.skippedReason;
+    EXPECT_EQ(r.capturedCount, 2) << "未交付的帧不得计入有效帧";
+}
+
+TEST(MultiCameraManagerTest, ReleaseUnconfirmedStopsChannelAndKeepsFirstCause)
+{
+    // 同一规则的另一行：**帧已损坏、且释放也失败**。
+    //
+    // ⚠ 上一版这里"**继续可用**"（`mergeCleanup` 保留首因，失败只进
+    //   `cleanupError`，而管理器只按 `status` 判处置）—— 同一种
+    //   "释放未获确认"，与上一行得到**相反**的处置，区别只在于
+    //   "帧本身好不好"，而帧好不好与"缓冲还回去了没有"是两个不相干的问题。
+    //   V2.5 起两行统一：都停止，且**首因一字不动**（仍是 `CorruptFrame`）。
+    ScriptedRig rig;
+    rig.cam100->failStatusQueue.push_back(data::OpStatus::CorruptFrame);
+    rig.cam100->cleanupFailure =
+        data::SdkFailure{data::SdkCall::ImvReleaseFrame, -119};
+
+    data::MultiCameraFrame frame;
+    EXPECT_TRUE(rig.mgr->capture(frame, kFakeEpochNs + 300000000ULL));
+
+    EXPECT_FALSE(rig.mgr->channelAvailable(data::CameraRole::CAM100))
+        << "释放未获确认的通道必须停止后续采集 —— 与主失败是什么无关";
+
+    const data::CaptureRound      r   = rig.mgr->lastCaptureRound();
+    const data::ChannelGrabRecord& rec = r.channel(data::CameraRole::CAM100);
+    EXPECT_EQ(rec.result.status, data::OpStatus::CorruptFrame)
+        << "首因不得被清理失败覆盖";
+    EXPECT_FALSE(rec.result.sdkError.has_value())
+        << "帧状态非零是设备对帧自身的判定，不是 SDK 调用失败 ⇒ 不得伪造调用失败";
+    ASSERT_TRUE(rec.result.cleanupError.has_value());
+    EXPECT_EQ(rec.result.cleanupError->code, -119);
+    EXPECT_NE(rec.skippedReason.find("未获确认"), std::string::npos)
+        << rec.skippedReason;
+    EXPECT_EQ(r.capturedCount, 2);
+}
+
+TEST(MultiCameraManagerTest, ThrownReleaseMarkerNeverReachesHumanReadableText)
+{
+    // 011-A1 缺口 5／6 的显示责任：`kCallThrewCode` 是**标记值、不是 SDK 返回码**。
+    // 这条路径**真实可达**（不是构造出来的）：`FrameLeaseGuard::cleanup()` 是
+    // `noexcept` 的，它把"释放调用抛出"如实记成 `{ImvReleaseFrame, kCallThrewCode}`，
+    // 于是**正常返回**的结果里就带着这个标记值进了本轮记录。
+    //
+    // ⚠ 只要有一处把它当数字打印，现场就会看到 `-2147483648`，
+    //   然后拿着这个值去查一个不存在的 SDK 错误码 —— 这是"假的具体值"
+    //   比"缺值"更糟的又一例。故断言**两处人读出口**都只出现措辞。
+    ScriptedRig rig;
+    rig.cam100->cleanupFailure =
+        data::SdkFailure{data::SdkCall::ImvReleaseFrame, data::kCallThrewCode};
+
+    data::MultiCameraFrame frame;
+    EXPECT_TRUE(rig.mgr->capture(frame, kFakeEpochNs + 300000000ULL));
+
+    EXPECT_FALSE(rig.mgr->channelAvailable(data::CameraRole::CAM100))
+        << "释放未获确认（这里是「调用抛出」）同样必须停止该路后续采集";
+
+    const data::CaptureRound      r   = rig.mgr->lastCaptureRound();
+    const data::ChannelGrabRecord& rec = r.channel(data::CameraRole::CAM100);
+    ASSERT_TRUE(rec.result.cleanupError.has_value());
+    EXPECT_EQ(rec.result.cleanupError->code, data::kCallThrewCode)
+        << "标记值必须原样保留在**机器读**的字段里（读包方按同一定义解释）";
+
+    // ① 交付/记录文本（`data::ChannelGrabRecord` 的人读出口）
+    const std::string recordText = data::channelGrabRecordText(rec);
+    EXPECT_NE(recordText.find("调用抛出异常、无返回码"), std::string::npos) << recordText;
+    EXPECT_EQ(recordText.find("-2147483648"), std::string::npos)
+        << "标记值**不得**被当 SDK 原码念出来：" << recordText;
+
+    // ② 该路被停止时的原因文本（管理器的出口）
+    EXPECT_NE(rec.skippedReason.find("调用抛出异常、无返回码"), std::string::npos)
+        << rec.skippedReason;
+    EXPECT_EQ(rec.skippedReason.find("-2147483648"), std::string::npos)
+        << "标记值**不得**被当 SDK 原码念出来：" << rec.skippedReason;
+    EXPECT_NE(rec.skippedReason.find("未获确认"), std::string::npos)
+        << "处置措辞仍须是「释放未获确认」：" << rec.skippedReason;
+}
 
 TEST(MultiCameraManagerTest, PerChannelStatusTableDecidesAvailabilityAndAggregate)
 {
@@ -1783,6 +1984,23 @@ public:
     ///    断言失败收场（本用例的 `getFrameCalls == 1` 断言会当场揭穿它）。
     bool failNextAllocationAfterFrame = false;
 
+    /// §5 异常证据（V2.5）：`IMV_ReleaseFrame` 被调用时**抛出**
+    /// `std::out_of_range("THREW")`。用于"释放调用本身抛出"那一条 ——
+    /// 那时在飞的原异常**必须**原样上抛，这次抛出只被如实记成
+    /// "释放未获确认"。**类型必须与原异常可区分**（见 §5 的用例说明）。
+    bool throwOnReleaseFrame = false;
+
+    /// §5 异常证据（V2.5）：在"复制载荷"那次失败**之后**，让紧接着的
+    /// `secondaryFailureCount` 次分配抛 `std::length_error`（种类可区分）——
+    /// 即异常出口的"描述原异常"（第 ① 步）与"写诊断"（第 ③ 步）各自失败。
+    /// `0` = 关闭（只有原异常那一次注入）；用完自复位。
+    /// · `1`：只有描述失败 ⇒ 诊断仍应写出"描述失败"的占位文本；
+    /// · `2`：描述与写诊断都失败 ⇒ 诊断可以是空的，
+    ///        **只要求原异常仍是原异常**。
+    /// ⚠ 第二段必须**在这次注入里一起布防**（见 `getFrame`）：第 ① 步紧跟
+    ///   在抛出之后、早于任何替身回调，等到"释放"时才布防就已经晚了。
+    int secondaryFailureCount = 0;
+
     /// `getFrame` 交付的 `data` 指针改由本字段指定（默认指向 `frameBytes`）。
     /// 用于越界／溢出用例：把它指向一块**不可读**的地址，
     /// 于是"先复制再校验"的实现会当场崩溃，而正确的实现不碰它。
@@ -2023,12 +2241,17 @@ public:
         {
             return ret;
         }
-        if (failNextAllocationAfterFrame)
+        if (failNextAllocationAfterFrame || secondaryFailureCount > 0)
         {
             // 帧已交出（调用成功）⇒ 从这里往后就是"复制载荷／建显示图"
-            // 那一段 —— 让它的**第一次**分配失败，正是要在那里制造异常。
+            // 那一段 —— 让它的**第一次**分配失败，正是要在那里制造异常
+            // （＝**原异常**）。`secondaryFailureCount` 是第二段：紧接着的
+            // 那几次分配（＝异常出口里"描述异常"与"写诊断"两步各自的
+            // 分配）改成抛 `length_error`，使**二次失败与原异常类型不同**。
+            const int rest               = secondaryFailureCount;
             failNextAllocationAfterFrame = false;
-            g_allocFailCountdown         = 1;
+            secondaryFailureCount        = 0;
+            armAllocFailurePhased(1, 0, rest, 1);
         }
         return 0;
     }
@@ -2038,6 +2261,11 @@ public:
         ++releaseFrameCalls;
         callLog.push_back("IMV_ReleaseFrame");
         (void)handle;
+        if (throwOnReleaseFrame)
+        {
+            // ⚠ 短字面量：抛异常自身若分配，会干扰下面的分配注入倒计时。
+            throw std::out_of_range("THREW");
+        }
         const int ret = codeOf("IMV_ReleaseFrame");
         if (ret == 0 && poisonOnRelease)
         {
@@ -2908,9 +3136,19 @@ TEST(ImvCameraBackendTest, SuccessfulGetFrameWithFailingReleaseFailsWholeOperati
     ASSERT_TRUE(g.sdkError.has_value());
     EXPECT_EQ(g.sdkError->call, data::SdkCall::ImvReleaseFrame);
     EXPECT_EQ(g.sdkError->code, -118);
-    // 清理失败**没有**进 cleanupError：它在这里是**唯一**的失败，
-    // 不是"主失败之外的第二个失败"。
-    EXPECT_FALSE(g.cleanupError.has_value());
+    // ⚠ V2.5 起，**同一个**失败也进 `cleanupError`（本用例上一版断言它为空）。
+    //   理由：两个字段回答的是**两个不同的问题** ——
+    //     · `sdkError`     = 失败的首因是什么（这里就是这次释放）；
+    //     · `cleanupError` = **资源还回去了没有**（这里：没有）。
+    //   而管理器的通道处置判据只看后者（它与"已有主失败 + 清理也失败"
+    //   那条路径必须共用同一条规则），故这一处**不能不写**：
+    //   少写它，"释放未获确认"就会在两条路径上拿到两种处置
+    //   （帧检查通过 ⇒ 禁用；帧已损坏 ⇒ 继续用）—— 那正是本批要消除的
+    //   不一致（011-A1 缺口 5 的收尾项）。
+    ASSERT_TRUE(g.cleanupError.has_value())
+        << "释放失败必须同时进 cleanupError：管理器的通道处置只看这个字段";
+    EXPECT_EQ(g.cleanupError->call, data::SdkCall::ImvReleaseFrame);
+    EXPECT_EQ(g.cleanupError->code, -118);
 
     // 帧**不交付**：输出帧只在成功条件全部满足之后才写入。
     EXPECT_TRUE(frame.image.empty());
@@ -3063,6 +3301,171 @@ TEST(ImvCameraBackendTest, GrabExceptionReleasesExactlyOnceAndLeavesDiagnosticsB
     EXPECT_NE(text.find("bad_alloc"), std::string::npos)
         << "异常类型必须留下（只写「未知异常」会让离线排查从零开始）：" << text;
     EXPECT_NE(text.find("帧释放：成功"), std::string::npos) << text;
+}
+
+TEST(ImvCameraBackendTest, GrabExceptionSurvivesReleaseCallThatThrows)
+{
+    // §5 的**回归项**（V2.5，评审要求）：异常出口的每一步各自失败时，
+    // **原异常必须仍是抛出去的那一个**。
+    //
+    // 本用例打第 ② 步 —— **释放调用本身抛出**：
+    //   · 正确实现：`cleanup()` 捕获它并如实记为"未获确认"，原异常继续上抛；
+    //   · 上一版的实现：`lease.cleanup()` 直接把替身的异常抛出去，
+    //     末尾的 `throw;` **执行不到** ⇒ 调用方收到的是**替身异常**，
+    //     原异常的现场永久丢失。
+    //
+    // ⚠ 为什么必须有**两种**注入种类：只注入一种异常时，"原异常被顶掉"与
+    //   "原异常正常上抛"是同一个类型，下面那条断言**无论如何都会绿** ——
+    //   它证明不了任何事。这里原异常是 `bad_alloc`（复制载荷时注入），
+    //   二次异常是 `out_of_range`（替身在释放时抛出），类型可区分。
+    OpenRealBackend f;
+    ASSERT_TRUE(f.open());
+
+    f.api->frameView.width       = 2;
+    f.api->frameView.height      = 2;
+    f.api->frameView.pixelFormat = 0x01080001;   // Mono8
+    f.api->frameView.status      = 0;
+    f.api->frameBytes.assign(4, 0x44);
+
+    f.api->failNextAllocationAfterFrame = true;   // 原异常：复制载荷时失败
+    f.api->throwOnReleaseFrame          = true;   // 二次异常：释放调用抛出
+
+    data::ImageFrame frame;
+    bool             sawOriginal  = false;
+    bool             sawSecondary = false;
+    std::string      other;
+    try
+    {
+        (void)f.backend->grab(frame, 100);
+    }
+    catch (const std::bad_alloc&)
+    {
+        disarmAllocFailure();   // 第一条语句：别让倒计时漏进测试框架
+        sawOriginal = true;
+    }
+    catch (const std::exception& e)
+    {
+        disarmAllocFailure();
+        sawSecondary = true;
+        other        = e.what();
+    }
+
+    EXPECT_TRUE(sawOriginal)
+        << "原异常（bad_alloc）必须原样上抛；实际收到的是二次异常：" << other;
+    EXPECT_FALSE(sawSecondary) << "释放抛出的异常顶掉了原异常：" << other;
+
+    // 抛出之后**不得重试**：那次调用是否已经归还了缓冲无法判断，
+    // 重试就是"一个帧释放两次"。
+    EXPECT_EQ(f.api->releaseFrameCalls, 1)
+        << "释放调用抛出后不得重试（不得再释放一次）";
+
+    const std::string text = f.backend->lastErrorText();
+    EXPECT_NE(text.find("调用抛出异常、无返回码"), std::string::npos)
+        << "释放抛出的那次调用必须被如实记成「未获确认」，且不得把"
+           "标记值当 SDK 原码念出来："
+        << text;
+    EXPECT_NE(text.find("std::bad_alloc"), std::string::npos)
+        << "原异常的类型仍须留在诊断里：" << text;
+}
+
+TEST(ImvCameraBackendTest, GrabExceptionSurvivesFailingExceptionDescription)
+{
+    // §5 第 ① 步：`describeCurrentException()` 自己**要分配内存**，
+    // 分配失败时不得顶掉原异常，且诊断里要留下"描述失败"的**占位说明**
+    // （写空串会让人以为异常文本本身是空的）。
+    OpenRealBackend f;
+    ASSERT_TRUE(f.open());
+
+    f.api->frameView.width       = 2;
+    f.api->frameView.height      = 2;
+    f.api->frameView.pixelFormat = 0x01080001;   // Mono8
+    f.api->frameView.status      = 0;
+    f.api->frameBytes.assign(4, 0x44);
+
+    f.api->failNextAllocationAfterFrame = true;   // 原异常
+    f.api->secondaryFailureCount        = 1;      // 只让"描述异常"这一步失败
+
+    data::ImageFrame frame;
+    bool             sawOriginal  = false;
+    bool             sawSecondary = false;
+    std::string      other;
+    try
+    {
+        (void)f.backend->grab(frame, 100);
+    }
+    catch (const std::bad_alloc&)
+    {
+        disarmAllocFailure();
+        sawOriginal = true;
+    }
+    catch (const std::exception& e)
+    {
+        disarmAllocFailure();
+        sawSecondary = true;
+        other        = e.what();
+    }
+
+    EXPECT_TRUE(sawOriginal)
+        << "描述异常这一步失败不得顶掉原异常；实际收到：" << other;
+    EXPECT_FALSE(sawSecondary) << other;
+    EXPECT_EQ(f.api->releaseFrameCalls, 1);
+
+    const std::string text = f.backend->lastErrorText();
+    EXPECT_NE(text.find("描述本身构造失败"), std::string::npos)
+        << "描述失败必须留下**说明这一点的**占位文本，而不是空串或"
+           "一句看不出问题的话："
+        << text;
+    EXPECT_NE(text.find("帧释放：成功"), std::string::npos)
+        << "释放本来成功了，这句话不能被别的失败抹掉：" << text;
+}
+
+TEST(ImvCameraBackendTest, GrabExceptionSurvivesFailingDiagnosticWrite)
+{
+    // §5 第 ③ 步：写诊断这一步同样要分配 —— 它失败时**诊断可以是空的**
+    //（分配不出来就写不出字，这是硬限制），但**原异常必须是原异常**。
+    // 这是本组用例的底线：诊断是附加信息，原异常才是调用方要处理的东西。
+    OpenRealBackend f;
+    ASSERT_TRUE(f.open());
+
+    f.api->frameView.width       = 2;
+    f.api->frameView.height      = 2;
+    f.api->frameView.pixelFormat = 0x01080001;   // Mono8
+    f.api->frameView.status      = 0;
+    f.api->frameBytes.assign(4, 0x44);
+
+    f.api->failNextAllocationAfterFrame = true;   // 原异常
+    f.api->secondaryFailureCount        = 2;      // 描述与诊断两步都失败
+
+    data::ImageFrame frame;
+    bool             sawOriginal  = false;
+    bool             sawSecondary = false;
+    std::string      other;
+    try
+    {
+        (void)f.backend->grab(frame, 100);
+    }
+    catch (const std::bad_alloc&)
+    {
+        disarmAllocFailure();
+        sawOriginal = true;
+    }
+    catch (const std::exception& e)
+    {
+        disarmAllocFailure();
+        sawSecondary = true;
+        other        = e.what();
+    }
+
+    EXPECT_TRUE(sawOriginal)
+        << "诊断写不出来时原异常更须原样上抛；实际收到：" << other;
+    EXPECT_FALSE(sawSecondary) << other;
+    EXPECT_EQ(f.api->releaseFrameCalls, 1)
+        << "诊断失败**不得**影响释放：释放是资源问题，与诊断无关";
+
+    // 诊断文本这里允许为空；但**不得**把二次异常写进去冒充原异常。
+    const std::string text = f.backend->lastErrorText();
+    EXPECT_EQ(text.find("SECONDARY"), std::string::npos)
+        << "二次异常不得出现在诊断里：" << text;
 }
 
 TEST(ImvCameraBackendTest, CloseIsIdempotentAndDestroysUnderlyingExactlyOnce)

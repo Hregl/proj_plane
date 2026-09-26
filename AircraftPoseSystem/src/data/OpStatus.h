@@ -33,6 +33,7 @@
 // ============================================================================
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 
@@ -45,29 +46,47 @@ namespace data
 enum class OpStatus
 {
     /// 默认构造值 = **漏赋值**。任何已完成的调用都不得返回它。
-    /// 发布路径上出现即断言；release 中被放过则记 9004 并点名是
-    /// 哪一路的哪个调用（见 `aggregationSeverity()` 的最高档）。
+    /// ⚠ 处置是**记录 + 聚合以最高档（100）暴露**（应用码 9004），
+    /// 并在文本里点名是哪一路的哪个调用 —— 本仓**没有**运行期
+    /// `assert()`（全仓仅 `PreviewManager.cpp` 有一处注释说明为何
+    /// 用显式检查代替它），故"出现即断言"这种说法与实现不符，已改。
     Unset,
 
     /// 成功，且该操作要求的一切后置条件都已满足（取帧：帧已通过全部检查）。
     Ok,
 
     /// 本地判定：参数非法（例如 `timeoutMs == 0`、序列号为空）。
-    /// **未调用 SDK**，故 `sdkError` 必须为空。
+    ///
+    /// ⚠ **判定类别与实际调用历史是两个问题，分别记录**（ENG-09 V2.5
+    /// §5.29 的原则）：本字段的类别由**谁做出的判定**决定，而
+    /// `sdkError` 由**这次操作有没有真的调用过 SDK**决定。本地判定
+    /// **不代表此前未调用 SDK** ⇒ 旧版那句"本地判定 ⇒ `sdkError` 必须为空"
+    /// 已废除：当判定所依据的数据**正是某次成功调用产出的**时，
+    /// 那次调用必须如实保留（否则现场无从知道"是哪次调用给了这份数据"）。
     InvalidArgument,
 
-    /// 本地判定：数据违反 ENG-09 V2.4 §5.28 第 1 条的契约（组合表矛盾、
-    /// `compactSizeMatches` 为假后仍被交付、`capturedCount` 与帧数不符）。
-    /// **未调用 SDK**，故 `sdkError` 必须为空。
-    /// 正常运行时**不可达** ⇒ 出现即需人看。
+    /// 本地判定：数据违反 ENG-09 V2.5 §5.28 第 1 条的契约（组合表矛盾、
+    /// 帧状态非零却被交付、**后端报成功却交付空图**、
+    /// `capturedCount` 与帧数不符）。
+    ///
+    /// ⚠ 本状态**可达**（空图与帧状态两条路径都在运行期出现过），
+    /// 故它**不是**"只在代码缺陷时才出现"的指示；它表示"**某处的契约
+    /// 被违反**"—— 可能是本项目的代码缺陷，也可能是某个后端实现
+    /// 不满足接口契约。出现即需人看。
+    /// ⚠ 三种情形**携带非空 `sdkError`**（依据见上一条原则）：画幅与配置
+    /// 不一致、后端组装出的组合表矛盾（`{ImvGetFrame, IMV_OK}`）、
+    /// 管理器收到"报成功却空图"而原样转发后端的调用诊断。
     ContractViolation,
 
     /// 本地判定：请求的格式/模式本批未实现（`Mono12Packed`、`FreeRun`、
-    /// 未知格式码）。**未调用 SDK**。
+    /// 未知格式码）。本路本次**未调用取帧**；`sdkError` 按实际调用情况
+    /// 给出（同样**不**由本类别推出）。
     NotImplemented,
 
     /// 等待超时：SDK 返回 `IMV_TIMEOUT`（仅当失败调用是 `IMV_GetFrame`），
-    /// 或**本地预算耗尽**（此时未调用 SDK）。
+    /// 或**本地预算耗尽** —— 后者指**本路本次没有发起取帧**（预算在
+    /// 发令前后就已用尽，见 §5.29 的三个检查点），故 `sdkError` 为空；
+    /// 它说的是"**这一次取帧**没发生"，不是"本轮什么都没调用过"。
     Timeout,
 
     /// 调用成功，但设备侧表示**本拍没有有效帧**。
@@ -153,6 +172,17 @@ struct SdkFailure
     int32_t code = 0;
 };
 
+/// 「**调用抛出、没有返回码**」的标记值（**不是** SDK 返回码）。
+///
+/// SDK 从不返回 `INT32_MIN`；用它是为了让 `SdkFailure{call, code}` 这个
+/// 形状继续成立：清理调用（`IMV_ReleaseFrame` 等）**抛出异常**时，
+/// 既拿不到返回码，又不能把这次清理当成"成功"（那会把"缓冲可能没还回去"
+/// 说成"还回去了"）。
+///
+/// ⚠ 显示时必须走**专用措辞**（"调用抛出异常、无返回码"），**不得**把这个数字
+/// 当 SDK 原码念出来 —— 现场看到 `-2147483648` 只会以为设备报了怪码。
+inline constexpr int32_t kCallThrewCode = (std::numeric_limits<int32_t>::min)();
+
 /// 设备操作的结果（ENG-09 V2.4 §5.29）。
 struct OperationResult
 {
@@ -167,13 +197,22 @@ struct OperationResult
 
     /// 清理（停流/释放帧/关闭设备）失败的单独留存。
     ///
-    /// ⚠ 三条语义（缺一不可，见 ENG-09 V2.4 §5.29）：
+    /// ⚠ 四条语义（缺一不可，见 ENG-09 V2.5 §5.29）：
     ///   ① **已有主失败**时清理也失败 ⇒ 保留首因（`status` 与 `sdkError`
     ///      都不变），失败记在这里；
     ///   ② **原操作成功、而必要清理失败** ⇒ **整体返回失败**，
     ///      以该清理调用为错误来源（`sdkError` 记它）——
     ///      把"资源没还回去"说成成功是错的；
-    ///   ③ 清理成功 ⇒ 本字段为 `nullopt`。
+    ///   ③ **清理失败一律进本字段**（含 ② 的情形）：`sdkError` 回答
+    ///      "失败的首因是什么"，本字段回答"**资源还回去了没有**" ——
+    ///      两个不同的问题，合并成一个字段就会丢一个答案；
+    ///   ④ 清理成功 ⇒ 本字段为 `nullopt`。
+    ///
+    /// ⚠ ③ 是本批（V2.5）新增的**统一入口**：在此之前，只有"已有主失败"
+    ///   时清理失败才进这里，于是"释放未获确认"这件事在
+    ///   "帧检查通过而释放失败"与"帧已损坏且释放失败"两条路径上分别落在
+    ///   `sdkError` 与 `cleanupError`，**管理器只按 `status` 决定通道可用性**
+    ///   ⇒ 同样一件事拿到两种处置（一条禁用、一条继续用）。
     std::optional<SdkFailure> cleanupError;
 
     bool ok() const { return status == OpStatus::Ok; }
@@ -370,6 +409,41 @@ inline int appErrorCodeOf(OpStatus status)
         return 9004;   // kErrStateFailure：兜底码
     }
     return 9004;
+}
+
+/// `SdkFailure` 的**码**渲染成一句人话（**唯一**出口）。
+///
+/// ⚠ 为什么必须有这个助手，而不是各处直接 `std::to_string(code)`：
+///   `code` 可能是 `kCallThrewCode` —— 那是**标记值、不是 SDK 返回码**。
+///   直接打印会输出 `-2147483648`，现场只会把它读成一个**真实错误码**，
+///   然后去查一个不存在的码。这正是本批要避免的形态
+///   （与"用 `0` 冒充一个测出来的长度"同构：**假的具体值胜过缺值**是错的）。
+///
+/// 用法：所有把 `SdkFailure::code` 写进人读文本的地方**一律**走本函数；
+/// 需要机器读的（如 `result.json` 的 `"code":`）不用它 —— 那里保留原值，
+/// 由读包方按同一份 `data` 层定义解释。
+inline std::string sdkFailureCodeText(const SdkFailure& failure)
+{
+    if (failure.code == kCallThrewCode)
+    {
+        return "调用抛出异常、无返回码";
+    }
+    return std::to_string(failure.code);
+}
+
+/// `SdkFailure` 的完整人读文本：`<调用名> 返回 <码>`／`<调用名> 调用抛出异常、无返回码`。
+///
+/// ⚠ 抛出情形的动词**不是**"返回"：那次调用没有返回任何东西，"返回 调用抛出…"
+///   会把"没有返回值"重新说成一个返回值。措辞里的"调用抛出异常、无返回码"
+///   与 `kCallThrewCode` 的定义同源，**不得**在别处另写一套。
+inline std::string sdkFailureText(const SdkFailure& failure)
+{
+    const std::string call = sdkCallName(failure.call);
+    if (failure.code == kCallThrewCode)
+    {
+        return call + " " + sdkFailureCodeText(failure);
+    }
+    return call + " 返回 " + sdkFailureCodeText(failure);
 }
 
 }  // namespace data

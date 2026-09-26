@@ -583,9 +583,7 @@ data::OperationResult ImvCameraBackend::mergeInitCleanup(
         {
             result.cleanupError = cleanup.sdkError;
         }
-        text += "清理失败：" +
-                std::string(data::sdkCallName(cleanup.sdkError->call)) +
-                " 返回 " + std::to_string(cleanup.sdkError->code);
+        text += "清理失败：" + data::sdkFailureText(*cleanup.sdkError);
     }
     if (cleanup.cleanupError.has_value())
     {
@@ -599,9 +597,7 @@ data::OperationResult ImvCameraBackend::mergeInitCleanup(
         {
             text += "；";
         }
-        text += "清理再失败：" +
-                std::string(data::sdkCallName(cleanup.cleanupError->call)) +
-                " 返回 " + std::to_string(cleanup.cleanupError->code);
+        text += "清理再失败：" + data::sdkFailureText(*cleanup.cleanupError);
     }
     lastErrorText_ = text;
     return result;
@@ -954,8 +950,7 @@ data::OperationResult ImvCameraBackend::close()
         std::string text = "关闭相机失败：";
         if (r.sdkError.has_value())
         {
-            text += std::string(data::sdkCallName(r.sdkError->call)) +
-                    " 返回 " + std::to_string(r.sdkError->code);
+            text += data::sdkFailureText(*r.sdkError);
         }
         if (r.cleanupError.has_value())
         {
@@ -963,8 +958,7 @@ data::OperationResult ImvCameraBackend::close()
             {
                 text += "；";
             }
-            text += std::string(data::sdkCallName(r.cleanupError->call)) +
-                    " 返回 " + std::to_string(r.cleanupError->code);
+            text += data::sdkFailureText(*r.cleanupError);
         }
         lastErrorText_ = text;
     }
@@ -1106,6 +1100,15 @@ void ImvCameraBackend::mergeCleanup(
         //    故这**不是**可以留到下一次再说的收尾问题。
         result.status   = classify(cleanup->call, cleanup->code);
         result.sdkError = cleanup;
+        // ⚠ 同时记进 `cleanupError`（V2.5 新增的统一入口）：`sdkError`
+        //    回答"失败的首因是什么"，`cleanupError` 回答"**资源还回去了
+        //    没有**"。在这个情形下两者指向同一次调用，但**不能只留一个** ——
+        //    管理器的通道处置判据只看 `cleanupError`（与"已有主失败"
+        //    那条路径共用同一条规则）。少写这一处，"释放未获确认"就会在
+        //    "帧检查通过而释放失败"与"帧已损坏且释放失败"两条路径上
+        //    拿到两种处置（一条禁用、一条继续用）—— 那正是本批要消除的
+        //    不一致。
+        result.cleanupError = cleanup;
     }
     else
     {
@@ -1148,7 +1151,7 @@ ImvCameraBackend::FrameLeaseGuard::~FrameLeaseGuard()
     }
 }
 
-std::optional<data::SdkFailure> ImvCameraBackend::FrameLeaseGuard::cleanup()
+std::optional<data::SdkFailure> ImvCameraBackend::FrameLeaseGuard::cleanup() noexcept
 {
     if (!armed_)
     {
@@ -1156,19 +1159,46 @@ std::optional<data::SdkFailure> ImvCameraBackend::FrameLeaseGuard::cleanup()
         // SDK 的内部缓存计数错乱，而错误码可能仍是 0 —— 无声的破坏）。
         return std::nullopt;
     }
+    // ⚠ 先解除租约再调用：释放**抛出**时不能靠析构重试 ——
+    //   那次调用是否已经把缓冲还回去了**无法判断**，重试就是"释放两次"。
+    //   （上一版的缺陷不是这个顺序，而是**抛出的那次释放既没有被重试、
+    //     也没有任何记录**：诊断随异常一起消失，管理层无从知道
+    //     "这一路的缓冲可能没还回去"。现在如实返回未获确认。）
     armed_ = false;
-    return owner_.releaseFrame();
+    try
+    {
+        return owner_.releaseFrame();
+    }
+    catch (...)
+    {
+        // ⚠ 本函数在**栈展开中**被调用（catch 出口）。从这里抛出去会让
+        //   `grab()` 尾部的 `throw;` 执行不到，调用方收到的是二次异常，
+        //   原异常**丢失**（实测：`IMV_ReleaseFrame` 抛出时收到 `bad_alloc`）。
+        // ∴ 如实返回"调用抛出异常、无返回码"（`kCallThrewCode`）。
+        return data::SdkFailure{data::SdkCall::ImvReleaseFrame, data::kCallThrewCode};
+    }
 }
 
 void ImvCameraBackend::noteGrabException(
-    const std::string&                     exceptionText,
+    const char*                            exceptionText,
     const std::optional<data::SdkFailure>& cleanup)
 {
-    std::string text = "取帧过程中抛出异常：" + exceptionText + "；帧释放：";
+    // `nullptr` = 连"描述原异常"这一步都分配失败了。这时仍要留下
+    // **能说明问题**的一句话，而不是写个空串（"取帧过程中抛出异常：；"
+    // 会让人以为异常文本本身是空的）。
+    std::string text = "取帧过程中抛出异常：" +
+                       std::string(exceptionText != nullptr
+                                       ? exceptionText
+                                       : "（异常描述本身构造失败：分配内存失败，"
+                                         "未能取得异常文本）") +
+                       "；帧释放：";
     if (cleanup.has_value())
     {
-        text += "失败（" + std::string(data::sdkCallName(cleanup->call)) +
-                " 返回 " + std::to_string(cleanup->code) + "）";
+        // 前导词不同（抛出 ⇒ 释放结果"未获确认"；返回码 ⇒ "失败"），
+        // 但调用名与号码的渲染**只有一处**（`data::sdkFailureText`）——
+        // ⚠ `kCallThrewCode` 不是 SDK 返回码，**不得**把那个数字念出来。
+        text += (cleanup->code == data::kCallThrewCode ? "未获确认（" : "失败（") +
+                data::sdkFailureText(*cleanup) + "）";
     }
     else
     {
@@ -1256,10 +1286,46 @@ data::GrabResult ImvCameraBackend::grab(data::ImageFrame& frame,
         //      `GrabResult` 随栈展开销毁，调用方只能从 `lastErrorText()` 读；
         //   ③ **原样上抛**：本批不把异常转成状态码（未见裁决，亦不在
         //      九项缺口内）。
-        const std::string                     what    = describeCurrentException();
+        //
+        // ⚠ 三步**各自独立保护**（评审要求，011-A1 缺口 5 的回归项）：
+        //   这三步**每一步都要分配内存**（拼描述文本、`releaseFrame()`
+        //   内部、写诊断字符串）。任一步抛出都会让末尾的 `throw;`
+        //   **执行不到** ⇒ 调用方收到的是一个**二次异常**（例如释放时
+        //   分配失败 ⇒ 收到 `bad_alloc`），原异常连同它的类型与文本
+        //   永久丢失 —— 而"保住原异常"正是本段存在的**唯一理由**。
+        //   ∴ 每步关在自己的保护里：**失败只损失那一步的产物**。
+
+        // ① 描述原异常。用 `const char*` 而不是 `std::string`：后者的
+        //    构造本身就可能分配，第一步就失败的话连占位文本都给不出。
+        const char* what = nullptr;
+        std::string whatStorage;
+        try
+        {
+            whatStorage = describeCurrentException();
+            what        = whatStorage.c_str();
+        }
+        catch (...)
+        {
+            what = nullptr;   // 描述失败 ⇒ 由 noteGrabException 写占位说明
+        }
+
+        // ② 显式清理。`cleanup()` 是 `noexcept` 的：释放调用抛出时它
+        //    如实返回 `{ImvReleaseFrame, kCallThrewCode}`（"调用抛出、
+        //    无返回码"）且**不重试**，故这里不会再抛。
         const std::optional<data::SdkFailure> cleanup = lease.cleanup();
-        noteGrabException(what, cleanup);
-        throw;
+
+        // ③ 写诊断。这一步失败（分配不出字符串）不得顶掉原异常，
+        //    也不得产生第二个外抛异常 —— 诊断是**附加**信息，
+        //    原异常才是调用方要处理的东西。
+        try
+        {
+            noteGrabException(what, cleanup);
+        }
+        catch (...)
+        {
+        }
+
+        throw;   // ← 无条件执行：**原异常原样上抛**
     }
 
     const std::optional<data::SdkFailure> cleanup = lease.cleanup();

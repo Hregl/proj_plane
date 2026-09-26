@@ -141,9 +141,15 @@ inline std::string channelGrabRecordText(const ChannelGrabRecord& record)
     text += "（";
     if (record.result.sdkError.has_value())
     {
-        text += "调用 " +
-                std::string(sdkCallName(record.result.sdkError->call)) +
-                " 返回 " + std::to_string(record.result.sdkError->code);
+        // ⚠ "调用 " 前缀**只在有返回码时**加：抛出情形 `sdkFailureText` 自己
+        //    写成"…调用抛出异常、无返回码"，再叠一个"调用"会拼成
+        //    "调用 IMV_ReleaseFrame 调用抛出…"。正常情形的文本不变
+        //    （"调用 IMV_GetFrame 返回 0"），既有断言据此。
+        if (record.result.sdkError->code != kCallThrewCode)
+        {
+            text += "调用 ";
+        }
+        text += sdkFailureText(*record.result.sdkError);
     }
     else
     {
@@ -152,9 +158,7 @@ inline std::string channelGrabRecordText(const ChannelGrabRecord& record)
     }
     if (record.result.cleanupError.has_value())
     {
-        text += "；清理失败：" +
-                std::string(sdkCallName(record.result.cleanupError->call)) +
-                " 返回 " + std::to_string(record.result.cleanupError->code);
+        text += "；清理失败：" + sdkFailureText(*record.result.cleanupError);
     }
     if (!record.diagnosis.empty())
     {

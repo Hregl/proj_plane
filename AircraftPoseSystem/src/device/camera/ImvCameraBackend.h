@@ -192,7 +192,19 @@ private:
     ///
     /// ⚠ 本函数**只记录**，不改变任何控制流：原异常必须原样上抛
     /// （本批**不把异常转成状态码**，那不在九项缺口内、亦未经裁决）。
-    void noteGrabException(const std::string&                     exceptionText,
+    /// 记录取帧异常（**唯一**在栈展开后仍可读的出口）。
+    ///
+    /// ⚠ `exceptionText` 用 `const char*` 且允许 `nullptr`：本函数是
+    ///   异常出口的第 ③ 步，而"描述原异常"（第 ① 步）自己就可能因为
+    ///   分配失败而拿不到文本 —— 那时传 `nullptr`，本函数写一句
+    ///   **说明"描述失败"**的占位文本，而不是写成空的一般化句子。
+    /// ⚠ 调用方（catch 出口）必须把本调用关在 try/catch 里：它要分配
+    ///   字符串，抛出会顶掉在飞的原异常。
+    /// ⚠ `kCallThrewCode` 的措辞**只由 `data::sdkFailureCodeText()` 给出**
+    ///   （本函数走的就是它）。⚠ 这条纪律的上一版写成"只在本函数里被翻译"
+    ///   —— 那句话当时是**假的**：另有 9 处直接打印了码值。措辞不落在调用点上，
+    ///   落在助手那里才是可核对的（同批已把 10 处全部改走助手）。
+    void noteGrabException(const char*                            exceptionText,
                            const std::optional<data::SdkFailure>& cleanup);
 
     /// 取帧期间的"帧租约"守卫（§5 异常安全）。
@@ -205,8 +217,17 @@ private:
     /// 分工（缺一不可）：
     ///   · 正常出口 —— 函数体显式 `cleanup()`，把释放结果 `mergeCleanup`
     ///     进返回值（`GetFrame` 成功而 `ReleaseFrame` 失败 ⇒ 整体失败、不交付帧）；
-    ///   · 异常出口 —— 析构兜底**先释放**，诊断经 `noteGrabException()`
-    ///     留在后端诊断状态，**不吞异常**、**不抛新异常**。
+    ///   · 异常出口 —— **三步各自独立保护**（描述异常／显式清理／写诊断，
+    ///     每步内部的失败只损失那一步的产物），末尾的 `throw;` **无条件**
+    ///     执行 ⇒ **原异常必定原样上抛**；
+    ///   · 析构兜底 —— 只在"显式清理**根本没跑**"时才动手（`armed_` 仍真），
+    ///     绝不抛异常。
+    ///
+    /// ⚠ 兜底的**可达性**不要用"变异全绿"来论证：`M14`（只关掉析构里那次
+    ///   释放）全绿只说明**现有用例没覆盖它**。修复前确实存在一个真实窗口
+    ///   使其运行 —— `describeCurrentException()` 分配失败时，显式清理
+    ///   尚未执行就离开了 catch；本批已把该窗口关闭（三步各自保护），
+    ///   但登记结论只能写成"**现有测试未覆盖**"，不能写成"不可达"。
     ///
     /// ⚠ 为什么是嵌套类而不是 .cpp 里的自由类：它要调 `releaseFrame()`
     /// 与 `noteGrabException()`（都是私有），而经 `std::function` 之类的
@@ -223,7 +244,17 @@ private:
 
         /// 显式清理（正常出口与 catch 出口都用它）：释放并解除租约，
         /// 返回清理失败（`nullopt` = 成功）。**重复调用只释放一次**。
-        std::optional<data::SdkFailure> cleanup();
+        ///
+        /// ⚠ `noexcept`：本函数在**栈展开中**被调用（catch 出口），
+        ///   从这里抛出去会让 `grab()` 尾部的 `throw;` 执行不到，
+        ///   于是调用方收到的是一个**二次异常**（例如
+        ///   `IMV_ReleaseFrame` 抛出时收到的 `bad_alloc`），原异常**丢失**。
+        ///   ∴ 释放调用本身抛出时：如实返回
+        ///   `{ImvReleaseFrame, kCallThrewCode}`（"调用抛出异常、无返回码"），
+        ///   并**不再重试** —— 那次调用是否已经把缓冲还回去了**无法判断**，
+        ///   盲目重试就是"一个帧释放两次"（SDK 内部缓存计数错乱，
+        ///   而错误码可能仍是 0 —— 无声的破坏）。
+        std::optional<data::SdkFailure> cleanup() noexcept;
 
     private:
         FrameLeaseGuard(const FrameLeaseGuard&)            = delete;
@@ -236,7 +267,13 @@ private:
     /// 设置/读取失败的统一出口（`SdkCall` + 原码 → `status`）。
     static data::OperationResult sdkFailure(data::SdkCall call, int code);
 
-    /// 本地失败（**未调用 SDK** ⇒ `sdkError` 必为 `nullopt`）。
+    /// 本路本次**确实没有发起 SDK 调用**时的本地失败
+    /// （⇒ `sdkError` 必为 `nullopt`，不伪造"调用过"）。
+    ///
+    /// ⚠ 反向不成立（ENG-09 V2.5 §5.29）：`sdkError == nullopt` 不是
+    ///   "本地判定"的判据 —— 判定类别与调用历史是两个问题。若判定所依据的
+    ///   数据来自一次**成功**的调用，那条路径**不得**用本助手，必须如实
+    ///   保留 `{该调用, IMV_OK}`。
     static data::OperationResult localFailure(data::OpStatus status);
 
     data::CameraConfig       config_;

@@ -221,7 +221,10 @@ private:
     ///    仍按**现行待裁决策略**处理（保留现行待裁决策略，见 Q-D1），
     ///    本批不触碰该策略、也不改判。
     ///
-    /// @param stage 用于文本的阶段名（"就绪"／"取流启动"）。
+    /// @param stage 用于文本的阶段名，取**两处调用点实际传入**的值：
+    ///        `"设备打开"`（`initialize()` 的初检）／`"取流启动"`（`startAll()`
+    ///        之后的复检）。⚠ 不得写成"就绪" —— 那不是任何一个调用点传的值，
+    ///        而本参数的全部作用就是让现场一眼看出**失败在哪一步**。
     /// @return true = 全部就绪（或没有显式 imv 通道）；false 时已写好
     ///         `errorText_`，**调用方负责** `rollbackDevices()`。
     bool verifyExplicitImvChannels(const char* stage);

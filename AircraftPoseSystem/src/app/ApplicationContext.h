@@ -332,10 +332,13 @@ private:
             const data::OperationResult r = b->close();
             if (!r.ok())
             {
-                std::fprintf(stderr,
-                             "[WARN ] [app] 关闭相机后端失败：%s（码 %d）\n",
-                             data::opStatusName(r.status),
-                             r.sdkError ? r.sdkError->code : 0);
+                // 无 `sdkError` 时不写"码 0"：0 是 `IMV_OK`，
+                // 在这里会被读成"SDK 说成功了"，与"后端没给出调用信息"正相反。
+                const std::string detail =
+                    r.sdkError ? data::sdkFailureText(*r.sdkError)
+                               : std::string("未提供 SDK 调用信息");
+                std::fprintf(stderr, "[WARN ] [app] 关闭相机后端失败：%s（%s）\n",
+                             data::opStatusName(r.status), detail.c_str());
             }
         }
     }

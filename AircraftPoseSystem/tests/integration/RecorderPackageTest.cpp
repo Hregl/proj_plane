@@ -1102,11 +1102,146 @@ TEST(RecorderPackageTest, FallbackMetadataDescribesTheImageActuallyWritten)
     EXPECT_TRUE(f0["raw_image"].empty())
         << "回落路径写出了 raw_image —— 本包没有原始载荷";
 
+    // ⚠ V2.5 起，**整组 SDK／原始载荷事实**都不写（不只是 `raw_image`
+    //   一个键）：回落路径没有任何一次 SDK 调用产生过这些量，写出来
+    //   只能是 `raw` 的默认值 —— 读包的人会看到"载荷 0 字节、
+    //   长度相符=false"配着一份 512 字节的文件。"不存在的键"胜过
+    //   "值不对的键"：缺键一眼看得出没有这项事实，`0` 会被当成测出来的数。
+    //   （缺失的键在 `cv::FileNode` 里读出来是空节点，故用 `empty()` 断言。）
+    for (const char* key : {"sdk_payload_bytes", "expected_compact_bytes",
+                            "compact_size_matches", "sdk_pixel_format_code",
+                            "sdk_padding_x", "sdk_padding_y"})
+    {
+        EXPECT_TRUE(f0[key].empty())
+            << "回落路径写出了 `" << key
+            << "` —— 本包没有原始载荷，也没有任何一次 SDK 调用产生过它";
+    }
+
     // 元数据与文件**同源**的最后一道：按元数据算出的长度就是文件长度。
     const long expected = 6L * 4L * 3L;   // 宽 × 高 × 3 通道（BGR8 的布局）
     EXPECT_EQ(fileSize(joinPath(dir, "cam25.raw")), expected)
         << "按元数据（BGR8、6×4）算出的长度与文件不符 —— 那是元数据在描述"
            "另一份文件";
+}
+
+// ===========================================================================
+//  2e 三条**独立负向**用例（V2.5）：每条只破坏一个条件，
+//     对应的变异必须让"拒绝保存"这个**行为**断言转红 ——
+//     若只靠错误消息变化检出，就证明不了"这份帧没有被写出去"。
+// ===========================================================================
+
+TEST(RecorderPackageTest, RawPolicyContradictingCaptureFormatIsRefused)
+{
+    TempDir out("policymismatch");
+
+    // **`rawPolicy` 与格式不符**：Mono12（有效位 12）却声明"载荷可选"。
+    // ⚠ 这条检查此前**没有任何用例覆盖**（实测：停用该检查后本套件
+    //   17/17 全绿）。它管的是"这一路**该不该**有载荷"这个判断的可信来源：
+    //   两个字段给出相反答案时，结果包既不能说明该不该有载荷，
+    //   也无法事后发现矛盾。
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const Mono12Fixture             fx     = makeMono12(32, 24);
+    record.bestFrame.cam25                 = mono12Frame(fx, /*withRaw=*/true);
+
+    record.bestFrame.cam25.rawPolicy =
+        aircraft::data::RawDataPolicy::RawOptional;
+
+    // ---- 前提：其余每一处都合法（否则本用例分辨不出是哪一条在起作用）----
+    ASSERT_TRUE(record.bestFrame.cam25.raw.compactSizeMatches);
+    ASSERT_EQ(record.bestFrame.cam25.raw.format,
+              record.bestFrame.cam25.captureFormat);
+    ASSERT_EQ(record.bestFrame.cam25.raw.bitAlignment,
+              aircraft::data::BitAlignment::LsbZeroPadded);
+    ASSERT_EQ(record.bestFrame.cam25.raw.declaredByteOrder,
+              aircraft::data::ByteOrder::LittleEndian);
+
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+    Recorder rec(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+
+    EXPECT_FALSE(rec.save(record))
+        << "rawPolicy 与 captureFormat 矛盾必须拒绝保存，"
+           "而不是把矛盾的元数据写进结果包";
+    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+}
+
+TEST(RecorderPackageTest, RawFormatContradictingCaptureFormatIsRefused)
+{
+    TempDir out("formatmismatch");
+
+    // **`raw.format` 与 `captureFormat` 不符**。
+    // ⚠ 夹具刻意做成"**除这一处外全部自洽**"：载荷按 **Mono8** 给足长度
+    //   （32×24 = 768 字节），四个事实（重算／期望／自报／载体）全部相等、
+    //   `compactSizeMatches` 为真、组合合法、`rawPolicy` 也与
+    //   `captureFormat`（Mono12 ⇒ `RawRequired`）一致。
+    //   若只把 `raw.format` 改掉而**不重建载荷**，长度检查也会拦下它 ——
+    //   那样用例就分辨不出究竟是哪一条在起作用（"拦住了"与"因为对的
+    //   理由拦住了"是两件事）。
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const Mono12Fixture             fx     = makeMono12(32, 24);
+    aircraft::data::ImageFrame      f      = mono12Frame(fx, /*withRaw=*/true);
+
+    const std::size_t mono8Bytes =
+        static_cast<std::size_t>(fx.width) * static_cast<std::size_t>(fx.height);
+    f.raw.format     = aircraft::data::PixelFormat::Mono8;
+    f.raw.validBits  = 8;
+    f.raw.bytes      = std::make_shared<const std::vector<uint8_t>>(
+        std::vector<uint8_t>(mono8Bytes, 0x5A));
+    f.raw.sdkPayloadBytes = mono8Bytes;
+    aircraft::data::computeExpectedCompactBytes(
+        fx.width, fx.height, f.raw.format, f.raw.expectedCompactBytes);
+    f.raw.compactSizeMatches = (f.raw.sdkPayloadBytes == f.raw.expectedCompactBytes);
+    record.bestFrame.cam25   = f;
+
+    // ---- 前提：四个事实自洽（重算＝期望＝自报＝载体）----
+    ASSERT_TRUE(f.raw.compactSizeMatches);
+    ASSERT_EQ(f.raw.expectedCompactBytes, mono8Bytes);
+    ASSERT_NE(f.raw.format, f.captureFormat)
+        << "本用例的前提就是这两个格式字段不同";
+    ASSERT_EQ(aircraft::data::requiredRawPolicyOf(f.captureFormat), f.rawPolicy)
+        << "前提：策略这一条是合法的（本用例只打格式不一致）";
+
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+    Recorder rec(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+
+    EXPECT_FALSE(rec.save(record))
+        << "载荷声明的格式与帧的采集格式不一致必须拒绝保存";
+    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+}
+
+TEST(RecorderPackageTest, MsbAlignedRawPayloadIsRefused)
+{
+    TempDir out("msbaligned");
+
+    // **对齐方式不是 `LsbZeroPadded`**（本批只实现低位对齐）。
+    // ⚠ 全树此前**不存在** `MsbAligned` 的用例，故"拒绝非低位对齐"
+    //   这一半要求没有证据（对齐方式此前只在 `isValidCombination`
+    //   内部被捎带检查，而那个函数自己也没有负向用例）。
+    //   对齐方式决定 12 位样本在 16 位容器里的位置：按错的假设去解码
+    //   是"整幅图看起来正常、数值整体偏 4 位"这种查不出来的错 ——
+    //   故这里断的是**行为**（不写文件），不是那句报错文本。
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const Mono12Fixture             fx     = makeMono12(32, 24);
+    record.bestFrame.cam25                 = mono12Frame(fx, /*withRaw=*/true);
+
+    record.bestFrame.cam25.raw.bitAlignment =
+        aircraft::data::BitAlignment::MsbAligned;
+
+    // ---- 前提：其余一切合法（长度四方一致、格式与策略自洽）----
+    ASSERT_TRUE(record.bestFrame.cam25.raw.compactSizeMatches);
+    ASSERT_EQ(record.bestFrame.cam25.raw.format,
+              record.bestFrame.cam25.captureFormat);
+    ASSERT_EQ(record.bestFrame.cam25.raw.validBits, 12);
+
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+    Recorder rec(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+
+    EXPECT_FALSE(rec.save(record))
+        << "声明为 MsbAligned 的载荷本批不支持，必须拒绝保存 —— "
+           "按低位对齐去读它会得到整体偏移的数值，而图看起来是正常的";
+    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
 }
 
 // ===========================================================================

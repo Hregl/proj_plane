@@ -86,6 +86,32 @@ const char* disableReasonText(data::OpStatus status)
     return "SDK 错误导致禁用（分类未明确）";
 }
 
+/// 「**释放/清理未获确认**」的如实措辞（与 `disableReasonText` 并列，
+/// 两者**不得互换**，也不得写成"已确认"）。
+///
+/// ⚠ 两个不同的故障，两句不同的话：
+///   · `disableReasonText(SdkError)` = "**调用失败、归不了类**" ——
+///     说的是"我们看不懂设备为什么这样"；
+///   · 本函数 = "**缓冲可能没还回去**" —— 说的是"资源状态不明"，
+///     而这次调用本身可能是成功的（返回码为 0）或被抛出打断的。
+///   上一版把第二种情形并进了第一种（因为 `mergeCleanup` 在主操作成功时
+///   把状态提升为 `SdkError`），于是现场看到的是"分类未明确"，
+///   真正该查的事（缓冲归属）一个字都没提。
+std::string cleanupUnconfirmedText(const data::SdkFailure& failure)
+{
+    std::string text = "该通道已停止后续采集：";
+    text += "帧缓冲释放**未获确认**（";
+    // ⚠ `kCallThrewCode` 不是 SDK 返回码（见 `data::kCallThrewCode`），
+    //    这里必须翻译成话，**不得**把那个数字当原码念出来。
+    //    翻译只有一处实现（`data::sdkFailureCodeText`），本文件不再自带分支
+    //    —— 两份实现迟早会分叉，而分叉的那一刻就会有一处又开始念数字。
+    text += data::sdkFailureText(failure);
+    text += "）—— 未归还的缓冲会被 SDK 内部缓存复用，续采会污染后续帧；"
+            "本路的主失败与清理诊断均已保留（首因未被覆盖），"
+            "自动恢复须有资源恢复依据后再做";
+    return text;
+}
+
 // ---------------------------------------------------------------------------
 //  触发前置判定（011-A1 九项缺口 §7 的裁决）
 // ---------------------------------------------------------------------------
@@ -727,8 +753,32 @@ bool MultiCameraManager::capture(data::MultiCameraFrame& frame,
             continue;
         }
 
+        // ---- 清理未获确认 ⇒ 停止该路后续采集（V2.5 的统一规则）----
+        //
+        // ⚠ 为什么这一条**必须排在状态分类之前**、且**只看 `cleanupError`**：
+        //   在上一版，"释放未获确认"这件事落在哪个字段**取决于主操作的结果**：
+        //     · 帧检查通过而释放失败 ⇒ `mergeCleanup` 把状态提升成 `SdkError`
+        //       ⇒ 走下面的 `shouldDisableChannel` ⇒ **禁用**；
+        //     · 帧已损坏（`CorruptFrame`）而释放失败 ⇒ 保留首因、失败只进
+        //       `cleanupError` ⇒ 状态不在禁用集合里 ⇒ **继续可用**。
+        //   同一件事、两种处置，区别只在于"帧本身好不好" —— 而帧好不好
+        //   与"缓冲还回去了没有"是**两个不相干的问题**。
+        // ∴ 判据改成直接看"清理是否有未获确认的失败"（V2.5 起，
+        //   主操作成功时的清理失败也进 `cleanupError`，两个入口统一）。
+        //
+        // ⚠ 处置是"**停止该路后续采集**"而不是"判定这台相机坏了"：
+        //   设备本身可能完全正常（甚至那次释放其实成功了，只是返回码
+        //   没拿到），未知的是**资源状态**。故文本只谈资源，
+        //   且**不覆盖首因** —— `status` 与 `sdkError` 一字不动，
+        //   现场同时看到"本来因为什么失败"与"资源没还回去"。
+        //   自动恢复（重新启用）须先有资源恢复的依据，本批不做。
+        if (rec.result.cleanupError.has_value())
+        {
+            ch->available = false;
+            rec.skippedReason = cleanupUnconfirmedText(*rec.result.cleanupError);
+        }
         // ---- 分类消费（R09 部分修复）----
-        if (shouldDisableChannel(rec.result.status))
+        else if (shouldDisableChannel(rec.result.status))
         {
             ch->available = false;
             rec.skippedReason =

@@ -164,13 +164,11 @@ std::string resultText(const data::OperationResult& r)
     }
     if (r.sdkError)
     {
-        out += std::string("，失败调用 ") + data::sdkCallName(r.sdkError->call) +
-               "（码 " + std::to_string(r.sdkError->code) + "）";
+        out += "，失败调用 " + data::sdkFailureText(*r.sdkError);
     }
     if (r.cleanupError)
     {
-        out += std::string("，清理失败 ") + data::sdkCallName(r.cleanupError->call) +
-               "（码 " + std::to_string(r.cleanupError->code) + "）";
+        out += "，清理失败 " + data::sdkFailureText(*r.cleanupError);
     }
     return out;
 }
@@ -436,11 +434,18 @@ bool SystemInitializer::verifyExplicitImvChannels(const char* stage)
             continue;
         }
 
-        // ⚠ 走到这里时**管理器**的 `lastError()` 通常是**空**的：
-        //    `initializeAll()` 开头就把它清空，而
-        //    `availableCameraCount() >= 2` 又不触发它写 1001 —— 即
-        //    "一路真实相机没打开"这件事在管理器里**不产生**错误文本
-        //    （那一路的失败是瞬态、可降级的，见 `shouldDisableChannel`）。
+        // ⚠ 走到这里时**管理器**的 `lastError()` **恒为空** —— 不是"通常"，
+        //    而是可以证明的空（评审 C 类勘误指出的正是这句话）：
+        //      · `initializeAll()` 开头把它清空，**只有**"可用数不足 2"那一支
+        //        才写它，而那一支**同时 `return false`**；
+        //      · `startAll()` 同理（写它就 `return false`）；
+        //      · 而 `initialize()` 在这两处返回 false 时**立即回滚并返回**，
+        //        根本走不到本函数。
+        //    ⇒ 能走到本函数的每一次调用，管理器的错误文本都被清空过且再没写过。
+        //    下面仍写成"有则用"（`!managerDetail.empty()`）而不是直接删掉这一支：
+        //    `lastError()` 是公开访问器，它的契约**不保证**"走到这里必为空"，
+        //    而这里要的只是"有更具体的话就用更具体的那句"。
+        //    换句话说：**这一支当前不生效**，保留它是防御，不是依赖。
         //
         //    ⚠ 上一版据此写的是"（无附加说明——单路初始化失败的明细见
         //    各后端自身日志）"，**那是一个假的指路牌**：后端并不写
