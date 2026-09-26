@@ -36,6 +36,10 @@
 //    因为它的算式直接决定 VALIDATE 状态下多少实测结果会判不合格。
 // ============================================================================
 
+// ============================================================================
+//  ⚠ 本文件引用的 SYS-08 §7.x 经核实为悬空／撞号引用（2026-09-26 复核），依据待裁决，见《待裁决问题汇总》Q-D2 与《SYS-08-§7引用勘误.md》；正文引用仅描述现行行为，不作为冻结依据。
+// ============================================================================
+
 #include "data/PoseValidationResult.h"
 #include "data/ShipPoseResult.h"
 #include "data/ValidationConfig.h"
@@ -65,7 +69,7 @@ public:
     ///        构成与诊断，不单独设门槛（门槛是 `minInlierRatio`）。
     /// @param out         `PoseValidationResult`；无论通过与否，三个字段
     ///        （reprojectionError / inlierRatio / confidence）都会被填写 ——
-    ///        SYS-08 §7.5 要求失败任务也记录失败原因，缺值会让 result.json
+    ///        SYS-08 §7.5〔引用无效·依据待裁决·见 Q-D2〕 要求失败任务也记录失败原因，缺值会让 result.json
     ///        无法说明"为什么判不合格"。
     /// @return 是否通过全部判据（等于 out.valid）。
     bool validate(const data::ShipPoseResult& result,

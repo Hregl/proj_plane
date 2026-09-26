@@ -14,6 +14,10 @@
 //  本文件只覆盖不依赖设备的部分。
 // ============================================================================
 
+// ============================================================================
+//  ⚠ 本文件引用的 SYS-08 §7.x 经核实为悬空／撞号引用（2026-09-26 复核），依据待裁决，见《待裁决问题汇总》Q-D2 与《SYS-08-§7引用勘误.md》；正文引用仅描述现行行为，不作为冻结依据。
+// ============================================================================
+
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -85,7 +89,7 @@ TEST(StateMachineTest, 正常流程逐步推进到COMPLETE)
 
 TEST(StateMachineTest, 每次进入状态都向RetryManager报一次尝试)
 {
-    // SYS-08 §7.6 约束 2。若不满足，各状态的次数上限就失去意义。
+    // SYS-08 §7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 2。若不满足，各状态的次数上限就失去意义。
     MeasurementConfig cfg = shortTaskConfig();
     RetryManager retry(cfg);
     StateMachine sm(retry);
@@ -154,7 +158,7 @@ TEST(StateMachineTest, COMPLETE不得转为FAILED)
 
 TEST(StateMachineTest, 所有状态都可进入FAILED除COMPLETE外)
 {
-    // §7.7 的恢复路径要求任意失败点都能落到 FAILED（COMPLETE 除外）。
+    // §7.7〔引用无效·依据待裁决·见 Q-D2〕 的恢复路径要求任意失败点都能落到 FAILED（COMPLETE 除外）。
     const S all[12] = {
         S::IDLE, S::SEARCH, S::TARGET_FOUND, S::ALIGN, S::STABILIZE,
         S::MEASURE_SELECT, S::CAPTURE, S::POSE_SOLVE, S::VALIDATE, S::SAVE,
@@ -185,8 +189,8 @@ TEST(StateMachineTest, 所有状态都可进入FAILED除COMPLETE外)
 
 // ⚠ 为什么用 CAPTURE → MEASURE_SELECT 这条边做"每边上限"的用例：
 //
-// §7.4 的每边上限是 2，而 §7.6 约束 2 让"进入"也算一次尝试。于是"同一条边
-// 试到第 3 次"要求**边的起点状态能被进入 ≥3 次**。查 §7.3：TARGET_FOUND=1、
+// §7.4 的每边上限是 2，而 §7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 2 让"进入"也算一次尝试。于是"同一条边
+// 试到第 3 次"要求**边的起点状态能被进入 ≥3 次**。查 §7.3〔引用无效·依据待裁决·见 Q-D2〕：TARGET_FOUND=1、
 // STABILIZE=1、POSE_SOLVE=2、VALIDATE=2，只有 CAPTURE=3。
 // 也就是说，**整个状态图里只有 CAPTURE → MEASURE_SELECT 这一条边能真正
 // 走到"每边预算用尽"**；其余回退边的第 3 次尝试会先被起点状态的次数上限
@@ -296,7 +300,7 @@ TEST(StateMachineTest, 被拒的回退不消耗目标状态的尝试次数)
     //
     // ⚠ 该顺序有一个**已知的副作用**（登记 README §6）：回退被批准、但随后
     // 目标状态的进入被次数上限拒绝时，回退预算已经扣掉了，而状态并没有变。
-    // 之所以仍然选择这个顺序：§7.6 冻结的接口只有 beginRollback/beginAttempt
+    // 之所以仍然选择这个顺序：§7.6〔引用无效·依据待裁决·见 Q-D2〕 冻结的接口只有 beginRollback/beginAttempt
     // 这一对"检查即提交"的方法，没有 canRollback/canAttempt 这样的纯查询，
     // 无法做真正的两段式提交；在两种不精确之间，选"多扣一次回退预算"
     //（回退预算更小、更该省着用，多扣会让系统更早收敛）而不是
@@ -429,7 +433,7 @@ TEST(RetryManagerTest, 无登记码的状态如实置0且消息写明状态名)
 
 TEST(RetryManagerTest, 各状态计数独立且不因进入新状态清零)
 {
-    // §7.6 约束 5：计数只在 reset()/beginTask() 时清零。
+    // §7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 5：计数只在 reset()/beginTask() 时清零。
     MeasurementConfig cfg = shortTaskConfig();
     RetryManager retry(cfg);
     retry.beginTask(0);

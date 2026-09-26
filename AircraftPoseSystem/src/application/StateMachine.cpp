@@ -4,6 +4,10 @@
 //  依据：SYS-08 §5~§7、§11；ENG-04 §10.4；ENG-06 §5.2
 // ============================================================================
 
+// ============================================================================
+//  ⚠ 本文件引用的 SYS-08 §7.x 经核实为悬空／撞号引用（2026-09-26 复核），依据待裁决，见《待裁决问题汇总》Q-D2 与《SYS-08-§7引用勘误.md》；正文引用仅描述现行行为，不作为冻结依据。
+// ============================================================================
+
 #include "application/StateMachine.h"
 
 #include <string>
@@ -90,7 +94,7 @@ bool StateMachine::transition(data::MeasurementState next, uint64_t nowNs)
         return false;
     }
 
-    // ---- ③ 向后转换必须先获回退预算批准（§7.6 约束 1 / §11 约束 8）----
+    // ---- ③ 向后转换必须先获回退预算批准（§7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 1 / §11 约束 8）----
     //
     // 顺序上放在 beginAttempt 之前：回退被拒绝时不应消耗目标状态的尝试次数，
     // 否则一次不成功的回退会同时吃掉"回退预算"与"目标状态次数"两份配额，
@@ -102,7 +106,7 @@ bool StateMachine::transition(data::MeasurementState next, uint64_t nowNs)
         return false;
     }
 
-    // ---- ④ 进入目标状态即上报一次尝试（§7.6 约束 2）----
+    // ---- ④ 进入目标状态即上报一次尝试（§7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 2）----
     //
     // ⚠ 终止态（COMPLETE / FAILED）**例外，不上报**。这不是省一次记账，
     // 而是修正一处会让 §11 约束 9（"单次测量任务必然终止"）失效的缺陷：
@@ -113,7 +117,7 @@ bool StateMachine::transition(data::MeasurementState next, uint64_t nowNs)
     //   当前状态，任务永不终止，恰好违反它本要保证的那一条。实测表现：
     //   搜索到 200 s 仍停在 SEARCH，lastError 是 9001，而状态不是 FAILED。
     //
-    // 概念上也本就不该计数：§7.3 的次数上限与 §7.4 的回退预算约束的是
+    // 概念上也本就不该计数：§7.3 的次数上限与 §7.4〔引用无效·依据待裁决·见 Q-D2〕 的回退预算约束的是
     // **工作**（搜索、对准、采集、解算……），而"进入终止态"不做事，
     // 也没有"下一次尝试"可言。§7.3 的表中列出的上限全部属于工作状态。
     //
@@ -167,7 +171,7 @@ bool StateMachine::isLegalTransition(data::MeasurementState from,
         // §5.3：成功 → ALIGN。§5.3 未给失败行，§7.7 亦未列该状态。
         //
         // ⚠ 本阶段曾允许 TARGET_FOUND → SEARCH 的回退，现**已移除**：
-        // 它是条死路。§7.6 约束 2（每次进入状态都报一次尝试）与约束 5
+        // 它是条死路。§7.6〔引用无效·依据待裁决·见 Q-D2〕 约束 2（每次进入状态都报一次尝试）与约束 5
         //（计数器不因进入新状态而清零）叠加 §7.3 给该状态的上限 1，
         // 使 TARGET_FOUND 至多能被进入一次 —— 回退到 SEARCH 之后，
         // SEARCH 唯一的前进边会被永久拒绝，任务只能空转到 T_task 并报 9001。
@@ -200,7 +204,7 @@ bool StateMachine::isLegalTransition(data::MeasurementState from,
     case MeasurementState::CAPTURE:
         // §5.7：采到有效帧 → POSE_SOLVE。
         // → MEASURE_SELECT：采集持续失败意味着当前焦段不可用，
-        // 回退换一个候选通道是 §7.3 "第 2 次必须换用次优相机"的落地方式
+        // 回退换一个候选通道是 §7.3〔引用无效·依据待裁决·见 Q-D2〕 "第 2 次必须换用次优相机"的落地方式
         // （CAPTURE 与 MEASURE_SELECT 之间无其他状态可退）。
         return to == MeasurementState::POSE_SOLVE
             || to == MeasurementState::MEASURE_SELECT
@@ -209,7 +213,7 @@ bool StateMachine::isLegalTransition(data::MeasurementState from,
     case MeasurementState::POSE_SOLVE:
         // §5.8：成功 → VALIDATE；"失败：进入 FAILED 或重新 CAPTURE"。
         // §7.7 的 PnP 行则写"回退 MEASURE_SELECT"。两处并存，本阶段**同时
-        // 允许两条回退边**：§7.7 只声明"原 §7 的继续搜索/继续调整/重新测量
+        // 允许两条回退边**：§7.7〔引用无效·依据待裁决·见 Q-D2〕 只声明"原 §7 的继续搜索/继续调整/重新测量
         // 表述作废"，并未否定 §5.8 的"重新 CAPTURE"；而二者的差别是
         // 重试粒度（换帧 vs 换相机），由 MeasurementStrategy 按 §7.3 的
         // 升级规则选择，两条边都消耗 §7.4 的回退预算。
