@@ -23,7 +23,9 @@
 //  故必须分开表达，且**每一项都随帧落盘**（ENG-09 §6.5 结果包元数据）。
 //
 //  ⚠ 本批（011-A1）的支持范围（不是"留待将来"的含糊表述）：
-//    · 实现：`Mono8` / `Mono12` / `BGR8`；
+//    · 实现：`Mono8` / `Mono10` / `Mono12` / `BGR8`；
+//      ⚠ `Mono10` 于 **C-018**（2026-09-28 实机接入批）加入 —— 依据是
+//      A7A20MU201 实测**不提供 `Mono12`**，见下方 `Mono10` 取值的注释；
 //    · `Mono12Packed`：返回 `NotImplemented`（本批无该格式需求，
 //      属**范围**问题）。⚠ 其格式码 `0x010C0006` 在官方格式值表中归
 //      **GigE Vision 2.0** 的 `Mono12Packed`，而 **PFNC 的 `Mono12p = 0x010C0047`
@@ -46,6 +48,19 @@ enum class PixelFormat
 {
     /// 8 位灰度。SDK 侧对应 `gvspPixelMono8 = 0x01080001`（＝PFNC 同码）。
     Mono8,
+
+    /// 10 位灰度，**2 字节容器**（SDK 的 `OCCUPY16BIT`）。
+    /// SDK 侧对应 `gvspPixelMono10 = 0x01100003`（＝PFNC 同码）。
+    /// 有效位位置同 `Mono12`：**低位对齐、高位补零**（PFNC 2.4 §6.1.1）。
+    ///
+    /// ⚠ 本取值的**引入依据是实机**，不是通用性预留：2026-09-28 对
+    /// A7A20MU201（序列号 `FD88772AAK00078`）实测，其 `PixelFormat`
+    /// **可设项只有 `Mono8` / `Mono10` / `Mono10Packed`，没有 `Mono12`**
+    /// （逐条读自设备自带的 GenICam XML 与 `IMV_GetEnumFeatureEntrys`）。
+    /// 故"真实相机交付 >8 位原始载荷"这条契约在本机型上只能由 `Mono10` 承接。
+    /// ⚠ 对齐同样是**实测排除**的：该机型 Mono10 帧的最大值不是 64 的倍数
+    /// （MSB 对齐会使其成为 64 的倍数），与低位对齐相符。
+    Mono10,
 
     /// 12 位灰度，**2 字节容器**（SDK 的 `OCCUPY16BIT`）。
     /// SDK 侧对应 `gvspPixelMono12 = 0x01100005` ＝ **PFNC 的 `Mono12`**。

@@ -468,12 +468,29 @@ bool SystemInitializer::verifyExplicitImvChannels(const char* stage)
         //    "没能打开设备"，复检说的是"设备打开了但**没启动取流**"。
         //    两者共用一句会让现场去查接错线序，而根因在 `IMV_StartGrabbing`
         //    —— 或者反过来。标出阶段就足以把注意力放到正确的那一半。
+        // ⚠ `detail` 是**别人写的**句子，不能假定它不以句号结尾：后端自己的
+        //    说明多数以"。"收尾（如"…设置未生效。"），无条件再补一个句号会
+        //    印出"。。"（实机运行实测到，见 2026-09-28 的启动失败输出）。
+        //    这里只补**缺的**那个 —— 拼接的产物读起来必须像一句人话，
+        //    否则现场会把"标点异常"当成输出被截断。
+        //
+        // ⚠ 判"以句号结尾"**不能写 `detail.back() == '。'`**：`。` 在 UTF-8 里
+        //    是**三个字节**（E3 80 82），`back()` 取到的只是最后一个字节，
+        //    比较恒为假 —— 于是"已以句号结尾"永远判不出来，`。。` 照旧。
+        //    第一版就是这么写的，重跑实机输出才发现（输出里仍是"。。"）。
+        static const std::string kFullStop = "。";
+        const bool endsWithFullStop =
+            detail.size() >= kFullStop.size() &&
+            detail.compare(detail.size() - kFullStop.size(), kFullStop.size(),
+                           kFullStop) == 0;
+        const std::string detailSep = endsWithFullStop ? std::string()
+                                                      : std::string("。");
         const std::string stageText = std::string(stage);
         errorText_ = "真实相机接入失败（" + stageText + "）：通道 " +
                      c->cameraId + "（backend: imv，目标序列号 \"" +
                      c->serialNumber + "\"）在" + stageText +
-                     "检查时不可用。设备层报告：" + detail +
-                     "。本程序**不会**用其它通道或虚拟后端来让本次启动"
+                     "检查时不可用。设备层报告：" + detail + detailSep +
+                     "本程序**不会**用其它通道或虚拟后端来让本次启动"
                      "看起来成功。";
         return false;
     }
@@ -737,9 +754,27 @@ void SystemInitializer::logAssemblySummary()
 
         // 后端类型由**实际动态类型**得出，不由配置声明抄一遍 ——
         // 抄配置的话，装配代码一旦接错（把 imv 建成虚拟），摘要会跟着一起错。
-        const char* type = (std::dynamic_pointer_cast<device::ImvCameraBackend>(b))
-                               ? "真实（ImvCameraBackend）"
-                               : "虚拟（VirtualCameraBackend）";
+        const std::shared_ptr<device::ImvCameraBackend> imvBackend =
+            std::dynamic_pointer_cast<device::ImvCameraBackend>(b);
+        const char* type = imvBackend ? "真实（ImvCameraBackend）"
+                                      : "虚拟（VirtualCameraBackend）";
+
+        // 增益一栏（C-018，2026-09-28）：**成功也要写**，且必须写清单位。
+        // 理由：本机型的原生值特性 `GainRaw` **没有声明单位**，
+        // 而"请求 6 / 读回 6"若不带单位说明，极易被读成"6 dB 已生效"。
+        // 虚拟通道不适用增益：配置里若给了增益键，这里如实说明它**未被下发**，
+        // 而不是静默忽略 —— 后者会让一次"以为配了增益"的配置无声地不生效。
+        std::string gainText;
+        if (imvBackend)
+        {
+            gainText = "；增益 " + imvBackend->gainSetting().describe();
+        }
+        else if (r.cfg->gain.has_value() || r.cfg->gainRaw.has_value())
+        {
+            gainText = "；增益 配置了 " +
+                       std::string(r.cfg->gain.has_value() ? "gain" : "gain_raw") +
+                       "，但虚拟后端不连接设备、该值未被下发";
+        }
 
         const data::DeviceIdentity id = b->deviceIdentity();
         const std::string identity =
@@ -759,7 +794,8 @@ void SystemInitializer::logAssemblySummary()
                        "\"；可用性 " +
                        (ctx_.cameras && ctx_.cameras->channelAvailable(r.role)
                             ? "就绪"
-                            : "不可用"));
+                            : "不可用") +
+                       gainText);
     }
 }
 

@@ -33,6 +33,7 @@
 //  `serialNumber` 字段）与之比对 —— 两者都**不**与 cameraId 混用。
 // ============================================================================
 
+#include <optional>
 #include <string>
 
 #include "data/CameraRole.h"
@@ -81,8 +82,55 @@ struct CameraConfig
     /// 不同 —— 后者是 [0,1] 的合理性评分，不是时间。
     double exposureTime = 0.0;  // s
 
-    /// 增益，单位 **dB**（ENG-09 §6.1 冻结）。
-    double gain = 0.0;  // dB
+    /// 增益，单位 **dB**（ENG-09 §6.1 冻结）。来自 camera.yaml 的 `gain`。
+    ///
+    /// ⚠ `optional` 而不是 `double`（2026-09-28，C-018）：必须能区分
+    /// **"没配增益"**与**"配了 0.0 dB"** —— 后者是合法值，若两者同形，
+    /// "配置写漏了"就会被静默当成"配了 0 dB"，而这正是本工程反复出现的
+    /// "字段存在、数值正常、语义不成立"那一类。同一理由适用于 `gainRaw`。
+    ///
+    /// ⚠ 本字段**只对确实声明 dB 语义 `Gain` 节点的设备可用**。它**不是**
+    /// `gainRaw` 的别名，两者必须分别对待（见 `gainRaw` 的说明）。
+    std::optional<double> gain;  // dB
+
+    /// 增益的**设备原生数值**，来自 camera.yaml 的 `gain_raw`，**无单位解释**。
+    ///
+    /// ⚠ 为什么需要它，而不把配置里的 dB 值直接写进设备（C-018，2026-09-28）：
+    /// `gain = 6.0` 的含义是 **6 dB**。若把 6.0 原样写进设备的 `GainRaw`
+    /// 节点，则"写 6、读回 6"只证明**写入成功**，**证明不了单位是 dB** ——
+    /// 项目就此替设备假定了一个未经验证的换算（1 原生值 = 1 dB）。增益直接
+    /// 改变像素灰度，灰度进入特征提取，最终表现为测量角偏差，且全程不报错。
+    ///
+    /// 实测依据（2026-09-28，A7A20MU201，序列号 `FD88772AAK00078`，
+    /// 固件 `V1.000.00.0.R(20230529,252473)`，读自设备自带 GenICam XML
+    /// 与 `IMV_*Feature*` 调用）：
+    ///   · **无单位**：`GainRaw` 节点内**没有 `<Unit>` 子节点**；整份 XML 里
+    ///     `<Unit>` 的全部取值只有 `C`／`Hz`／`us`。⚠ 措辞纪律："dB" 在 XML 中
+    ///     确实出现 20 次，但**全部**属于 `DeEmphasisA`（以太网预加重的枚举项名
+    ///     与说明，属**传输层**信号完整性设置），**没有一处**与 `Gain`／
+    ///     `GainRaw` 关联 —— 不得简化成"XML 里没有 dB"，那句话是**假的**，
+    ///     而假的理由正是排查时最该被看见的那类细节。
+    ///   · **无换算依据**：XML 与 SDK 均未给出"原生值 → dB"的任何表达式或说明。
+    ///   · `GainRaw` 为 `<Float Name="GainRaw" NameSpace="Standard">`，
+    ///     `Representation Linear`、节点内静态 `<Max>32</Max>`、
+    ///     `pMin` 指向 `GainRawMin`（`<Integer>`，`<Value>1</Value>`，
+    ///     `Visibility Invisible`）⇒ 量程 1..32。
+    ///     ⚠ 该节点的**步长没有声明**：`<Inc>1</Inc>` 属于 `GainRawMin`
+    ///     这个 Integer 节点，**不属于** `GainRaw`；SDK 也没有取
+    ///     Floating 步长的接口（只有 `IMV_GetIntFeatureInc`）。
+    ///   · **没有 `Gain` 节点**：`IMV_GetDoubleFeatureValue("Gain")` 返回
+    ///     **−110**（`IMV_ERROR_PROPERTY_TYPE`），`IMV_GetFeatureType("Gain")`
+    ///     的**类型出参为 0**。⚠ 注意 `IMV_GetFeatureType` 的返回类型是
+    ///     **`bool`**（`IMVApi.h:775`）而不是错误码：早期探针把它当错误码读并
+    ///     据此写下"返回 1"，属**误读**，本节已按上述判据更正。
+    /// ⇒ 单位与换算依据**都不明确**，故本字段表示**原生数值**，
+    /// 项目不对它做任何单位解释，读回比对也按原生数值语义
+    /// （见 `ImvCameraBackend::configureGain`）。**禁止**把 dB 值填进本字段。
+    ///
+    /// 范围**不由本项目裁定**：上表中的 1..32 是**该机型**的设备事实，
+    /// 写进 `data` 层就等于把一台相机的量程冻进通用类型。越界由设备
+    /// 自己拒绝（`IMV_INVALID_RANGE`），本项目只拒绝负值（不合理）。
+    std::optional<double> gainRaw;
 
     /// 触发模式（三值，ENG-09 V2.3 §6.1）。
     ///

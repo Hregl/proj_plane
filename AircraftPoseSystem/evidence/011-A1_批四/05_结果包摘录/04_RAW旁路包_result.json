@@ -1,0 +1,103 @@
+{
+  "task_id": "RAW_BYPASS_FD88772AAK00078",
+  "state": "COMPLETE",
+  "written_at": "2026-09-28 18:40:45.419",
+  "model_id": "RAW_BYPASS_NO_MODEL",
+  "model_type": "",
+  "feature_version": "RAW_BYPASS",
+  "calibration_id": "RAW_BYPASS_NO_CALIBRATION",
+  "software_version": "2.1.0-v2.1-framework",
+  "success": false,
+  "yaw": 0.000000,
+  "pitch": 0.000000,
+  "roll": 0.000000,
+  "reprojection_error": 0.000000,
+  "aircraftToShip": {
+    "rotation": [
+      [1.000000000, 0.000000000, 0.000000000],
+      [0.000000000, 1.000000000, 0.000000000],
+      [0.000000000, 0.000000000, 1.000000000]
+    ],
+    "translation": [0.000000, 0.000000, 0.000000]
+  },
+  "validation": {
+    "valid": false,
+    "reason": "OK",
+    "reprojection_error": 0.000000,
+    "inlier_ratio": 0.000000,
+    "confidence": 0.000000
+  },
+  "camera_used": "CAM25",
+  "selected_camera": "CAM25",
+  "score": 0.000000,
+  "degraded": true,
+  "cameras_available": 1,
+  "quality": {
+    "sharpness": 0.000000,
+    "exposure": 0.000000,
+    "contrast": 0.000000,
+    "feature_count": 0,
+    "match_count": 0,
+    "match_ratio": 0.000000
+  },
+  "statistics": {
+    "feature_count": 0,
+    "match_count": 0,
+    "match_ratio": 0.000000,
+    "dropped_by_conflict": 0,
+    "cad_count": 0,
+    "texture_count": 0,
+    "spread_px": 0.000000
+  },
+  "best_frame": {
+    "exposure_index": 0,
+    "trigger_timestamp_ns": 0,
+    "frames": [
+      {"role": "CAM25", "frame_id": 1, "timestamp_ns": 527978168271836, "frame_valid": true,
+       "display_image": {"width": 4096, "height": 3000, "type": 0},
+       "data_source": "raw",
+       "raw_image": {"width": 4096, "height": 3000},
+       "pixel_format": "Mono10", "valid_bits": 10, "packing": "Unpacked",
+       "valid_bit_alignment": "LsbZeroPadded",
+       "sdk_payload_bytes": 24576000, "expected_compact_bytes": 24576000,
+       "compact_size_matches": true,
+       "declared_byte_order": "LittleEndian",
+       "sdk_pixel_format_code": 17825795, "sdk_padding_x": 0, "sdk_padding_y": 0},
+      {"role": "CAM50", "frame_id": 0, "timestamp_ns": 0, "frame_valid": false,
+       "display_image": {"width": 0, "height": 0, "type": 0},
+       "data_source": "none",
+       "pixel_format": "Mono8", "valid_bits": 8, "packing": "Unpacked",
+       "valid_bit_alignment": "LsbZeroPadded",
+       "declared_byte_order": "LittleEndian"},
+      {"role": "CAM100", "frame_id": 0, "timestamp_ns": 0, "frame_valid": false,
+       "display_image": {"width": 0, "height": 0, "type": 0},
+       "data_source": "none",
+       "pixel_format": "Mono8", "valid_bits": 8, "packing": "Unpacked",
+       "valid_bit_alignment": "LsbZeroPadded",
+       "declared_byte_order": "LittleEndian"}
+    ]
+  },
+  "turntable": {
+    "azimuth": 0.000000,
+    "elevation": 0.000000,
+    "motion": "IDLE"
+  },
+  "failure": {
+    "first_failed_state": "IDLE",
+    "first_error": {
+      "code": 0,
+      "name": "OK",
+      "message": "",
+      "timestamp_ns": 0
+    },
+    "final_failed_state": "IDLE",
+    "final_error": {
+      "code": 0,
+      "name": "OK",
+      "message": "",
+      "timestamp_ns": 0
+    }
+  },
+  "missing_required_fields": ["model_type"],
+  "non_finite_fields": []
+}

@@ -3,9 +3,11 @@
 // ============================================================================
 //  src/data/RawImagePayload.h
 //
-//  依据：ENG-09 V2.3 §5.28（原始载荷契约，冻结）、§6.5（结果包元数据）
-//        SYS-04 V2.4 §4.1 / SYS-05 V2.2 §5.1（ImageFrame）
-//        裁决 C-01 v1.7
+//  依据：ENG-09 V2.6 §5.28（原始载荷契约**与结果包元数据**，冻结 —— 键集、
+//        合法组合表、四个长度事实互证都在该节，**不是** §6.5：§6.5 是
+//        `MeasurementConfig`，与载荷元数据无关）
+//        SYS-04 V2.7 §4.1 / SYS-05 V2.5 §5.1（ImageFrame）
+//        裁决 C-01 v2.0
 //
 //  作用：把**相机交付的原始字节**连同解释它所需的全部信息一起携带，
 //  使"保存原始数据"这件事不依赖任何运行期上下文（配置、文件名、
@@ -63,6 +65,9 @@ constexpr CompactLayout compactLayoutOf(PixelFormat format)
     {
     case PixelFormat::Mono8:
         return CompactLayout{1, 1, true};
+    case PixelFormat::Mono10:
+        // SDK 的 OCCUPY16BIT：10 位有效值占 2 字节容器（A7A20MU201 实测）。
+        return CompactLayout{2, 1, true};
     case PixelFormat::Mono12:
         // SDK 的 OCCUPY16BIT：12 位有效值占 2 字节容器。
         return CompactLayout{2, 1, true};
@@ -76,9 +81,10 @@ constexpr CompactLayout compactLayoutOf(PixelFormat format)
 
 /// 该格式的有效位对齐（本批只产出 `LsbZeroPadded`）。
 ///
-/// ⚠ 参数**当前不参与判定**，且这是有意的而非遗漏：本批支持的三种格式
-/// （`Mono8`／`Mono12`／`BGR8`）的有效位位置只有一种约定 —— PFNC 2.4
-/// §6.1.1 的低位对齐、高位补零（16 位容器的 `Mono12` 是唯一非整字节者）；
+/// ⚠ 参数**当前不参与判定**，且这是有意的而非遗漏：本批支持的四种格式
+/// （`Mono8`／`Mono10`／`Mono12`／`BGR8`）的有效位位置只有一种约定 ——
+/// PFNC 2.4 §6.1.1 的低位对齐、高位补零（16 位容器的 `Mono10`／`Mono12`
+/// 是非整字节者，两者对齐相同、只是有效位宽不同）；
 /// `Mono8`／`BGR8` 是整字节格式，"对齐"概念不适用，返回同一取值是为了让
 /// 字段总有一个确定取值，而不是留一个"对 8 位无意义"的第二语义
 /// （那会让 Recorder 的元数据出现两种解读）。
@@ -102,6 +108,8 @@ constexpr uint16_t validBitsOf(PixelFormat format)
         return 8;
     case PixelFormat::BGR8:
         return 8;
+    case PixelFormat::Mono10:
+        return 10;
     case PixelFormat::Mono12:
         return 12;
     case PixelFormat::Mono12Packed:
@@ -202,7 +210,8 @@ struct RawImagePayload
     /// 项目定义的格式（由 SDK 格式码经适配层映射表得出）。
     PixelFormat format = PixelFormat::Mono8;
 
-    /// 有效位数：8 / 12。
+    /// 有效位数：8 / 10 / 12（取值由 `validBitsOf()` 按 `format` 给出；
+    /// `Mono10` 于 C-018 按 A7A20MU201 实测加入 —— 该机型不提供 `Mono12`）。
     uint16_t validBits = 8;
 
     /// 打包方式。本批只支持 `Unpacked`。

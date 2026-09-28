@@ -161,6 +161,13 @@ bool& prepared()
     return p;
 }
 
+/// 由仓库 `camera.yaml` 得到一份**三路全虚拟**的底本（定义见文件下方）。
+///
+/// ⚠ 前置声明而不是把定义挪到这里：定义依赖 `readFile` / `replaceOnce` /
+///    `repoYaml`，全都在下方几百行处；而那三个助手是**通用**的，把它们一起
+///    上移会让"负例改造"这组逻辑与"测试环境准备"挤在一起。声明一行即可。
+std::string allVirtualCameraYaml();
+
 /// 建临时工作目录、chdir 进去、把仓库 `config/` 的 7 个 yaml 拷进 `config/`。
 ///
 /// **幂等**：CWD 是进程级状态，而本套件的两个用例同处一个进程
@@ -209,6 +216,31 @@ bool prepareWorkspace(std::string& err)
         // ⚠ APS_SOURCE_DIR 必须由构建系统传入**已展开的绝对路径**
         //   （CMake: ${PROJECT_SOURCE_DIR}；shim: "$ROOT" 需在命令里展开）。
         const std::string src = std::string(APS_SOURCE_DIR) + "/config/" + f;
+
+        // ⚠ camera.yaml **不是原样拷贝**：本套件的工作目录夹具（`Harness`、
+        //   `countsOf`）按"三路都是 `VirtualCameraBackend`"建立，而仓库配置
+        //   自 2026-09-28 起承载**现场接线的真实选择**（CAM25 = `imv` +
+        //   实际序列号）。原样拷进来会有两个后果，且都不报在"配置"上：
+        //     ① `countsOf` 的 `static_pointer_cast<VirtualCameraBackend>`
+        //        对真实后端得到**空指针**，随后解引用 —— 失败点是**别处**；
+        //     ② 用例会去打开物理设备，于是同一份代码在有设备与没设备的
+        //        机器上表现不同。
+        //   故此处显式写入三路全虚拟的底本：测试环境必须与现场接线无关。
+        if (std::string(f) == "camera.yaml")
+        {
+            const std::string virtualYaml = allVirtualCameraYaml();
+            std::ofstream out(cfgDir + "/" + f, std::ios::binary);
+            out << virtualYaml;
+            if (virtualYaml.empty() || !out.good())
+            {
+                err = "写入三路全虚拟的 camera.yaml 失败（未能定位三路记录？）：" +
+                      cfgDir + "/" + f;
+                std::fprintf(stderr, "[SystemInitializerTest] 环境准备失败：%s\n", err.c_str());
+                return false;
+            }
+            continue;
+        }
+
         if (!copyFile(src, cfgDir + "/" + f))
         {
             err = "拷贝失败（APS_SOURCE_DIR=" + std::string(APS_SOURCE_DIR) + "）：" + src;
@@ -219,8 +251,8 @@ bool prepareWorkspace(std::string& err)
 
     std::fprintf(stderr,
                  "\n[SystemInitializerTest] 临时工作目录：%s —— 仓库 config/ 的 7 个 yaml "
-                 "已拷入（未重写任何取值）；logs/ output/ runtime/ 均落在该目录，"
-                 "仓库目录不被污染\n",
+                 "已拷入（camera.yaml **已改写为三路全虚拟**，其余未重写取值）；"
+                 "logs/ output/ runtime/ 均落在该目录，仓库目录不被污染\n",
                  tmp.c_str());
 
     prepared() = true;
@@ -667,15 +699,95 @@ std::string repoMeasurementYaml()
     return repoYaml("measurement.yaml");
 }
 
+/// 把**某一通道记录内**的一整行替换成 `line`（`line` 含缩进；空串 = 删掉该行）。
+///
+/// ⚠ 为什么必须有"记录作用域"，不能对整份 yaml 做"第一处匹配"
+///   （2026-09-28 实机接入后暴露）：仓库的 `camera.yaml` 里 CAM25 已改为
+///   `backend: "imv"`，于是
+///   `replaceOnce(repoYaml("camera.yaml"), "backend: \"virtual\"", "imv")`
+///   命中的是 **CAM50** —— 用例的意图是"把 cam25 改成真实后端"，实际改的是
+///   cam50，而断言仍然通过（它只看整体启动成败），并且**真的去开了物理设备**
+///   （实测输出："已枚举到 1 台设备"）。文本位置与"第几路"之间本来就没有
+///   约定，只是因为历史上三路同形而**看起来**成立。
+///   这类"改错了对象但仍然通过"的用例比没有用例更坏：它占着一条断言，
+///   却证明的是另一件事。
+///
+/// @return 空串 = 锚点或键未命中（调用方据此判失败，不静默返回原文）。
+std::string replaceInCameraRecord(const std::string& text,
+                                  const std::string& cameraId,
+                                  const std::string& key,
+                                  const std::string& line)
+{
+    const std::string anchor = "id: \"" + cameraId + "\"";
+    const std::size_t begin  = text.find(anchor);
+    if (begin == std::string::npos)
+    {
+        return std::string();
+    }
+    // 列表项标记 "   - " 即下一条记录的开始（本文件的三条记录同缩进）。
+    const std::size_t next = text.find("\n   -", begin);
+    const std::size_t end  = (next == std::string::npos) ? text.size() : next;
+
+    const std::string record = text.substr(begin, end - begin);
+    const std::size_t k      = record.find(key + ":");
+    if (k == std::string::npos)
+    {
+        return std::string();
+    }
+    const std::size_t lineBeg = record.rfind('\n', k);
+    std::size_t       lineEnd = record.find('\n', k);
+    if (lineEnd == std::string::npos)
+    {
+        lineEnd = record.size();
+    }
+    std::string replaced = record;
+    replaced.replace(lineBeg, lineEnd - lineBeg,
+                     line.empty() ? std::string() : ("\n" + line));
+
+    std::string out = text;
+    out.replace(begin, record.size(), replaced);
+    return out;
+}
+
+/// 由仓库 `camera.yaml` 得到一份**三路全虚拟**的底本。
+///
+/// ⚠ 用例必须**显式**把三路压回 `virtual`，不能直接拿仓库配置当"虚拟底本"：
+///   仓库配置在 2026-09-28 之后承载的是**现场接线的真实选择**（CAM25 = `imv`
+///   + 实际序列号）。直接用它跑的用例会去打开物理设备 —— 于是同一份代码
+///   在有设备与没设备的机器上表现不同，且"设备未连接"会让用例以**与它要
+///   证明的事无关**的原因失败（实测：`IMV_StartGrabbing 返回 -118`）。
+///   测试要的底本是一个**与现场接线无关**的确定状态，本函数给的就是它。
+std::string allVirtualCameraYaml()
+{
+    std::string text = repoYaml("camera.yaml");
+    const char* const ids[] = {"cam25", "cam50", "cam100"};
+    for (const char* const id : ids)
+    {
+        const std::string a = replaceInCameraRecord(text, id, "backend",
+                                                    "      backend: \"virtual\"");
+        if (a.empty()) { return std::string(); }
+        const std::string b = replaceInCameraRecord(a, id, "serial",
+                                                    "      serial: \"\"");
+        if (b.empty()) { return std::string(); }
+        text = b;
+    }
+    return text;
+}
+
 TEST(SystemInitializerTest, 场景C_取帧预算键被读到)
 {
-    // ---- 判别式用例：两个键都改成与结构体默认值**不同**的值 ----
+    // ---- 判别式用例：两个键都改成"既非仓库现值、也非结构体默认值"的数 ----
     //
-    // ⚠ 为什么不能直接断仓库现值：仓库现值（100 / 3.0e8）与
-    //    `MeasurementConfig` 的默认值**完全相同** ⇒ "解析了"与
-    //    "压根没解析、全程吃默认值"两种情形给出同一个断言结果，
-    //    这正是一个看不出差别的用例。故先改成别的数再断。
-    std::string text = replaceOnce(repoMeasurementYaml(), "grab_timeout_ms: 100",
+    // ⚠ 为什么不能直接断仓库现值：
+    //   · `grab_group_budget_ns` 的仓库现值（3.0e8）与 `MeasurementConfig`
+    //     的默认值**完全相同** ⇒ "解析了"与"压根没解析、全程吃默认值"
+    //     两种情形给出同一个断言结果，这正是一个看不出差别的用例；
+    //   · `grab_timeout_ms` 的仓库现值自 2026-09-28 起是 500（实机实测后
+    //     由 100 改，见 config/measurement.yaml），已**不再**等于默认值 100
+    //     —— 但它仍取第三个数 250 来断：若只把文字从 500 改成 500，
+    //     "解析器把 grab_timeout_ms 写死成 500"这种实现同样能通过。
+    //     取一个既非现值、也非默认值的数，三种来源才互不相同。
+    std::string text = replaceOnce(repoMeasurementYaml(), "grab_timeout_ms: 500",
                                    "grab_timeout_ms: 250");
     ASSERT_FALSE(text.empty()) << "未命中 grab_timeout_ms 那一行，本用例的底本已失效";
     text = replaceOnce(text, "grab_group_budget_ns: 3.0e8", "grab_group_budget_ns: 4.0e8");
@@ -696,17 +808,21 @@ TEST(SystemInitializerTest, 场景C_取帧预算键被读到)
 
 TEST(SystemInitializerTest, 场景C_仓库现值的零余量事实必须可见)
 {
-    // 仓库现值（100 / 3.0e8）与默认值相同，故本用例**不**用它们证明解析；
-    // 它证明的是另一件事：**当前这份配置的余量事实不得静默**。
-    // 5 帧 × 3 路 × 100 ms = 1500 ms = capture_timeout_ns，且未计入
-    // 复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断。
+    // 本用例**不**用仓库现值证明"解析了"（那是上一条用例的事）；它证明的是
+    // 另一件事：**当前这份配置的余量事实不得静默**。
+    // 5 帧 × 3 路 × 500 ms = 7500 ms ≥ capture_timeout_ns(1500 ms)，
+    // 且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断。
+    // ⚠ 2026-09-28：`grab_timeout_ms` 由 100 改 500 后，这项**从"恰好占满"
+    //    变成"超出 5 倍"**（原 5 × 3 × 100 = 1500 ms **等于**上限）。余量问题
+    //    因此更严重，告警必须继续出现 —— 若某次改动把这条告警弄没了，
+    //    本用例就是唯一会响的地方。
     // ⚠ 只警告、不判启动失败 —— 取值余量属《待裁决问题汇总》Q-D2，
     //   本批不自行放宽冻结值。
     aircraft::infrastructure::ConfigManager cfg;
     ASSERT_TRUE(cfg.load(std::string(APS_SOURCE_DIR) + "/config"))
         << "仓库 config/ 加载失败";
 
-    EXPECT_EQ(cfg.measurement().grabTimeoutMs, 100);
+    EXPECT_EQ(cfg.measurement().grabTimeoutMs, 500);
     EXPECT_EQ(cfg.measurement().grabGroupBudgetNs, 300000000ULL);
 
     bool sawWarning = false;
@@ -724,12 +840,16 @@ TEST(SystemInitializerTest, 场景C_取帧预算余量充足时不告警)
 {
     // ---- 正对照：告警是**有条件**的，不是一句永远都印的话 ----
     //
-    // 只把 capture_timeout_ns 放宽到 3.0 s（另两项不动，
-    // 5 × 3 × 100 = 1500 ms < 3000 ms ⇒ 有余量），告警必须消失。
+    // 只把 capture_timeout_ns 放宽到 10 s（另两项不动，
+    // 5 × 3 × 500 = 7500 ms < 10000 ms ⇒ 有余量），告警必须消失。
     // 缺了这条用例，把告警写成"无条件 push"也能让上一条用例通过。
+    // ⚠ 放宽到的这个数**跟着 grab_timeout_ms 走**：2026-09-28 由 100 改成
+    //    500 后，原来够用的 3.0 s 变成不够（7500 ms ≥ 3000 ms），本用例
+    //    当场转红 —— 这正是"正对照必须真的留出余量"在起作用，不是误报。
+    //    10 s 仍 < task_timeout_ns(60 s)，配置合法性不受影响。
     const std::string text = replaceOnce(repoMeasurementYaml(),
                                          "capture_timeout_ns: 1.5e9",
-                                         "capture_timeout_ns: 3.0e9");
+                                         "capture_timeout_ns: 1.0e10");
     ASSERT_FALSE(text.empty()) << "未命中 capture_timeout_ns 那一行，本用例的底本已失效";
 
     std::string err;
@@ -745,7 +865,7 @@ TEST(SystemInitializerTest, 场景C_取帧预算余量充足时不告警)
             << "余量充足却报了余量告警：" << w;
     }
     // 该项放宽后仍须读回放宽后的值（防止"替换了却没生效"被误判成通过）。
-    EXPECT_EQ(cfg.measurement().captureTimeoutNs, 3000000000ULL);
+    EXPECT_EQ(cfg.measurement().captureTimeoutNs, 10000000000ULL);
 }
 
 TEST(SystemInitializerTest, 场景C_grab_timeout_ms为零即启动失败)
@@ -755,7 +875,7 @@ TEST(SystemInitializerTest, 场景C_grab_timeout_ms为零即启动失败)
     // 若此处只是"取默认值"或"静默接受"，故障会推迟到第一次取帧才出现，
     // 且表现为"相机取不到帧"这种把人引向设备侧的假象。
     const std::string text =
-        replaceOnce(repoMeasurementYaml(), "grab_timeout_ms: 100", "grab_timeout_ms: 0");
+        replaceOnce(repoMeasurementYaml(), "grab_timeout_ms: 500", "grab_timeout_ms: 0");
     ASSERT_FALSE(text.empty()) << "未命中 grab_timeout_ms 那一行，本用例的底本已失效";
 
     std::string err;
@@ -858,16 +978,30 @@ BackendLog backendLogOf(const std::shared_ptr<aircraft::device::ICameraBackend>&
 /// **ConfigManager** 处被更早拦下（"按序列号绑定设备"那条规则），
 /// 而本组要测的是**装配层**的失败边界，不是配置校验。
 /// 换言之：这份配置本身是合法的，失败必须来自"设备打不开"。
+///
+/// ⚠ 序列号用**本机不存在的测试值**，且底本来自 `allVirtualCameraYaml()`：
+///   这两个条件各管一半 —— 前者保证用例不会去开现场那台相机（本机若真接了
+///   设备，用它自己的序列号就会"意外成功"，而本组用例断言的是**失败**），
+///   后者保证"三路里只有 cam25 是 imv"这件事由本用例自己决定，而不是
+///   取决于仓库配置当前怎么接线。
 std::string imvCam25ConfigDir(std::string& err)
 {
-    std::string text = replaceOnce(repoYaml("camera.yaml"),
-                                   "backend: \"virtual\"", "backend: \"imv\"");
+    const std::string base = allVirtualCameraYaml();
+    if (base.empty())
+    {
+        err = "未能在仓库 camera.yaml 里定位三路记录（id/backend/serial 写法已变），"
+              "本用例的底本已失效";
+        return std::string();
+    }
+    std::string text = replaceInCameraRecord(base, "cam25", "backend",
+                                             "      backend: \"imv\"");
     if (text.empty())
     {
         err = "未命中 cam25 的 backend 行，本用例的底本已失效";
         return std::string();
     }
-    text = replaceOnce(text, "serial: \"\"", "serial: \"SN-CAM25-TEST-0001\"");
+    text = replaceInCameraRecord(text, "cam25", "serial",
+                                 "      serial: \"SN-CAM25-TEST-0001\"");
     if (text.empty())
     {
         err = "未命中 cam25 的 serial 行，本用例的底本已失效";
@@ -1012,10 +1146,18 @@ TEST(SystemInitializerTest, 场景D_缺backend键即启动失败)
     // 缺键**不得**取默认值：一份没写 backend 的配置若被静默当成 virtual，
     // 那么 SDK 装好、真实相机接上之后，它仍会跑虚拟图而看起来一切正常。
     // 这与"检测到 SDK 就自动切真实"是同一个问题的两面。
-    std::string text = replaceOnce(repoYaml("camera.yaml"),
-                                   "      backend: \"virtual\"\n", "");
+    //
+    // ⚠ 底本必须先压回"三路全虚拟"再删 cam25 的键：否则在"仓库里 cam25 已是
+    //   imv"的今天，第一处 `backend: "virtual"` 是 cam50 的那一行 ——
+    //   用例会变成"删掉 cam50 的 backend"，断言照样通过，而它声称在测的
+    //   "cam25 缺键"一次也没被真的构造出来。
+    const std::string base = allVirtualCameraYaml();
+    ASSERT_FALSE(base.empty()) << "未能在仓库 camera.yaml 里定位三路记录";
+    std::string text = replaceInCameraRecord(base, "cam25", "backend", "");
     ASSERT_FALSE(text.empty())
         << "未命中 cam25 的 backend 行（缩进或写法已变），本用例的底本已失效";
+    EXPECT_EQ(text.find("backend: \"imv\""), std::string::npos)
+        << "底本压回全虚拟后仍残留 imv —— 删键用例可能改错了对象";
 
     std::string err;
     const std::string dir = makeConfigVariantForFile("camera.yaml", text, err);

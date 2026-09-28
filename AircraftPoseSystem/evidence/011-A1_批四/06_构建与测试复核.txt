@@ -1,0 +1,51 @@
+# 011-A1 批四证据 · 06 构建与测试复核运行（当前源码状态）
+
+运行时间：2026-09-28T18:41:58+08:00
+目的：确认清单与说明里引用的既有验证**对应当前源码状态**（本批复核时重跑）。
+源码状态：工作区未提交改动（批四）；最后一次源码改动为 src/infrastructure/recorder/Recorder.cpp。
+
+⚠ 说明：本工程**未安装 GoogleTest**，测试经 /tmp/gtshim 的垫片运行 —— 垫片判据是
+   "编译 + 断言可执行"，**不是**真实 GTest。判定绿的条件是：各套件自身退出码 0、
+   "垫片内失败断言数：0，异常用例数：0"。
+
+----
+
+### 1) cmake --build build -j8
+退出码=0
+[100%] Built target AircraftPoseSystem
+
+### 2) cmake --build build_nosdk -j8
+退出码=0
+[100%] Built target AircraftPoseSystem
+
+### 3) bash /tmp/gtshim/build_tests.sh
+退出码=0
+全部测试已编译
+
+### 4) bash /tmp/gtshim/build_tests_havsdk.sh
+退出码=0
+有 SDK 分支的两个套件已编译
+
+### 5) 11 个套件（LD_LIBRARY_PATH=build/imvsdk_runtime，逐个运行，不用通配汇总）
+套件                     用例数   退出码   垫片内失败断言/异常
+flowtest                 45       0        失败断言数：0，异常用例数：0
+RecorderPackageTest      24       0        失败断言数：0，异常用例数：0
+RecorderAdapterTest      7        0        失败断言数：0，异常用例数：0
+StateMachineTest         27       0        失败断言数：0，异常用例数：0
+AlgorithmStageTest       23       0        失败断言数：0，异常用例数：0
+PipelineTest             28       0        失败断言数：0，异常用例数：0
+DeviceLayerTest          84       0        失败断言数：0，异常用例数：0
+OpticalLayerTest         38       0        失败断言数：0，异常用例数：0
+PreviewLayerTest         40       0        失败断言数：0，异常用例数：0
+AlignmentControllerTest  21       0        失败断言数：0，异常用例数：0
+sysinittest              14       0        失败断言数：0，异常用例数：0
+合计：11 套件 / 351 用例
+
+### 6) SDK 分支两个套件
+sysinittest_havsdk       14       0        失败断言数：0，异常用例数：0
+DeviceLayerTest_havsdk   84       0        失败断言数：0，异常用例数：0
+
+### 7) 安装自检
+100% tests passed, 0 tests failed out of 2
+
+Total Test time (real) =   3.08 sec

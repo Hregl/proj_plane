@@ -1,0 +1,174 @@
+# 011-A1 批四证据 · 04 RAW 旁路专项验证（后端直连类 · 专项验证产物）
+
+运行时间：2026-09-28 18:40（**本批复核时重跑**：工具与库均在当前源码状态下重新编译）
+原始路径：/tmp/raw_bypass_run.log
+设备：A7A20MU201，序列号 FD88772AAK00078
+
+编译命令（退出码 0）：
+  g++ -std=c++17 -O0 -g -fPIC -DAPS_VERSION_MAJOR=2 -DAPS_VERSION_MINOR=1 \
+      -DAPS_VERSION_STRING='"2.1.0"' -DAPS_VERSION_STAGE='"v2.1-framework"' \
+      -I src -I third_party/imvsdk/include -I third_party/imvsdk/include/GenICam \
+      scripts/raw_bypass_verify.cpp -o /tmp/raw_bypass_verify \
+      -L build/lib -linfrastructure -ldevice_camera -ldevice_trigger -ldata \
+      -L build/imvsdk_runtime -lMVSDK -Wl,-rpath,$PWD/build/imvsdk_runtime \
+      $(pkg-config --cflags --libs opencv4)
+
+运行命令：DISPLAY= LD_LIBRARY_PATH=$PWD/build/imvsdk_runtime \
+            /tmp/raw_bypass_verify config /tmp/raw_bypass_out
+退出码：**0**；结果：**通过 48 项 / 不通过 0 项**
+
+⚠ 证据类别＝**后端直连（专项验证工具）**：走真实 ImvCameraBackend 与生产版
+   Recorder::save()，但**不经过**应用的配置装载／装配／状态机／控制器。
+⚠ 本文件**不是**一次测量结果包（包内 task_id 以 RAW_BYPASS_ 开头、success=false、无姿态数值）。
+⚠ 载荷哈希与像素统计量**逐帧不同**（另一帧 ⇒ 另一组数字）；可复现的是**判据与结论**，
+   不是这些数值本身。
+
+----（以下为原始输出，未编辑）----
+
+[1790592044.815871] [interface.c:812:getDriverVersion] Unload Universal Ethernet drivers.
+
+============================================================
+ RAW 旁路实机验证（**专项验证产物**，不是一次测量结果包）
+ 链路：真实 ImvCameraBackend → ImageFrame → 生产版 Recorder::save() → 离线解码
+============================================================
+
+── 0. 配置与工作点 ─────────────────────────────────────
+  [证据] 配置目录：config
+  [证据] 代码版本：2.1.0-v2.1-framework
+  [证据] 通道 cam25 / 角色 CAM25 / 后端 imv / 序列号 FD88772AAK00078
+  [证据] 配置工作点：曝光 50 ms，增益 gain_raw=1.000000，触发 Software，画幅 4096x3000，取帧时限 500 ms
+  [通过] 曝光 = 50 ms（当前验收工作点）
+           实际 50.000000 ms —— 工作点变了就必须换一份记录，不得沿用本报告的结论
+  [通过] gain_raw = 1（当前验收工作点）
+           实际 1.000000
+  [通过] 该通道显式声明为真实后端（imv）
+           实际 backend = imv
+
+── 1. 真实 ImvCameraBackend ────────────────────────────
+  [通过] backend->initialize() 成功
+           status=Ok，sdkError=（无），清理=（无），文本=
+  [证据] 设备身份：型号 A7A20MU201，序列号 FD88772AAK00078（已查询）
+  [通过] 设备身份来自 SDK 查询（不是配置回抄）
+           实际序列号 FD88772AAK00078
+  [通过] 实际序列号与配置的绑定目标一致
+           配置期望 FD88772AAK00078
+
+── 2. 设备侧读回（独立于本项目的数据结构）─────────────
+  [证据] IMV_GetEnumFeatureSymbol(PixelFormat) 返回 0，读回 "Mono10"
+  [通过] 设备侧 PixelFormat 读回 = Mono10
+           本机型只提供 Mono8 / Mono10 / Mono10Packed
+  [证据] IMV_GetDoubleFeatureValue(ExposureTime) 返回 0，读回 50000.000000 µs
+  [通过] 设备侧 ExposureTime 读回 = 50000 µs
+           实际 50000.000000 µs
+  [证据] IMV_GetDoubleFeatureValue(GainRaw) 返回 0，读回 1.000000
+  [通过] 设备侧 GainRaw 读回 = 1（本项目未改变设备增益设定）
+           实际 1.000000
+  [证据] Width/Height 读回 4096x3000（返回 0/0）
+
+── 3. 取帧（次序同 MultiCameraManager::capture）─────────
+  [通过] backend->start() 成功
+           status=Ok，文本=
+  [证据] 触发读回 TriggerSelector：调用过=是，返回空串=否，失败=（无），取值="FrameStart"
+  [证据] 触发读回 TriggerMode：调用过=是，返回空串=否，失败=（无），取值="On"
+  [证据] 触发读回 TriggerSource：调用过=是，返回空串=否，失败=（无），取值="Software"
+  [通过] 三项触发前置特性读回完整（可合成实际生效的模式）
+           合成结果 = Software
+  [通过] 读回与请求一致（软件触发）
+  [通过] 软件触发令发送成功
+           status=Ok，sdkError=（无）
+  [通过] 本轮恰好发一次软件触发令
+           实际 1 次
+  [通过] backend->grab() 成功
+           status=Ok，sdkError=IMV_GetFrame 返回 0，清理=（无），诊断=
+  [证据] GetFrame 调用 1 次，ReleaseFrame 调用 1 次（取帧前 0 次）
+  [通过] 取帧恰好一次、释放恰好一次
+           取帧 1 次，释放 1 次
+  [通过] SDK 帧状态原值 = 0 且**取得**（不是 nullopt）
+           原值 0
+
+── 4. 自有载荷（复制发生在释放之前）────────────────────
+  [证据] SDK 交付缓冲地址：0x7f75d908c010
+  [证据] 本项目保存的载荷地址：0x7f75b8478010（长度 24576000 字节）
+  [通过] 保存的载荷**不是** SDK 交付缓冲那块内存（自有副本）
+           同地址只可能说明我们把 SDK 缓冲当成了自有数据
+  [通过] 载荷快照时帧**已释放**（释放次数已为 1）
+  [通过] raw.format 与 captureFormat 一致（后端发布契约）
+           raw.format=Mono10，captureFormat=Mono10
+  [通过] 帧自带 role = CAM25（与第 0 槽位一致，Recorder 会校验）
+           实际 CAM25
+  [证据] 帧事实：frame_id=1，timestamp_ns=527978168271836，显示图 4096x3000（type=0），原始载荷 4096x3000 / Mono10 / valid_bits=10 / sdk_payload_bytes=24576000 / expected_compact_bytes=24576000 / compact_size_matches=true / sdk_pixel_format_code=17825795 / padding_x=0 / padding_y=0
+
+── 5. 生产版 Recorder::save() ─────────────────────────
+  [通过] Recorder::save() 成功
+           失败原因：
+  [证据] 结果包目录：/tmp/raw_bypass_out/RAW_BYPASS_FD88772AAK00078
+
+── 6. 落盘字节 vs 保存前的自有载荷 ────────────────────
+  [证据] 保存前载荷 24576000 字节 / FNV-1a 0xD502B383FBCF745B；cam25.raw 24576000 字节 / FNV-1a 0xD502B383FBCF745B
+  [通过] cam25.raw 的文件长度 = 保存前载荷长度
+           文件 24576000 字节，载荷 24576000 字节
+  [通过] cam25.raw 与保存前的自有载荷**逐字节一致**
+           （不是『长度相同即可』，是逐个字节比对）
+  [通过] 保存**不得**改动调用方的载荷（Recorder 只读）
+
+── 7. 包内元数据（从 result.json 读回）────────────────
+  [证据] 读回：role="CAM25"，data_source="raw"，pixel_format="Mono10"，valid_bits=10，packing="Unpacked"，valid_bit_alignment="LsbZeroPadded"，declared_byte_order="LittleEndian"
+  [通过] data_source = "raw"（真身路径）
+  [通过] role = "CAM25"（按槽位写，不是帧自带的默认值）
+  [通过] pixel_format = "Mono10"
+  [通过] valid_bits = 10（解码位移由此推出：10−8 = 2）
+  [通过] packing = "Unpacked"
+  [通过] valid_bit_alignment = "LsbZeroPadded"
+  [通过] declared_byte_order = "LittleEndian"
+  [通过] frame_id 与本次取到的帧一致
+           包内 1，帧 1
+  [通过] raw_image 宽高 = 设备回报的宽高
+           包内 4096x3000
+  [通过] raw_image = 4096x3000（本机型满幅）
+           实测 4096x3000
+
+── 8. 16 位容器与长度一致性 ───────────────────────────
+  [证据] 重算（包内几何 4096x3000 / Mono10）= 24576000；expected_compact_bytes = 24576000；sdk_payload_bytes = 24576000；实际文件 = 24576000
+  [通过] 按包内几何重算期望长度未溢出/未遇不支持格式
+  [通过] 重算长度 = 宽 × 高 × 2 ⇒ **16 位容器**（不是 1 字节/像素）
+           实际 24576000 字节
+  [通过] 重算长度 = expected_compact_bytes = sdk_payload_bytes = 文件长度
+           四者不等即为长度契约破裂
+
+── 9. 离线解码与逐像素核对 ────────────────────────────
+  [通过] 交付的显示图为单通道 8 位（CV_8UC1）
+           type=0
+  [证据] 按包内元数据（小端 16 位容器、位移 2）解码：4096x3000 = 12288000 像素；与显示图不一致 0 个；值域 [1, 708]，均值 244.841；值 > 255 的像素 4852952 个
+  [通过] **每一像素位置**都与交付的显示图一致（位移 2、小端）
+           不一致 0 个像素
+  [通过] 载荷里有值 > 255 的像素 ⇒ 内容真的是 10 位（不是按 8 位截断后存的）
+           值 > 255 的像素 4852952 个
+  [证据] 正对照（必须大面积不一致，否则上面的 0 不构成证据）：位移 0 → 不一致 12288000；位移 4（照抄 Mono12）→ 不一致 12285202；大端 16 位容器 → 不一致 12264870
+  [通过] 误移 0 / 误移 4 / 误判字节序三种错法都会被这套核对抓住
+           三者若有一个为 0，说明该维度在本帧数据上不可区分，本报告的对应结论不成立
+  [证据] 字节序判据（不依赖显示图）：按声明的小端组装 ⇒ 最大值 708（10 位上限 1023）；按大端组装 ⇒ 最大值 65281
+  [通过] 按**声明的小端**组装，每个样本都装得进 10 位（≤ 1023）
+           最大值 708
+  [通过] 按**大端**组装会出现 > 1023 的样本 ⇒ 相反的顺序在本帧数据上可判别
+           最大值 65281（若 ≤ 1023，说明本帧数据对该判据不可判别，本节结论不成立）
+
+── 10. cam50 / cam100 的合法无帧占位 ──────────────────
+  [证据] frames[1]：role="CAM50"，data_source="none"；frames[2]：role="CAM100"，data_source="none"
+  [通过] 另两路按槽位写角色、无数据（不因默认帧 role=CAM25 而误写）
+  [通过] 未生成 cam50.raw / cam100.raw（无数据即不落盘）
+[33;40m[0m[33;40m[0m[33;40m[0m[33;40m[0m[33;40m[0m  [通过] backend->stop() 成功
+           status=Ok
+  [通过] backend->close() 成功
+           status=Ok
+
+============================================================
+ 通过 48 项，不通过 0 项
+ 结果包：/tmp/raw_bypass_out/RAW_BYPASS_FD88772AAK00078
+ ⚠ 本目录是**专项验证产物**，不是一次测量结果包：
+   task_id 以 RAW_BYPASS_ 开头、success=false、无姿态数值、
+   calibration/model 均为 RAW_BYPASS_NO_* 占位。
+ 本工具**不覆盖**：应用正常测量流程自动触发 RAW 保存 ——
+   那条路径要在状态机走到 SAVE 时才发生，而 SAVE 需要
+   POSESOLVE 成功，后者受机型库缺失阻塞（未验证）。
+============================================================
+[33;40m[0m[33;40m[0m[33;40m[0m[33;40m[0m[33;40m[0m

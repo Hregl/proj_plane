@@ -1,0 +1,65 @@
+# 011-A1 批四证据 · 03 应用启动＋取帧运行记录（应用实际装配类）
+
+记录时间：2026-09-28 16:33–16:34（既有材料，本批复核时复制）
+原始路径：/tmp/aps_accept.log（大小 7086 字节）
+采集命令：应用按仓库 config/ 启动（CAM25=imv 真实后端，CAM50／CAM100 虚拟），
+          随后以无界面方式启动一次测量；结果包写至 output/measurement_520378644990510/。
+退出码：**未记录**（同上，未留存 $?）
+
+判定：装配摘要显示 CAM25 真实就绪、增益按 GainRaw 读回、触发已使能；
+     取帧轮次完成（MEASURE_SELECT → CAPTURE 两次），随后因**机型库缺失**
+     （models/points3d.yaml 打不开）在 POSE_SOLVE 失败 ⇒ 整链路测量未完成。
+⛔ 必须与结果包 05 一起读：该次运行的 selected_camera 是 **CAM100（虚拟通道）**，
+   故本记录**不能**证明 CAM25 交付的帧参与了解算或评分。
+⚠ 本文件属**应用实际装配**类证据。
+
+----（以下为原始输出，未编辑）----
+
+value error key: "disableInWindowBlur" , error message: "[/usr/bin/dde-application-manager] Requires Non-existent configure item [disableInWindowBlur] in [/_/org.deepin.dtk.preference/1000]."
+Failed to call `isDefaultValue`, key: "disableInWindowBlur" , error message: "[/usr/bin/dde-application-manager] Requires Non-existent configure item [disableInWindowBlur] in [/_/org.deepin.dtk.preference/1000]."
+[WARN ] [app] 配置告警：optical_rig.calibration_mode = "synthetic"：标定文件缺失时改用合成内参，**结果不具测量意义**（仅用于 M1 合成闭环）
+[WARN ] [app] 配置告警：measurement：取帧预算无余量 —— capture_frame_count(5) × 3 路 × grab_timeout_ms(500) = 7500 ms ≥ capture_timeout_ns(1500 ms)，且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断（取值余量见《待裁决问题汇总》Q-D2）
+[WARN ] [app] 配置告警：measurement.sigma_a/b/c 全为 0：E 项未生效（未标定），评分退化为 Q/F/M —— 结果包中的 predictedErrorCalibrated 将为 false
+[WARN ] [app] 配置告警：measurement.illum_band_edges 均为 0：光照分带未标定，所有光照条件落入同一桶，M_hist 的光照维度暂不可用
+2026-09-28 16:33:50.846 [INFO] [app] === AircraftPoseSystem V2.1 启动 ===
+2026-09-28 16:33:50.847 [INFO] [app] config：7 文件 / 3 相机 / 0 项取默认值 / 4 项告警
+2026-09-28 16:33:50.847 [WARN] [app] calibration_mode=synthetic：使用**默认矩阵标定**，本次运行的姿态精度不具参考意义（M1 打通链路专用）
+2026-09-28 16:33:50.847 [WARN] [app] 标定告警：正在使用**合成标定**：内参为标称视场角反推的占位值，外参为单位变换。由其算出的任何姿态结果都没有物理意义，仅可用于数据通路调试（M1/M2）。
+2026-09-28 16:33:50.847 [INFO] [app] 标定：SYNTHETIC-NO-CALIBRATION（模式 synthetic）
+[1790584430.847624] [interface.c:812:getDriverVersion] Unload Universal Ethernet drivers.
+
+value error key: "disableInWindowBlur" , error message: "[/usr/bin/dde-application-manager] Requires Non-existent configure item [disableInWindowBlur] in [/_/org.deepin.dtk.preference/1000]."
+Failed to call `isDefaultValue`, key: "disableInWindowBlur" , error message: "[/usr/bin/dde-application-manager] Requires Non-existent configure item [disableInWindowBlur] in [/_/org.deepin.dtk.preference/1000]."
+2026-09-28 16:33:51.242 [INFO] [app] 装配摘要：
+2026-09-28 16:33:51.242 [INFO] [app]   · CAM25（cam25）：真实（ImvCameraBackend）；设备身份 型号 "A7A20MU201"、序列号 "FD88772AAK00078"；配置目标序列号 "FD88772AAK00078"；可用性 就绪；增益 特性 "GainRaw"：请求 1.000000；读回 1.000000；单位 设备未声明（原生值；项目不做单位解释）
+2026-09-28 16:33:51.242 [INFO] [app]   · CAM50（cam50）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪
+2026-09-28 16:33:51.242 [INFO] [app]   · CAM100（cam100）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪
+2026-09-28 16:33:51.242 [INFO] [app] 设备：触发已使能、转台已就绪；取帧预算 500 ms/路，组预算 300 ms
+2026-09-28 16:33:51.242 [INFO] [app] 预览：AUTO 模式，队列容量 5
+[ERROR:0@0.426] global ./modules/core/src/persistence.cpp (505) open Can't open file: 'models/points3d.yaml' in read mode
+2026-09-28 16:33:51.242 [WARN] [app] 机型库加载失败或缺失（model_dir=models）：测量流程可以启动，但 POSE_SOLVE 无法完成，本次运行的姿态结果不可用
+2026-09-28 16:33:51.242 [INFO] [app] 历史匹配统计：冷启动（runtime/match_stats.yaml 不存在，属正常首次运行）
+2026-09-28 16:33:51.242 [INFO] [app] 算法链：MockTargetDetector / **MockTargetScaleEstimator** / SiftFeatureExtractor / DescriptorFeatureMatcher / CvPnPPoseEstimator
+2026-09-28 16:33:51.242 [WARN] [app] 算法链使用的是**桩检测器**（MockTargetDetector）：它按图像的亮块给出检测框，不是真实的 YOLO 目标检测。该链路只用于打通 M1 闭环，检测与位姿精度均不具参考意义。
+2026-09-28 16:33:51.242 [INFO] [app] 装配完成：MeasurementController 已就绪，等待 startMeasurement()
+2026-09-28 16:33:51.243 [INFO] [app] 输出目录就绪：output
+2026-09-28 16:33:51.243 [WARN] [app] 相机 cam50 的配置分辨率 1280x1024 与标定分辨率 4096x3000 不一致：内参（含主点）将错配，姿态结果不可用
+2026-09-28 16:33:51.243 [WARN] [app] 相机 cam100 的配置分辨率 1280x1024 与标定分辨率 4096x3000 不一致：内参（含主点）将错配，姿态结果不可用
+2026-09-28 16:33:51.243 [INFO] [app] 启动完成，共 10 条告警（见 WARN 行）
+
+启动告警 10 条：
+  [WARN] 配置告警：optical_rig.calibration_mode = "synthetic"：标定文件缺失时改用合成内参，**结果不具测量意义**（仅用于 M1 合成闭环）
+  [WARN] 配置告警：measurement：取帧预算无余量 —— capture_frame_count(5) × 3 路 × grab_timeout_ms(500) = 7500 ms ≥ capture_timeout_ns(1500 ms)，且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断（取值余量见《待裁决问题汇总》Q-D2）
+  [WARN] 配置告警：measurement.sigma_a/b/c 全为 0：E 项未生效（未标定），评分退化为 Q/F/M —— 结果包中的 predictedErrorCalibrated 将为 false
+  [WARN] 配置告警：measurement.illum_band_edges 均为 0：光照分带未标定，所有光照条件落入同一桶，M_hist 的光照维度暂不可用
+  [WARN] calibration_mode=synthetic：使用**默认矩阵标定**，本次运行的姿态精度不具参考意义（M1 打通链路专用）
+  [WARN] 标定告警：正在使用**合成标定**：内参为标称视场角反推的占位值，外参为单位变换。由其算出的任何姿态结果都没有物理意义，仅可用于数据通路调试（M1/M2）。
+  [WARN] 机型库加载失败或缺失（model_dir=models）：测量流程可以启动，但 POSE_SOLVE 无法完成，本次运行的姿态结果不可用
+  [WARN] 算法链使用的是**桩检测器**（MockTargetDetector）：它按图像的亮块给出检测框，不是真实的 YOLO 目标检测。该链路只用于打通 M1 闭环，检测与位姿精度均不具参考意义。
+  [WARN] 相机 cam50 的配置分辨率 1280x1024 与标定分辨率 4096x3000 不一致：内参（含主点）将错配，姿态结果不可用
+  [WARN] 相机 cam100 的配置分辨率 1280x1024 与标定分辨率 4096x3000 不一致：内参（含主点）将错配，姿态结果不可用
+（以上同样写入了日志文件）
+
+2026-09-28 16:33:51.504 [INFO] [app] APP_FIRST_TICK_COMPLETED
+2026-09-28 16:34:05.836 [INFO] [app] 收到测量启动请求：状态机已启动
+2026-09-28 16:34:10.996 [INFO] [app] 结果包：output/measurement_520378644990510

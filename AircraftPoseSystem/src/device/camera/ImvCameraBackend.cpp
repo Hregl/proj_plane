@@ -67,6 +67,7 @@ constexpr int kImvTimeout         = -119;   ///< :52  超时
 //  SDK 像素格式码（逐位取自 IMVDefines.h，与 PFNC 编码体系一致）
 // ---------------------------------------------------------------------------
 constexpr int32_t kSdkPixelMono8 = 0x01080001;   ///< IMVDefines.h:256
+constexpr int32_t kSdkPixelMono10 = 0x01100003;  ///< :258（OCCUPY16BIT）
 constexpr int32_t kSdkPixelMono12 = 0x01100005;  ///< :260（OCCUPY16BIT）
 constexpr int32_t kSdkPixelMono12Packed = 0x010C0006;  ///< :261（OCCUPY12BIT）
 constexpr int32_t kSdkPixelBGR8 = 0x02180015;    ///< :293
@@ -82,10 +83,48 @@ const char* const kFeaturePixelFormat = "PixelFormat";
 const char* const kFeatureExposureTime = "ExposureTime";
 /// ⚠ `"Gain"` 取 **SFNC 标准特性名**，单位 dB（与 `CameraConfig::gain` 同）。
 /// **无本 SDK 样例支持**：全量样例中 `"Gain"` 零命中。
-/// ∴ 它是**实机核实项**（登记于 §7 表）。之所以仍然实现而不是跳过：
-/// 读回校验会让"特性名不对"在**启动时**就明确失败，而不是静默地
+/// ⚠ **本机型不提供该节点**（2026-09-28 实测，A7A20MU201，序列号
+/// `FD88772AAK00078`，固件 `V1.000.00.0.R(20230529,252473)`）：
+/// `IMV_GetDoubleFeatureValue("Gain")` 返回 **−110**（`IMV_ERROR_PROPERTY_TYPE`），
+/// `IMV_GetFeatureType("Gain")` 的**类型出参为 0**（无类型），设备自带 XML 中
+/// 也无 `Gain` 节点。∴ 对本机型写 `gain` 会在启动时**明确失败**，而不是静默地
 /// 让增益从未生效 —— 后者只有在画面偏暗时才被怀疑。
+/// 该失败文本里写明改用 `gain_raw` 的迁移路径（见 `configureGain`）。
 const char* const kFeatureGain        = "Gain";
+
+/// 增益的**设备原生值**特性名（C-018，2026-09-28）。
+///
+/// ⚠ 与 `kFeatureGain` 的区别是**语义**而非拼写：`GainRaw` 的值是设备原生
+/// 数值，**本机型未声明单位**（节点内无 `<Unit>`；整份 XML 的 `<Unit>` 只有
+/// `C`／`Hz`／`us`）。⚠ 措辞纪律：XML 中 "dB" 确实出现 20 次，但**全部**属于
+/// `DeEmphasisA`（以太网预加重的枚举项名与说明，属**传输层**），**没有一处**
+/// 与增益关联 —— 不得缩写成"XML 里没有 dB"，那是**假**的。
+/// ⚠ 与 `kFeatureGain` 的"无样例支持"不同，本特性名是**实测确认存在**的：
+/// `IMV_GetDoubleFeatureValue("GainRaw")` 返回 0；`IMV_GetFeatureType` 的类型
+/// 出参 `0x20000000`（`featureFloat`）；`IMV_GetDoubleFeatureMin/Max` 读到
+/// **1 / 32**；并完成了 Set → Get 往返（写 6 读回 6，两次调用均返回 0）。
+/// ⚠ 该"存在性"是**这台设备**的事实，不是 SDK 的保证：换机型必须重新实测。
+const char* const kFeatureGainRaw     = "GainRaw";
+
+/// dB 语义的读回容差（原规则不变）：设备增益步长通常为 0.1 dB 量级。
+constexpr double kGainDbTolerance = 0.05;
+
+/// 原生值语义的读回容差。**与上面的 0.05 不是同一个数**，也**不得**被
+/// 描述成 "0.05 dB" —— 原生值没有单位，用 dB 的容差去比等于又替设备
+/// 假定了一次换算（这正是 C-018 要消除的形态）。
+///
+/// ⚠ 取 1e-3 的依据里**不包含步长**：本机型 `GainRaw` 的步长**没有声明**
+/// （`<Inc>1</Inc>` 属于 `GainRawMin` 这个 Integer 节点而非 `GainRaw`；
+/// SDK 也没有取 Floating 步长的接口）。把"步长是 1"写进依据就是**编**一个
+/// 设备没有给过的数 —— 而下一个人会拿它去论证"1e-3 不可能放过真实偏差"。
+/// 实际依据只有两条：
+///   · `GainRaw` 是 4 字节 `FloatReg`（`Length 4`、`LittleEndian`）
+///     ⇒ float32 往返的表示误差在 1..32 量级上约 1e-5 以下，远小于 1e-3；
+///   · 实测往返**逐值相等**（写 6 读回 6）。
+/// 即这个数只吸收**浮点表示误差**，不吸收**量化**：若某台设备（或本机型的
+/// 某个固件版本）会对请求值量化，读回不一致会**如实失败**并打印请求值与
+/// 回读值 —— 那时应当按**实测到的**量化步长重新确定容差，而不是放宽这个数。
+constexpr double kGainRawTolerance = 1e-3;
 const char* const kFeatureTriggerSelector = "TriggerSelector";
 const char* const kFeatureTriggerMode     = "TriggerMode";
 const char* const kFeatureTriggerSource   = "TriggerSource";
@@ -105,14 +144,25 @@ const char* const kTriggerSelectorFrameStart = "FrameStart";
 /// ⚠ 本批**不设配置键**：`camera.yaml` 的冻结键表（SYS-17 §5）里没有
 /// 像素格式，而 ENG-09 §6.1 的 `CameraConfig` 字段清单亦无此项，
 /// 故不擅自新增键（那会让"配置有什么"出现第二个事实来源）。
-/// 固定请求 `Mono12` 的理由正是 A1 的存在理由：真实相机交付 12 位
-/// 原始载荷，而 8U 显示图只能由它派生；若请求 8 位，则"RAW 保真"
-/// 这一整条契约在真机上**无从成立**。
+///
+/// ⚠ **V2.6 起由 `"Mono12"` 改为 `"Mono10"`（C-018，实机接入批）** ——
+/// 依据是 2026-09-28 对 A7A20MU201（序列号 `FD88772AAK00078`）的实测：
+/// 其 `PixelFormat` 的**可设枚举项只有 `Mono8` / `Mono10` / `Mono10Packed`**
+/// （逐条读自 `IMV_GetEnumFeatureEntrys`，并与设备自带 GenICam XML 一致），
+/// **没有 `Mono12`**：`IMV_SetEnumFeatureSymbol(…, "Mono12")` 返回 **−111**
+/// （`IMV_INVALID_ACCESS`）。原注释把 `"Mono12"` 标为"无本 SDK 样例支持、
+/// 属实机核实项"，本次实机核实的结果就是**该机型不提供它**。
+///
+/// 改请求 `Mono10` 而不是 `Mono8` 的理由仍是 A1 的存在理由：真实相机要交付
+/// **>8 位**的原始载荷，8U 显示图只能由它派生；若请求 8 位，则"RAW 保真"
+/// 这一整条契约在真机上**无从成立**。`Mono10` 是该机型可用的最高位深，
+/// 且实测其**低位对齐**（帧内最大值不是 64 的倍数 ⇒ 排除 MSB 对齐），
+/// 与 `data::BitAlignment::LsbZeroPadded` 相符。
+/// ⚠ 本机型**不提供** 12 位输出这件事，登记为设备能力事实；将来换相机时
+/// 这个固定符号**必须重新实机核实**（读回校验会保证"名字不对"在启动时
+/// 即失败，而不会静默降级）。
 /// ⚠ 配置化（含 `Mono8` 的显式选择）随 ENG-09 §6.1 键表扩展另批登记。
-/// ⚠ 符号名 `"Mono12"` 取 SFNC 标准名，**无本 SDK 样例支持**
-/// （样例从不设 `PixelFormat`）⇒ 属实机核实项；读回校验保证
-/// "名字不对"在启动时即失败。
-const char* const kRequestedPixelFormatSymbol = "Mono12";
+const char* const kRequestedPixelFormatSymbol = "Mono10";
 
 /// 把 SDK 返回码归类为 `OpStatus`（ENG-09 V2.4 §5.29 的状态全表）。
 ///
@@ -218,6 +268,9 @@ bool mapSdkPixelFormat(int32_t code, data::PixelFormat& out)
     case kSdkPixelMono8:
         out = data::PixelFormat::Mono8;
         return true;
+    case kSdkPixelMono10:
+        out = data::PixelFormat::Mono10;
+        return true;
     case kSdkPixelMono12:
         out = data::PixelFormat::Mono12;
         return true;
@@ -264,10 +317,17 @@ bool buildDisplayImage(const std::vector<uint8_t>& bytes,
         out = view.clone();
         return true;
     }
+    case data::PixelFormat::Mono10:
     case data::PixelFormat::Mono12:
     {
         // 低位对齐、高位补零（PFNC 2.4 §6.1.1 / 图 6-3），16 位容器。
-        // 右移 4 位取高 8 位作为显示值 —— 这是**唯一**的转换规则。
+        // 右移 (有效位 − 8) 位取高 8 位作为显示值 —— 这是**唯一**的转换规则。
+        //
+        // ⚠ 移位量由 `validBitsOf(format)` 推出，**不写死 12**：写死会让
+        //   "再加一个 16 位容器格式"变成"再复制一遍这段循环"，而复制出来
+        //   的第二份一旦漏改移位量，出图仍"看起来是一张图"，只是整体偏暗
+        //   —— 正是本文件头 ⚠ 说的那种不崩、不报错、只静默算错的形态。
+        const int shift = static_cast<int>(data::validBitsOf(format)) - 8;
         cv::Mat img(h, w, CV_8UC1);
         for (int y = 0; y < h; ++y)
         {
@@ -279,7 +339,7 @@ bool buildDisplayImage(const std::vector<uint8_t>& bytes,
                 // 情况在调用方已被拒绝，故此处的组装顺序与声明一致。
                 const uint16_t v = static_cast<uint16_t>(bytes[i]) |
                                    static_cast<uint16_t>(bytes[i + 1] << 8);
-                row[x] = static_cast<uint8_t>(v >> (12 - 8));
+                row[x] = static_cast<uint8_t>(v >> shift);
             }
         }
         out = std::move(img);
@@ -520,7 +580,8 @@ data::OperationResult ImvCameraBackend::openDevice()
     }
 
     // ---- 7. 配置并读回 ------------------------------------------------------
-    // 像素格式：固定请求 Mono12（见 kRequestedPixelFormatSymbol 的说明）。
+    // 像素格式：固定请求 `kRequestedPixelFormatSymbol`（2026-09-28 起为
+    // "Mono10"，见该常量的说明 —— 请求哪个由**设备实测能力**决定）。
     data::OperationResult cfg = configureEnumAndVerify(
         kFeaturePixelFormat, kRequestedPixelFormatSymbol,
         data::SdkCall::ImvSetEnumFeatureSymbol,
@@ -693,38 +754,114 @@ data::OperationResult ImvCameraBackend::configureExposure()
 
 data::OperationResult ImvCameraBackend::configureGain()
 {
-    int ret = api_->setDoubleFeatureValue(handle_, kFeatureGain, config_.gain);
+    // 每次配置前清零：本结构记录的是**本次**的事实，与任何历史无关。
+    gainSetting_ = GainSetting{};
+
+    const bool wantDb  = config_.gain.has_value();
+    const bool wantRaw = config_.gainRaw.has_value();
+
+    if (!wantDb && !wantRaw)
+    {
+        // 未配置 ⇒ **不调用任何 SDK**。省略的语义是"本项目不写增益、
+        // 设备保持其当前值"，**不是**"配 0 dB" —— 若在此顺手补一个 0，
+        // 就把一次明确的省略变成了对设备的一次写入，而写入的语义
+        // （0 dB？原生值 0？）恰恰是本批拒绝假定的东西。
+        // 该事实由 `gainSetting_`（configured == false）如实登记，
+        // 装配摘要会打印出来。
+        return data::OperationResult{data::OpStatus::Ok, std::nullopt, std::nullopt};
+    }
+
+    // 特性名与容差**由配置选定的键决定**，不做"试着设一下看哪个能用"的探测
+    // （那等于让设备替本项目决定单位语义，见头文件注释）。
+    // 配置层已保证两者互斥（同时给出即启动失败），故此处不会两个都为真。
+    const char*  feature   = wantRaw ? kFeatureGainRaw : kFeatureGain;
+    const double requested = wantRaw ? *config_.gainRaw : *config_.gain;
+
+    gainSetting_.configured = true;
+    gainSetting_.feature    = feature;
+    gainSetting_.requested  = requested;
+    gainSetting_.unit       = wantRaw
+        // ⚠ 这句话是本批的核心事实，**不得**改写成 "dB" 或 "原生 dB"：
+        //   设备没有声明单位，本项目也没有换算依据。
+        ? "设备未声明（原生值；项目不做单位解释）"
+        : "dB（SFNC 约定）";
+
+    int ret = api_->setDoubleFeatureValue(handle_, feature, requested);
     if (ret != kImvOk)
     {
-        lastErrorText_ = std::string("配置增益失败（特性 \"") + kFeatureGain +
-                         "\"，" +
+        lastErrorText_ = std::string("配置增益失败（特性 \"") + feature + "\"，" +
                          data::sdkCallName(data::SdkCall::ImvSetDoubleFeatureValue) +
-                         " 返回 " + std::to_string(ret) +
-                         "）。注意该特性名无本 SDK 样例支持，可能是名称不符。";
+                         " 返回 " + std::to_string(ret) + "）。";
+        if (wantRaw)
+        {
+            lastErrorText_ +=
+                "该特性名为本机型实测确认存在（A7A20MU201，2026-09-28），"
+                "请核对返回码（-112 表示超出设备量程）。";
+        }
+        else
+        {
+            lastErrorText_ +=
+                "注意 `Gain` 无本 SDK 样例支持，且本机型（A7A20MU201）**不提供"
+                "该节点**（实测：设备 XML 中无 `Gain` 节点，"
+                "`IMV_GetDoubleFeatureValue(\"Gain\")` 返回 -110）。"
+                "若本机只有原生值节点（`GainRaw`），请在 camera.yaml 中"
+                "**改用 `gain_raw`** —— **不要**把 dB 数值照抄进 gain_raw"
+                "（那是把 dB 当原生值）。";
+        }
         return sdkFailure(data::SdkCall::ImvSetDoubleFeatureValue, ret);
     }
 
     double readback = 0.0;
-    ret = api_->getDoubleFeatureValue(handle_, kFeatureGain, readback);
+    ret = api_->getDoubleFeatureValue(handle_, feature, readback);
     if (ret != kImvOk)
     {
-        lastErrorText_ = std::string("读回增益失败（特性 \"") + kFeatureGain +
-                         "\"，" +
+        lastErrorText_ = std::string("读回增益失败（特性 \"") + feature + "\"，" +
                          data::sdkCallName(data::SdkCall::ImvGetDoubleFeatureValue) +
                          " 返回 " + std::to_string(ret) + "）";
         return sdkFailure(data::SdkCall::ImvGetDoubleFeatureValue, ret);
     }
+    gainSetting_.readback      = readback;
+    gainSetting_.readbackKnown = true;
 
-    // 容差 0.05 dB：设备的增益步长通常为 0.1 dB 量级。
-    if (std::fabs(readback - config_.gain) > 0.05)
+    // 容差**按实际写入的单位语义**取（C-018）：原生值用 1e-3，dB 用 0.05。
+    // 见两个常量的注释 —— 用 dB 的容差去比原生值，等于又假定了一次换算。
+    const double tolerance = wantRaw ? kGainRawTolerance : kGainDbTolerance;
+    if (std::fabs(readback - requested) > tolerance)
     {
-        lastErrorText_ = "增益读回不一致：请求 " + std::to_string(config_.gain) +
-                         " dB，设备回报 " + std::to_string(readback) +
-                         " dB。设置未生效。";
+        // 文本里**只写该特性实际使用的单位**，不写 "dB" ——
+        // 对原生值路径写 "dB" 就等于在错误信息里把单位当成已知。
+        lastErrorText_ = "增益读回不一致：特性 \"" + std::string(feature) +
+                         "\"，请求 " + std::to_string(requested) + "，设备回报 " +
+                         std::to_string(readback) + "（单位：" + gainSetting_.unit +
+                         "）。设置未生效。";
         return localFailure(data::OpStatus::ContractViolation);
     }
 
+    gainSetting_.applied = true;
     return data::OperationResult{data::OpStatus::Ok, std::nullopt, std::nullopt};
+}
+
+std::string ImvCameraBackend::GainSetting::describe() const
+{
+    if (!configured)
+    {
+        // ⚠ 必须写明"不等于 0 dB"：否则这一行会被读成"增益是 0"，
+        //   而事实是本项目根本没碰过该特性，设备保持其**当前值**。
+        return "未配置（本项目不写该特性，设备保持当前值 —— 不等于 0 dB）";
+    }
+    if (!applied)
+    {
+        return "配置未完成：特性 \"" + feature + "\"、请求 " +
+               std::to_string(requested) + "（单位：" + unit +
+               "）；原因见错误文本";
+    }
+    return "特性 \"" + feature + "\"：请求 " + std::to_string(requested) +
+           "；读回 " + std::to_string(readback) + "；单位 " + unit;
+}
+
+ImvCameraBackend::GainSetting ImvCameraBackend::gainSetting() const
+{
+    return gainSetting_;
 }
 
 data::OperationResult ImvCameraBackend::applyTriggerMode(

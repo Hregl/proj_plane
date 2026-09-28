@@ -154,7 +154,9 @@ const char* roleName(data::CameraRole role)
     return "UNKNOWN_ROLE";
 }
 
-/// ---- 原始载荷的四项解释信息（011-A1；ENG-09 V2.4 §5.28 / §6.5）----
+/// ---- 原始载荷的四项解释信息（011-A1；ENG-09 V2.6 §5.28）----
+///      ⚠ 引用修正：原写"§5.28 / §6.5"，而 §6.5 是 `MeasurementConfig`，
+///        与载荷元数据无关 —— 键集与合法组合表**都在 §5.28 里**。
 ///
 /// ⚠ 四个函数全部落盘用**名字**，与 motionName / roleName 同一条理由：
 ///   枚举值落盘后，将来在中间插入一个成员会让历史包里的 "1" 悄悄改含义，
@@ -171,6 +173,7 @@ const char* pixelFormatName(data::PixelFormat format)
     switch (format)
     {
     case data::PixelFormat::Mono8:        return "Mono8";
+    case data::PixelFormat::Mono10:       return "Mono10";
     case data::PixelFormat::Mono12:       return "Mono12";
     case data::PixelFormat::Mono12Packed: return "Mono12Packed";
     case data::PixelFormat::BGR8:         return "BGR8";
@@ -224,6 +227,36 @@ enum class RawSource
 ///   随后），两份字面量一旦漂移，现场拿到的通道名就可能与实际写出的
 ///   文件名对不上 —— 而那正是"按文件排查"的人唯一的抓手。
 const char* const kRawFileNames[3] = {"cam25.raw", "cam50.raw", "cam100.raw"};
+
+/// 槽位 → 角色。**本文件里槽位与角色的唯一映射** —— `kRawFileNames`
+/// 的文件名与 result.json 里 `frames` 数组的 `role` 都从它取，故
+/// "写出的文件名"与"元数据里说的角色"不可能分叉（与 kRawFileNames
+/// 单列一份是同一条理由）。
+///
+/// ⚠ 为什么**不**取 `ImageFrame::role`（2026-09-28，实机验收发现）：
+///   该字段的默认值是 `CAM25`（`CameraRole` 的第一个枚举值 ——
+///   SYS-04 §12.3.1 拒绝为它加 `UNKNOWN` 哨兵，理由正是"默认构造会让
+///   它悄悄出现在所有含该枚举的结构体里"，`ImageFrame.role` 被逐字点名）。
+///   而失败包的 `bestFrame` 是**默认构造**的（`MeasurementController::
+///   saveFailurePackage()` 的 `record.bestFrame = MultiCameraFrame{}`），
+///   于是三条 `frames` 会**全部**自称 `CAM25`，同一份 result.json 里
+///   `selected_camera` 却可能写着 `CAM100` —— 记录自相矛盾，且矛盾的方向
+///   会让人以为"CAM25 连试三次都没出图"。
+///
+///   ∴ 角色的权威来源是帧在 `MultiCameraFrame` 里的**位置**
+///     （cam25 / cam50 / cam100 三个具名成员），不是那个可能从未被填过的
+///     字段。真实捕获路径上 `frame.role` 确实会被填
+///     （`ImvCameraBackend.cpp` / `VirtualCameraBackend.cpp` 都取
+///     `config_.role`），故本映射与它一致；不一致的情形见调用点的检查。
+data::CameraRole slotRole(int index)
+{
+    switch (index)
+    {
+    case 0:  return data::CameraRole::CAM25;
+    case 1:  return data::CameraRole::CAM50;
+    default: return data::CameraRole::CAM100;
+    }
+}
 
 const char* dataSourceName(RawSource source)
 {
@@ -397,7 +430,7 @@ RawSource decideRawSource(const data::ImageFrame& frame, std::string& contractEr
     // ---- 原始载荷缺失：分支二（照常保存）还是分支三（拒绝回落）----
     //
     //  判据是**帧的两个字段**，不是"图是不是空的"：
-    //    · `rawPolicy == RawRequired`（有效位深 > 8 的格式本批即 Mono12）
+    //    · `rawPolicy == RawRequired`（有效位深 > 8 的格式本批即 Mono10／Mono12）
     //    · 或 `captureFormat` 本身的有效位深 > 8
     //  两个都查：任一为真即拒绝。只查一个的话，"rawPolicy 被留成默认值
     //  RawOptional 而没有跟着 captureFormat 走"这一种错误组合就会漏过 ——
@@ -807,6 +840,41 @@ bool Recorder::writeResultJson(const data::MeasurementRecord& record,
             return false;
         }
 
+        // ---- 通道角色：槽位是权威，帧自带的 role 只在**有数据**时受检 ----
+        //
+        // 三段判据（2026-09-28，C-018 实机验收发现失败包三条 role 全写
+        // CAM25）。判据顺序与上面的契约检查一致：**载荷违反契约优先**，
+        // 那种帧不能被降级成"这一路本轮没有帧"。
+        //
+        //   ① `contractError` 非空 ⇒ 已在上面的分支里拒绝（载荷本身不合约）。
+        //   ② `source == None`（且无契约错误）⇒ **合法的无帧占位**：
+        //      role 按槽位写、`frame_valid=false`、**不检查**帧的 role ——
+        //      失败包的三个占位帧是默认构造的（role 默认 CAM25），
+        //      无条件检查会让每一份失败包都保存失败。
+        //   ③ `source != None` ⇒ 这一路**确实有数据**（原始载荷 `RawBytes`
+        //      或显示图回落 `DisplayImage`），此时帧自带的 role 若与槽位
+        //      不符，说明上游把某一帧放错了通道 —— 落盘是最后一道能拦住它
+        //      的地方：**保存失败**，且诊断里给出期望与实际两个角色。
+        //
+        // ⚠ "有数据"的判据是 `source != RawSource::None`，**不是**
+        //   `!image.empty()`：只查显示图会漏掉"有原始载荷、没有显示图"
+        //   （Mono10/Mono12 帧本来就可能是这种形态），而那一路恰恰是最
+        //   需要 role 正确的（它是唯一能被离线解码出测量值的文件）。
+        const data::CameraRole expectedRole = slotRole(i);
+        if (source != RawSource::None && chans[i]->role != expectedRole)
+        {
+            error = "结果包的通道角色与槽位不一致（" +
+                    std::string(kRawFileNames[i]) + "）：该槽位的角色应为 " +
+                    roleName(expectedRole) + "，帧自带的 role 是 " +
+                    roleName(chans[i]->role) +
+                    "。这一路本轮**有数据**（data_source=" +
+                    dataSourceName(source) +
+                    "），把它按槽位写出去等于把某台相机的图记到别的焦段名下；"
+                    "按它自己的角色写出去则与文件名矛盾。二者只能由上游修正，"
+                    "落盘不做猜测，故本包失败。";
+            return false;
+        }
+
         const data::RawImagePayload& raw = chans[i]->raw;
 
         // ---- 元数据描述的是**实际写出的那个文件**（§6）----
@@ -837,7 +905,7 @@ bool Recorder::writeResultJson(const data::MeasurementRecord& record,
         const data::ByteOrder fileByteOrder =
             isRawBytes ? raw.declaredByteOrder : data::ByteOrder::LittleEndian;
 
-        os << "      {\"role\": \"" << roleName(chans[i]->role)
+        os << "      {\"role\": \"" << roleName(expectedRole)
            << "\", \"frame_id\": " << chans[i]->frameId
            << ", \"timestamp_ns\": " << chans[i]->timestampNs
            // 该路本轮是否交付了可用帧（= 该路的 cam*.raw 是否写出）。
@@ -1096,6 +1164,14 @@ bool Recorder::writeRawFrames(const data::MultiCameraFrame& frame,
                     "）：" + contractError;
             return false;
         }
+
+        // ⚠ 通道角色的检查**不在这里**（2026-09-28）：它在
+        //   `writeResultJson` 里做，而 save() 的步骤顺序是
+        //   result.json → failure.json → raw 文件，故"有数据的帧 role 与
+        //   槽位不符"必然在本函数写下任何字节**之前**就把整包拦掉
+        //   （save() 任一步失败即不再继续）。这里不再重复一遍判据 ——
+        //   两处各写一份必然在某次修改后分叉，而分叉的形态是"元数据被
+        //   拒绝、raw 文件却已经写出去了"，那正是最坏的一种包。
 
         const std::string path = joinPath(packageDir, kRawFileNames[i]);
         const char*       data = nullptr;

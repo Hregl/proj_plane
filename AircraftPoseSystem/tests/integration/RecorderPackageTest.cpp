@@ -1586,3 +1586,403 @@ TEST(RecorderPackageTest, SuccessfulTaskCarriesAPathButNoRootCause)
     fs["first_error"]["name"] >> firstName;
     EXPECT_EQ(firstName, "OK") << "0 的冻结名是 OK，而不是空串或 UNREGISTERED";
 }
+
+// ===========================================================================
+//  8 通道角色的权威来源是**槽位**，不是帧自带的 role 字段
+// ===========================================================================
+//
+//  ⚠ 这一节的存在理由（2026-09-28 实机验收发现）：
+//    `result.json` 的 `frames[]` 此前用 `ImageFrame::role` 写 role，而该
+//    字段的默认值是 `CAM25`（`CameraRole` 的第一个枚举值）。失败包的
+//    `bestFrame` 是**默认构造**的（`MeasurementController::saveFailurePackage()`
+//    的 `record.bestFrame = MultiCameraFrame{}`），于是实机失败包出现了
+//    三行**全部**自称 `CAM25`，而同一份 result.json 里 `selected_camera`
+//    写着 `CAM100` —— 记录自相矛盾，且矛盾的方向是"看起来 CAM25 连试
+//    三次都没出图、另两路根本没参与"。
+//
+//    这正是 SYS-04 §12.3.1 拒绝给 `CameraRole` 加 `UNKNOWN` 哨兵时点名的
+//    那个形态（"它会经由**默认构造**悄悄出现在所有含该枚举的结构体中"，
+//    `ImageFrame.role` 被逐字点名）。故修法**不是**加哨兵，也不是把有数据
+//    帧的 role 强行改写成槽位角色（那会把"上游把图放错了通道"这件事
+//    掩盖掉），而是：
+//      · 无数据的合法占位 → role 按**槽位**写，不检查帧的 role；
+//      · 有数据（`data_source != "none"`）→ 帧的 role 必须与槽位一致，
+//        不一致则**整包拒绝**（在写出任何 raw 之前）。
+
+TEST(RecorderPackageTest, FailurePackageLabelsEachSlotWithItsOwnRole)
+{
+    TempDir out("failrole");
+    const std::string dir = saveRecord(out, "config", fixtureFailureRecord());
+    ASSERT_FALSE(dir.empty()) << "失败任务必须落盘（C-007）";
+
+    cv::FileStorage fs(joinPath(dir, "result.json"), cv::FileStorage::READ);
+    ASSERT_TRUE(fs.isOpened());
+
+    const cv::FileNode frames = fs["best_frame"]["frames"];
+    ASSERT_EQ(frames.size(), 3u);
+
+    // 三行**依次**是三个槽位的角色 —— 顺序本身也是判据：若只断言"集合
+    // 相等"，把 cam25 与 cam100 两行对调同样能通过，而"哪一行的宽高、
+    // 帧号属于哪台相机"正是读包的人要回答的问题。
+    const char* const wantRole[3] = {"CAM25", "CAM50", "CAM100"};
+    for (int i = 0; i < 3; ++i)
+    {
+        std::string role, source;
+        bool        valid = true;
+        frames[i]["role"] >> role;
+        frames[i]["data_source"] >> source;
+        frames[i]["frame_valid"] >> valid;
+
+        EXPECT_EQ(role, wantRole[i])
+            << "第 " << i << " 行的 role 不是它所在槽位的角色 —— 默认构造的"
+               "占位帧（role 默认 CAM25）不得让整包自称三路都是 CAM25";
+        EXPECT_EQ(source, "none") << "失败包的占位帧没有数据";
+        EXPECT_FALSE(valid);
+    }
+
+    // 失败原因必须**同时**保留：role 修好了、原因却丢了，等于换一种失真。
+    int code = 0;
+    fs["failure"]["first_error"]["code"] >> code;
+    EXPECT_EQ(code, aircraft::data::kErrModelMissing);
+
+    for (const char* raw : {"cam25.raw", "cam50.raw", "cam100.raw"})
+    {
+        EXPECT_FALSE(pathExists(joinPath(dir, raw))) << raw << " 不该出现在失败包里";
+    }
+}
+
+TEST(RecorderPackageTest, OnlyTheSlotThatDeliveredGetsItsRawFile)
+{
+    TempDir out("onlycam25");
+
+    // 实机上的常态：只有 CAM25 接了真实相机（另两路是虚拟的或未交付）。
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const Mono12Fixture             fx     = makeMono12PositionEncoded(4, 2);
+    record.bestFrame.cam25                 = mono12Frame(fx, /*withRaw=*/true);
+    record.bestFrame.cam50                 = aircraft::data::ImageFrame{};
+    record.bestFrame.cam100                = aircraft::data::ImageFrame{};
+
+    const std::string dir = saveRecord(out, "config", record);
+    ASSERT_FALSE(dir.empty()) << "只有一路有数据是**正常**轮次，不是失败";
+
+    EXPECT_TRUE(pathExists(joinPath(dir, "cam25.raw")));
+    EXPECT_FALSE(pathExists(joinPath(dir, "cam50.raw")))
+        << "该路本轮没有帧，不得写出文件（0 字节文件同样不许）";
+    EXPECT_FALSE(pathExists(joinPath(dir, "cam100.raw")));
+
+    cv::FileStorage fs(joinPath(dir, "result.json"), cv::FileStorage::READ);
+    ASSERT_TRUE(fs.isOpened());
+    const cv::FileNode frames = fs["best_frame"]["frames"];
+    ASSERT_EQ(frames.size(), 3u);
+
+    const char* const wantRole[3] = {"CAM25", "CAM50", "CAM100"};
+    const char* const wantSrc[3]  = {"raw", "none", "none"};
+    for (int i = 0; i < 3; ++i)
+    {
+        std::string role, source;
+        frames[i]["role"] >> role;
+        frames[i]["data_source"] >> source;
+        EXPECT_EQ(role, wantRole[i]);
+        EXPECT_EQ(source, wantSrc[i]);
+    }
+}
+
+TEST(RecorderPackageTest, FrameCarryingDataInTheWrongSlotIsRefused)
+{
+    // 两路出口都要覆盖：RAW 真身路径与显示图回落路径。
+    // ⚠ 只覆盖前者会漏掉"8 位帧放错通道"这一种 —— 那条路径上
+    //   `data_source` 是 `image` 而不是 `raw`，判据若写成"有没有 raw"
+    //   就会放行一份把别的焦段的图记在本通道名下的结果包。
+
+    // ---- (a) RAW 真身路径：Mono12 帧（role=CAM25）放进 cam50 槽 ----
+    {
+        TempDir out("wrongslotraw");
+
+        aircraft::data::MeasurementRecord record = fixtureRecord();
+        const Mono12Fixture             fx     = makeMono12PositionEncoded(4, 2);
+        record.bestFrame.cam25                 = aircraft::data::ImageFrame{};
+        record.bestFrame.cam50                 = mono12Frame(fx, /*withRaw=*/true);
+        record.bestFrame.cam100                = aircraft::data::ImageFrame{};
+        ASSERT_EQ(record.bestFrame.cam50.role, CameraRole::CAM25)
+            << "本用例的前提是这一帧自称 CAM25；若夹具改了 role，"
+               "下面的断言就不再证明任何事";
+
+        aircraft::data::SystemConfig sys;
+        sys.outputDir = out.path();
+        Recorder rec(sys, "config", record.calibrationId, record.modelId,
+                     "feat_v1");
+
+        EXPECT_FALSE(rec.save(record))
+            << "有数据的帧与槽位不符时必须拒绝，不得按槽位写出去";
+        EXPECT_NE(rec.lastErrorText().find("CAM50"), std::string::npos)
+            << rec.lastErrorText() << "（诊断须给出**期望**的角色）";
+        EXPECT_NE(rec.lastErrorText().find("CAM25"), std::string::npos)
+            << rec.lastErrorText() << "（诊断须给出**实际**的角色）";
+
+        // 拒绝必须发生在**任何 raw 文件写出之前**：一份"raw 已写出、
+        // 元数据被拒"的包是最坏的一种（它看起来完整）。
+        for (const char* raw : {"cam25.raw", "cam50.raw", "cam100.raw"})
+        {
+            EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), raw)))
+                << raw << " 在拒绝之前就被写出来了";
+        }
+    }
+
+    // ---- (b) 显示图回落路径：8 位帧的 role 改错 ----
+    {
+        TempDir out("wrongslotimg");
+
+        aircraft::data::MeasurementRecord record = fixtureRecord();
+        // 夹具的 cam100 是一幅 8U 显示图、没有原始载荷 ⇒ 走回落分支，
+        // 本轮**有数据**（`data_source == "image"`），故 role 必须受检。
+        record.bestFrame.cam100.role = CameraRole::CAM25;
+
+        aircraft::data::SystemConfig sys;
+        sys.outputDir = out.path();
+        Recorder rec(sys, "config", record.calibrationId, record.modelId,
+                     "feat_v1");
+
+        EXPECT_FALSE(rec.save(record))
+            << "回落路径同样要查 role：判据是『这一路有没有数据』，"
+               "不是『有没有 raw 字节』";
+        EXPECT_NE(rec.lastErrorText().find("CAM100"), std::string::npos)
+            << rec.lastErrorText();
+        EXPECT_NE(rec.lastErrorText().find("CAM25"), std::string::npos)
+            << rec.lastErrorText();
+
+        // cam25 / cam50 本轮**合法**且确实有数据 —— 但整包仍不得落盘,
+        // 否则会留下一份"两路合法、一路按槽位写错了"的包。
+        for (const char* raw : {"cam25.raw", "cam50.raw", "cam100.raw"})
+        {
+            EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), raw)))
+                << raw << " 在拒绝之前就被写出来了";
+        }
+    }
+
+    // ---- (c) 契约违背优先于角色错配，且**不得**降级成"无帧占位" ----
+    //
+    // 一张 Mono12 帧**丢了原始载荷**本身就是契约违背（`Mono12FrameWithout
+    // RawPayloadIsRefusedNotSilentlyDowngraded`）；若它同时还放错了槽位，
+    // 报告的原因必须是**载荷**那一条 —— 角色错配是"图放错了通道"，
+    // 而载荷缺失是"这一路的数据不可复原"，后者严重得多。
+    // ⚠ 这一格的判据是**顺序**：角色检查若挪到载荷检查之前，本断言就会
+    //   读到角色那条文本 —— 它同样会拒绝整包，故只断言"保存失败"是
+    //   分辨不出来的。
+    {
+        TempDir out("contractfirst");
+
+        aircraft::data::MeasurementRecord record = fixtureRecord();
+        const Mono12Fixture             fx     = makeMono12PositionEncoded(4, 2);
+        record.bestFrame.cam25                 = aircraft::data::ImageFrame{};
+        record.bestFrame.cam50                 = mono12Frame(fx, /*withRaw=*/false);
+        record.bestFrame.cam100                = aircraft::data::ImageFrame{};
+
+        aircraft::data::SystemConfig sys;
+        sys.outputDir = out.path();
+        Recorder rec(sys, "config", record.calibrationId, record.modelId,
+                     "feat_v1");
+
+        EXPECT_FALSE(rec.save(record));
+        EXPECT_NE(rec.lastErrorText().find("未携带原始载荷"), std::string::npos)
+            << rec.lastErrorText()
+            << "（契约违背必须报**载荷**原因，不能报成角色错配）";
+        EXPECT_TRUE(rec.lastErrorText().find("通道角色") == std::string::npos)
+            << rec.lastErrorText() << "（更不许降级成『这一路本轮没有帧』）";
+    }
+}
+
+// ===========================================================================
+//  9 Mono10：落盘与解码（C-018；实机机型 A7A20MU201 只提供 Mono8/Mono10）
+// ===========================================================================
+//
+//  ⚠ 为什么 Mono10 需要自己的一组夹具与用例，而不是把 Mono12 的参数换一下：
+//    两者共用 **2 字节容器**，唯一但关键的差别是有效位（10 与 12）⇒
+//    显示图的位移是 `>>2` 而不是 `>>4`（规则见 `RawImagePayload.h`：
+//    位移 = `validBits − 8`，由格式数据驱动，不是每条格式分支写死的）。
+//    ∴ 若适配层把 Mono10 帧按 12 位写进元数据，离线解码会**少移 2 位**,
+//    而图仍然"是一张看起来正常的图"—— 这正是本节的夹具必须让 `>>2` 与
+//    `>>4` 必然给出**不同**显示值的原因。
+
+namespace
+{
+
+/// 一帧 Mono10 的两个侧面（同 `Mono12Fixture` 的形态，差别在位移是 2）。
+struct Mono10Fixture
+{
+    uint32_t             width  = 0;
+    uint32_t             height = 0;
+    std::vector<uint8_t> container;   ///< 每像素 2 字节的小端 16 位容器
+    cv::Mat              display;     ///< 8U，= 容器里的值 >> (10−8)
+};
+
+/// 位置编码的 Mono10 夹具：`value(x, y) = 256 + x·17 + y·31`。
+///
+/// 三条设计约束各自对应一种会**静默**发生的错：
+///   · **非方形**（5×3）＋ 逐位置取值互不相同 ⇒ 宽高互换后按新几何扫出的
+///     序列与原序列不同；且每个位置的期望值可由**公式**独立写出，
+///     不必从输入容器里取值当答案。
+///     取名互不相同靠 17 与 31 互质：`17·Δx = 31·Δy` 在 |Δx| ≤ 4、
+///     |Δy| ≤ 2 内只有平凡解。
+///   · **每个取值都 > 255**（区间 `[256, 386]`，仍 < 1023 不饱和）⇒
+///     "误按 8 位保存"（把值截成 8 位、或只写低字节）在**每一个位置**
+///     都会露馅：截断后高位恒为 0（本夹具的高字节恒为 1），decode 出的值
+///     也必然 ≤ 255。
+///     ⚠ 这一条**必须对全部像素成立**，不能只保证"夹具有值 > 255"：
+///       只要有一个像素 ≤ 255，"8 位足以装下它"就让该位置对这类错免疫，
+///       而漏掉的那个位置恰恰无人检查。
+///   · **取值跨越 bit8 以上、低 8 位随位置变化**⇒ `>>2`（Mono10 的正确
+///     位移）与 `>>4`（照抄 Mono12 的错位移）必然给出不同的显示值：
+///     `k = x·17 + y·31 ≤ 130`，故 `value >> 2 = 64 + (k >> 2)` 而
+///     `value >> 4 = 16 + (k >> 4)`，两者恒不等（含 k = 0 处：64 ≠ 16）。
+///     ⇒ 有效位写错（12 而非 10）会被显示图比对抓住。
+Mono10Fixture makeMono10PositionEncoded(uint32_t width, uint32_t height)
+{
+    Mono10Fixture fx;
+    fx.width  = width;
+    fx.height = height;
+    fx.display.create(static_cast<int>(height), static_cast<int>(width), CV_8UC1);
+
+    fx.container.resize(static_cast<std::size_t>(width) * height * 2u);
+    for (uint32_t y = 0; y < height; ++y)
+    {
+        for (uint32_t x = 0; x < width; ++x)
+        {
+            const uint16_t value =
+                static_cast<uint16_t>(256u + x * 17u + y * 31u);
+            const std::size_t off =
+                (static_cast<std::size_t>(y) * width + x) * 2u;
+            fx.container[off]     = static_cast<uint8_t>(value & 0xFFu);   // 小端
+            fx.container[off + 1] = static_cast<uint8_t>((value >> 8) & 0xFFu);
+            fx.display.at<unsigned char>(static_cast<int>(y), static_cast<int>(x)) =
+                static_cast<unsigned char>(value >> 2);
+        }
+    }
+    return fx;
+}
+
+/// 把夹具装成一帧 Mono10。`withRaw == false` 只清空原始载荷。
+aircraft::data::ImageFrame mono10Frame(const Mono10Fixture& fx, bool withRaw)
+{
+    aircraft::data::ImageFrame f;
+    f.role          = CameraRole::CAM25;
+    f.cameraId      = "cam25";
+    f.frameId       = 202;
+    f.timestampNs   = 8888;
+    f.captureFormat = aircraft::data::PixelFormat::Mono10;
+    f.rawPolicy     = aircraft::data::RawDataPolicy::RawRequired;
+    f.image         = fx.display;
+
+    if (withRaw)
+    {
+        aircraft::data::RawImagePayload p;
+        p.bytes = std::make_shared<const std::vector<uint8_t>>(fx.container);
+        p.format      = aircraft::data::PixelFormat::Mono10;
+        p.validBits   = 10;
+        p.packing     = aircraft::data::Packing::Unpacked;
+        p.bitAlignment = aircraft::data::BitAlignment::LsbZeroPadded;
+        p.width  = fx.width;
+        p.height = fx.height;
+        p.sdkPayloadBytes = fx.container.size();
+        aircraft::data::computeExpectedCompactBytes(fx.width, fx.height,
+                                                    p.format,
+                                                    p.expectedCompactBytes);
+        p.compactSizeMatches = (p.sdkPayloadBytes == p.expectedCompactBytes);
+        p.declaredByteOrder  = aircraft::data::ByteOrder::LittleEndian;
+        f.raw = p;
+    }
+    return f;
+}
+
+}  // namespace
+
+TEST(RecorderPackageTest, Mono10FrameIsSavedWithItsOwnBitDepthAndDecodesPerPosition)
+{
+    TempDir out("mono10");
+
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const Mono10Fixture             fx     = makeMono10PositionEncoded(5, 3);
+    record.bestFrame.cam25                 = mono10Frame(fx, /*withRaw=*/true);
+
+    const std::string dir = saveRecord(out, "config", record);
+    ASSERT_FALSE(dir.empty());
+
+    // ---- 从这一行起只按**包内元数据**解码，不再碰 `fx` ----
+    cv::FileStorage fs(joinPath(dir, "result.json"), cv::FileStorage::READ);
+    ASSERT_TRUE(fs.isOpened());
+    const cv::FileNode f0 = fs["best_frame"]["frames"][0];
+
+    std::string source, format, packing, alignment, order;
+    int         validBits = -1;
+    f0["data_source"] >> source;
+    f0["pixel_format"] >> format;
+    f0["valid_bits"] >> validBits;
+    f0["packing"] >> packing;
+    f0["valid_bit_alignment"] >> alignment;
+    f0["declared_byte_order"] >> order;
+
+    EXPECT_EQ(source, "raw");
+    EXPECT_EQ(format, "Mono10")
+        << "Mono10 帧的元数据必须写 Mono10 —— 写成 Mono12 会让解码方"
+           "按 12 位取高位，得到整体偏移的像素值";
+    EXPECT_EQ(validBits, 10) << "有效位写错 ⇒ 位移就错（位移 = validBits − 8）";
+    EXPECT_EQ(packing, "Unpacked");
+    EXPECT_EQ(alignment, "LsbZeroPadded");
+    EXPECT_EQ(order, "LittleEndian");
+
+    int pkgW = -1, pkgH = -1, pkgBytes = -1, expBytes = -1;
+    f0["raw_image"]["width"] >> pkgW;
+    f0["raw_image"]["height"] >> pkgH;
+    f0["sdk_payload_bytes"] >> pkgBytes;
+    f0["expected_compact_bytes"] >> expBytes;
+
+    // 已知设计（来自本用例构造的那一帧，不是从包里抄的）：
+    //   5×3 与 3×5 的字节数**相同**（都是 30），故非方形是必要前提。
+    EXPECT_EQ(pkgW, 5);
+    EXPECT_EQ(pkgH, 3);
+    EXPECT_NE(pkgW, pkgH) << "本用例必须用非方形几何：方形的宽高互换看不出来";
+    EXPECT_EQ(pkgBytes, 5 * 3 * 2) << "Mono10 是 2 字节/像素的 16 位容器";
+    EXPECT_EQ(expBytes, pkgBytes);
+
+    // ---- 文件字节与容器**逐字节**相同（不是"长度对就行"）----
+    const std::vector<unsigned char> onDisk =
+        readBytes(joinPath(dir, "cam25.raw"));
+    ASSERT_EQ(onDisk.size(), fx.container.size())
+        << "写出的字节数不等于 2 字节/像素 —— 误按 8 位保存会在这里露馅";
+    EXPECT_TRUE(onDisk == fx.container)
+        << "cam25.raw 与自有的原始载荷不是逐字节相同";
+
+    // ---- 逐位置解码（位移**由包内 valid_bits 推出**，不写死 2）----
+    const int shift = validBits - 8;
+    ASSERT_EQ(shift, 2) << "Mono10 的显示位移必须是 2";
+    for (int y = 0; y < pkgH; ++y)
+    {
+        for (int x = 0; x < pkgW; ++x)
+        {
+            const std::size_t off =
+                (static_cast<std::size_t>(y) * static_cast<std::size_t>(pkgW) +
+                 static_cast<std::size_t>(x)) * 2u;
+            const uint16_t value = static_cast<uint16_t>(
+                onDisk[off] | (static_cast<uint16_t>(onDisk[off + 1]) << 8));
+            const int want = 256 + x * 17 + y * 31;
+
+            EXPECT_EQ(static_cast<int>(value & 0x03FFu), want)
+                << "(" << x << ", " << y << ") 处的解码值不对 —— "
+                   "按包内几何解码得到的不是原始图像";
+            // 每条像素都超过 8 位能装下的范围（本夹具的高字节恒为 1）
+            // ⇒ "把值截成 8 位"在**任何**位置都能被这两条断言抓住。
+            EXPECT_GT(static_cast<int>(value), 255)
+                << "夹具的取值必须 > 255，否则'误存 8 位'会因为'值本来"
+                   "就装得下'而在该位置看不出来";
+            EXPECT_LT(static_cast<int>(value), 1024)
+                << "取值必须装得进 10 位容器 —— 越界会让'按 10 位解码'"
+                   "与'按 12 位解码'的差别失去意义";
+            // **显示图验证**：包内声明的位移必须真的是这张显示图用过的位移。
+            // 若元数据把有效位写成 12（位移 4），下面这个等式必然不成立。
+            EXPECT_EQ(static_cast<int>(value) >> shift,
+                      static_cast<int>(
+                          record.bestFrame.cam25.image.at<unsigned char>(y, x)))
+                << "按包内 valid_bits 推出的位移还原不出交付的显示图 —— "
+                   "元数据声明的位深与实际做的位移不一致（>>2 写成了 >>4）";
+        }
+    }
+}

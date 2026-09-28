@@ -1,0 +1,139 @@
+{
+  "first_failed_state": "POSE_SOLVE",
+  "first_error": {
+    "code": 5001,
+    "name": "ErrModelMissing",
+    "message": "PnP 姿态解算失败（通道 CAM25）（机型库未加载，无法给出点表/尺度依据）",
+    "timestamp_ns": 520381390116896
+  },
+  "final_failed_state": "MEASURE_SELECT",
+  "final_error": {
+    "code": 9004,
+    "name": "ErrStateFailure",
+    "message": "MEASURE_SELECT 尝试次数已用尽（§7.3 上限 3），未能产出可用测量通道",
+    "timestamp_ns": 520383803869876
+  },
+  "history": [
+    {
+      "from": "IDLE",
+      "to": "SEARCH",
+      "timestamp_ns": 520378644990510,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "SEARCH",
+      "to": "TARGET_FOUND",
+      "timestamp_ns": 520378660984512,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "TARGET_FOUND",
+      "to": "ALIGN",
+      "timestamp_ns": 520378885854478,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "ALIGN",
+      "to": "STABILIZE",
+      "timestamp_ns": 520378900737515,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "STABILIZE",
+      "to": "MEASURE_SELECT",
+      "timestamp_ns": 520379464088673,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "MEASURE_SELECT",
+      "to": "CAPTURE",
+      "timestamp_ns": 520379667390482,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "CAPTURE",
+      "to": "POSE_SOLVE",
+      "timestamp_ns": 520380060111466,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "POSE_SOLVE",
+      "to": "MEASURE_SELECT",
+      "timestamp_ns": 520381415586047,
+      "error": {
+        "code": 5001,
+        "name": "ErrModelMissing",
+        "message": "PnP 姿态解算失败（通道 CAM100）（机型库未加载，无法给出点表/尺度依据）",
+        "timestamp_ns": 520381401089201
+      }
+    },
+    {
+      "from": "MEASURE_SELECT",
+      "to": "CAPTURE",
+      "timestamp_ns": 520381432098726,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "CAPTURE",
+      "to": "MEASURE_SELECT",
+      "timestamp_ns": 520383582473750,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "MEASURE_SELECT",
+      "to": "FAILED",
+      "timestamp_ns": 520383803869876,
+      "error": {
+        "code": 9004,
+        "name": "ErrStateFailure",
+        "message": "MEASURE_SELECT 尝试次数已用尽（§7.3 上限 3），未能产出可用测量通道",
+        "timestamp_ns": 520383803869876
+      }
+    }
+  ]
+}

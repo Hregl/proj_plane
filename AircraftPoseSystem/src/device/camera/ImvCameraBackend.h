@@ -111,6 +111,48 @@ public:
     /// 接口调它（它按 `availableCameraCount()` 与 `started_` 自行判定）。
     data::DeviceState state() const;
 
+    /// 本次增益配置的现场记录（人读，装配摘要与排查用）。
+    ///
+    /// ⚠ 为什么**成功**路径也要留下记录，而不是只在 `lastErrorText()` 里记失败：
+    /// 增益配置成功是常态，而"成功了"这件事同样必须能回答
+    /// "设的是哪个特性、请求多少、读回多少、**单位是什么**"。
+    /// 尤其本机型（A7A20MU201）的原生值**单位未声明** —— 若不把"单位未知"
+    /// 这件事明写出来，读者看到"请求 6 / 读回 6"极易读成"6 dB 已生效"，
+    /// 而设备从未声明过 dB（实测见 `data::CameraConfig::gainRaw`）。
+    ///
+    /// ⚠ `unit` 是**文本**而不是枚举：取值来自设备（XML 的 `<Unit>`／厂商
+    /// 说明），而"**没有声明**"必须与"声明了但本项目不认识"分开写 ——
+    /// 前者记"设备未声明"，后者把原文抄进来，两者都**不得**被默认成 "dB"。
+    struct GainSetting
+    {
+        /// 配置里给了 `gain` 或 `gain_raw`。false = 本项目**未写**增益，
+        /// 设备保持其当前值 —— 这**不是**"配了 0 dB"。
+        bool configured = false;
+
+        /// 写入 + 读回 + 比对**全部成功**。`configured == false` 时恒为 false。
+        bool applied = false;
+
+        /// 实际写入的特性名：`"Gain"`（dB 语义）或 `"GainRaw"`（原生值）。
+        /// 未配置时为空。
+        std::string feature;
+
+        double requested = 0.0;  ///< 配置里的请求值（单位见 `unit`）
+        double readback  = 0.0;  ///< 设备回报值（单位见 `unit`）
+
+        /// 读回**是否真的取得**。⚠ 与 `applied` 分开是必要的：读回失败时
+        /// `readback` 没有意义，**不能**当 0 用（0 是一个合法的原生值）。
+        bool readbackKnown = false;
+
+        /// 单位说明（本机型实测为"设备未声明"）。
+        std::string unit;
+
+        /// 渲染成一行（**唯一的渲染点**，措辞纪律同 `sdkFailureCodeText()`）。
+        std::string describe() const;
+    };
+
+    /// 本次增益配置的现场记录（见 `GainSetting`）。
+    GainSetting gainSetting() const;
+
 private:
     /// 打开设备：枚举 → 按序列号精确匹配 → 建句柄 → 打开 → 复核身份 →
     /// 配置并读回（像素格式／曝光／增益／触发）。
@@ -140,7 +182,14 @@ private:
     /// 配置并读回曝光（配置单位 s，SDK 单位 µs）。
     data::OperationResult configureExposure();
 
-    /// 配置并读回增益（单位 dB，与 SDK 同名特性）。
+    /// 配置并读回增益。**特性名与容差都由配置选定的键决定**（C-018）：
+    ///   `gain`（dB）      ⇒ 特性 `"Gain"`，容差 0.05 dB（原规则不变）
+    ///   `gain_raw`（原生）⇒ 特性 `"GainRaw"`，容差 1e-3 原生数值
+    ///   两者都未给        ⇒ **不调用任何 SDK**，设备保持当前值
+    ///
+    /// ⚠ 这里**不做"试着设一下看哪个能用"的探测**：那等于让设备替本项目
+    /// 决定单位语义。选哪个特性是配置里写明的决定。
+    /// 配置的互斥与选择规则见 `ConfigManager.cpp` 的对应注释与 ENG-09 §6.1。
     data::OperationResult configureGain();
 
     /// 把一帧视图按本批契约校验、复制并组装成 `ImageFrame`。
@@ -285,6 +334,9 @@ private:
 
     data::DeviceState state_ = data::DeviceState::UNKNOWN;
     std::string       lastErrorText_;
+
+    /// 本次增益配置的现场（见 `GainSetting`）。装配摘要读它。
+    GainSetting gainSetting_;
 
     /// SDK 设备句柄。保持 `void*` 而不引入 SDK 类型（见文件头）。
     void* handle_ = nullptr;

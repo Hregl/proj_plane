@@ -1,0 +1,35 @@
+# 011-A1 批四证据 · 02 应用启动失败记录（应用实际装配类）
+
+记录时间：2026-09-28 15:05（既有材料，本批复核时复制）
+原始路径：/tmp/aps_imv_run.log（大小 3065 字节）
+采集命令：应用按**旧配置目录**启动 —— 配置目录 /tmp/aps_imv_cfg（其中 cam25 的
+          像素格式仍为 "Mono12"），其余配置同 config/ 快照。
+退出码：**未记录**（该次运行为当日人工执行，未留存 $?；末尾日志即为失败结论）
+
+判定：设备已打开、身份校验已通过；失败发生在之后的 PixelFormat 配置，
+      SDK 原始负数码 **-111**（IMV_SetEnumFeatureSymbol("PixelFormat","Mono12")）。
+⚠ 本文件属**应用实际装配**类证据；它**不**证明取帧、也不证明 RAW 落盘。
+
+----（以下为原始输出，未编辑）----
+
+value error key: "disableInWindowBlur" , error message: "[/usr/bin/dde-application-manager] Requires Non-existent configure item [disableInWindowBlur] in [/_/org.deepin.dtk.preference/1000]."
+Failed to call `isDefaultValue`, key: "disableInWindowBlur" , error message: "[/usr/bin/dde-application-manager] Requires Non-existent configure item [disableInWindowBlur] in [/_/org.deepin.dtk.preference/1000]."
+[WARN ] [app] 配置告警：optical_rig.calibration_mode = "synthetic"：标定文件缺失时改用合成内参，**结果不具测量意义**（仅用于 M1 合成闭环）
+[WARN ] [app] 配置告警：measurement：取帧预算无余量 —— capture_frame_count(5) × 3 路 × grab_timeout_ms(100) = 1500 ms ≥ capture_timeout_ns(1500 ms)，且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断（取值余量见《待裁决问题汇总》Q-D2）
+[WARN ] [app] 配置告警：measurement.sigma_a/b/c 全为 0：E 项未生效（未标定），评分退化为 Q/F/M —— 结果包中的 predictedErrorCalibrated 将为 false
+[WARN ] [app] 配置告警：measurement.illum_band_edges 均为 0：光照分带未标定，所有光照条件落入同一桶，M_hist 的光照维度暂不可用
+2026-09-28 15:05:08.644 [INFO] [app] === AircraftPoseSystem V2.1 启动 ===
+2026-09-28 15:05:08.644 [INFO] [app] /tmp/aps_imv_cfg：7 文件 / 3 相机 / 0 项取默认值 / 4 项告警
+2026-09-28 15:05:08.644 [WARN] [app] calibration_mode=synthetic：使用**默认矩阵标定**，本次运行的姿态精度不具参考意义（M1 打通链路专用）
+2026-09-28 15:05:08.645 [WARN] [app] 标定告警：正在使用**合成标定**：内参为标称视场角反推的占位值，外参为单位变换。由其算出的任何姿态结果都没有物理意义，仅可用于数据通路调试（M1/M2）。
+2026-09-28 15:05:08.645 [INFO] [app] 标定：SYNTHETIC-NO-CALIBRATION（模式 synthetic）
+[1790579108.647394] [interface.c:812:getDriverVersion] Unload Universal Ethernet drivers.
+
+value error key: "disableInWindowBlur" , error message: "[/usr/bin/dde-application-manager] Requires Non-existent configure item [disableInWindowBlur] in [/_/org.deepin.dtk.preference/1000]."
+Failed to call `isDefaultValue`, key: "disableInWindowBlur" , error message: "[/usr/bin/dde-application-manager] Requires Non-existent configure item [disableInWindowBlur] in [/_/org.deepin.dtk.preference/1000]."
+
+启动失败：真实相机接入失败（设备打开）：通道 cam25（backend: imv，目标序列号 "FD88772AAK00078"）在设备打开检查时不可用。设备层报告：配置特性 "PixelFormat" = "Mono12" 失败（IMV_SetEnumFeatureSymbol 返回 -111）。本程序**不会**用其它通道或虚拟后端来让本次启动看起来成功。
+  配置目录：/tmp/aps_imv_cfg
+  提示：确认该目录下存在 system.yaml 等 7 个配置文件，且 system.yaml 指向的路径可解析。
+
+[33;40m[0m[33;40m[0m[33;40m[0m[33;40m[0m[33;40m[0m[33;40m[0m[33;40m[0m[33;40m[0m[33;40m[0m[33;40m[0m

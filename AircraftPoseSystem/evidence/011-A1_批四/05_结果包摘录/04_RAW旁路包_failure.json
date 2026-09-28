@@ -1,0 +1,18 @@
+{
+  "first_failed_state": "IDLE",
+  "first_error": {
+    "code": 0,
+    "name": "OK",
+    "message": "",
+    "timestamp_ns": 0
+  },
+  "final_failed_state": "IDLE",
+  "final_error": {
+    "code": 0,
+    "name": "OK",
+    "message": "",
+    "timestamp_ns": 0
+  },
+  "history": [
+  ]
+}

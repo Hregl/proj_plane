@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iterator>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -99,6 +100,33 @@ public:
         if (missing(node, key, /*warnOnType=*/true))
         {
             return fallback;
+        }
+        return node.real();
+    }
+
+    /// 可选标量：**键缺失是合法状态**（如 `gain`／`gain_raw`）。
+    ///
+    /// ⚠ 与 `real()` 的区别不是"少了个默认值"，而是**缺失的登记方式**：
+    /// `real()` 把缺失记进 `defaults_`（= "该字段取了默认值"），而这里的
+    /// 缺失是一个**有语义的取值** —— "没配增益"与"配了 0"是两件事
+    /// （`data::CameraConfig::gain` 因此是 `optional`）。若沿用 `real()`，
+    /// 启动日志会把一台**明确没有配置增益**的相机说成"取了默认值 0"，
+    /// 于是"配置漏了"与"本来就没配"再也分不开。
+    /// ⚠ 键**存在但类型不符**仍按错误路径登记（那是真的配置错误，
+    /// 不能借"可选"之名静默吞掉）。此时按"未配置"处理并**明确告警** ——
+    /// 静默当成 0 会让一次拼写错误变成一次真实的增益设置。
+    std::optional<double> optionalReal(const cv::FileNode& node, const char* key)
+    {
+        if (node.empty() || node.isNone())
+        {
+            return std::nullopt;
+        }
+        if (node.isMap() || node.isSeq())
+        {
+            warnings_.push_back(fullName(key) +
+                                "：类型不符（期望标量），已按**未配置**处理");
+            defaults_.push_back(fullName(key));
+            return std::nullopt;
         }
         return node.real();
     }
@@ -438,9 +466,46 @@ bool ConfigManager::load(const std::string& configDir)
             c.width  = r.integer(n["width"], "width", 0);
             c.height = r.integer(n["height"], "height", 0);
             c.exposureTime = r.real(n["exposure_time"], "exposure_time", 0.0);
-            c.gain         = r.real(n["gain"], "gain", 0.0);
+
+            // ---- 增益：两个键，单位不同、**互斥**（C-018，2026-09-28）-----
+            //
+            // 两者的区别不是"写法不同"，而是**语义不同**：
+            //   `gain`     = 多少 **dB**（ENG-09 §6.1 冻结的单位）
+            //   `gain_raw` = 设备**原生数值**，本项目**不对它做任何单位解释**
+            //
+            // 为什么不能只留一个（实测依据见 `data::CameraConfig::gainRaw`）：
+            // 若把 dB 值直接写进设备的 `GainRaw` 节点，"写 6、读回 6"只证明
+            // 写入成功，**证明不了单位是 dB** —— 项目就此替设备假定了一个
+            // 未经验证的换算。故单位不明确时用 `gain_raw`。
+            //
+            // 三条规则（"选择／互斥／迁移"）：
+            //   ① 选择：设备**声明了 dB 语义的 `Gain` 节点** ⇒ 用 `gain`；
+            //      否则（含"单位与换算依据都不明确"）⇒ 用 `gain_raw`。
+            //      判定依据必须**来自设备**（GenICam XML／厂商说明／实测），
+            //      不是"试一下看能不能设进去"。
+            //   ② 互斥：**同时给出即启动失败**，不做"后者覆盖前者"。两个值
+            //      单位不同，同时存在时"到底写了多少增益"就没有唯一答案，
+            //      而结果包与日志会把其中一个当成事实记下来。
+            //   ③ 迁移：**旧 `gain` 字段的含义不变**，仍是 dB。把一台只有
+            //      `GainRaw` 的设备迁到 `gain_raw` 时，**不要**把原 `gain`
+            //      的数值照抄过去 —— 那是把 dB 当原生值，正是本条要禁止的；
+            //      必须重新按设备原生语义定值，并在结果包里留下依据。
+            //   ④ 两者都可省略：省略 = 本项目**不写增益**，设备保持其当前值
+            //      （不是"配 0 dB"）。该事实由装配摘要如实登记，见
+            //      `ImvCameraBackend::gainSetting()`。
+            c.gain    = r.optionalReal(n["gain"], "gain");
+            c.gainRaw = r.optionalReal(n["gain_raw"], "gain_raw");
 
             const std::string ctx = "camera.cameras[" + std::to_string(index) + "]";
+
+            if (c.gain.has_value() && c.gainRaw.has_value())
+            {
+                errors_.push_back(
+                    ctx + "：gain 与 gain_raw 不能同时给出（前者单位 dB，"
+                    "后者是设备原生值；同时存在时\"实际写了多少增益\"没有"
+                    "唯一答案）。只保留一个——本机型（A7A20MU201）无 dB 语义的 "
+                    "Gain 节点，应使用 gain_raw。");
+            }
 
             // ---- backend（011-A1 新增）-------------------------------------
             // ⚠ **缺该键 = 配置错误、启动失败**，不做隐式默认（ENG-09 V2.3 §6.1）。
@@ -579,9 +644,20 @@ bool ConfigManager::load(const std::string& configDir)
                                   std::to_string(c.exposureTime) +
                                   "（单位 s，允许 (0, 1]）");
             }
-            if (c.gain < 0.0)
+            // 增益：只拒绝**不合理**的负值，**不**在此裁定量程。
+            // ⚠ 上界由**设备**裁定（越界时 `IMV_SetDoubleFeatureValue` 返回
+            //   `IMV_INVALID_RANGE`，在启动时就明确失败）。把某台相机的
+            //   量程（如 A7A20MU201 的 `GainRaw` 1..32）写进本文件，等于把
+            //   一台设备的实测事实冻进通用配置校验 —— 换相机时它不会失效，
+            //   只会开始拒绝原本合法的值。负增益对任何增益语义都不合理。
+            if (c.gain.has_value() && *c.gain < 0.0)
             {
-                errors_.push_back(ctx + ".gain 为负：" + std::to_string(c.gain));
+                errors_.push_back(ctx + ".gain 为负：" + std::to_string(*c.gain));
+            }
+            if (c.gainRaw.has_value() && *c.gainRaw < 0.0)
+            {
+                errors_.push_back(ctx + ".gain_raw 为负：" +
+                                  std::to_string(*c.gainRaw));
             }
             // 重复的 role / id 会让"三相机"体系退化为"两台对一台"而无人察觉
             for (int k = 0; k < index; ++k)

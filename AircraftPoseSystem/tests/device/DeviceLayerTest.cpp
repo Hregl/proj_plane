@@ -69,54 +69,110 @@
 //
 // ⚠ 实现方式是替换全局 `operator new` —— 这会作用于**本测试可执行文件
 //    （含它链接的静态库）**。故注入器默认**关闭**（倒计时 0），
-//    只在单个用例里由替身的开关打开（`failNextAllocationAfterFrame` ＝
-//    紧随其后的一次；`secondaryFailureCount` ＝ 紧随其后的那几次改用
-//    另一种异常种类），用完即归零；用例捕获异常后的第一条语句再显式
-//    撤防一次，确保倒计时不会漏进测试框架自身的分配。
+//    只在单个用例里由替身的开关打开，用完即归零；用例捕获异常后的第一条
+//    语句再显式撤防一次，确保倒计时不会漏进测试框架自身的分配。
+//
+// ── 布防点：注入的落点必须是**构造上确定的**（C-018 补正，评审要求）──
+//
+// 上一版用"取帧成功之后的**第 N 次**分配"去指第 ① 步（描述异常）与
+// 第 ③ 步（写诊断），这个指法是**错的**：第 ② 步（释放）**自己也会分配**
+// —— 替身里的 `callLog.push_back`，以及 `std::map::count` 所接收的
+// `"IMV_ReleaseFrame"`（16 字符，超出短串优化上限）—— 于是"第 2 次分配"
+// 落在第 ② 步还是第 ③ 步，**取决于本次运行之前那两个容器的容量**。
+// 那样得到的绿是**假绿**：用例自述"描述与诊断两步都失败"，实际可能一次
+// 都没打到诊断那一步，"诊断失败时不丢原异常"这件事**根本没被验证过**。
+//
+// ∴ 现在每个落点各有**自己的布防点**，且布防点之后到目标之前**没有分配**：
+//   · **原异常**（复制载荷失败）：布防于替身 `getFrame` 成功返回之前；
+//   · **第 ① 步**（描述原异常）：紧接原异常之后的那一次分配。抛出点到
+//     `describeCurrentException()` 的第一次分配之间只有**栈展开**
+//     （析构只归还内存、不再申请；异常对象本身走
+//     `__cxa_allocate_exception` 而非 `operator new`）⇒ 那一次分配
+//     **就是**第 ① 步的第一次分配；
+//   · **第 ③ 步**（写诊断）：布防于替身 `releaseFrame` **成功路径的出口**
+//     —— 在替身自己的分配**之后**。从那里到 `noteGrabException` 的第一次
+//     分配之间：`releaseFrame()` 只返回一个空的 `optional`（`SdkFailure`
+//     是两个标量，不分配），`cleanup()` 只置位并转交它，都不碰
+//     `operator new` ⇒ 那一次分配**就是**第 ③ 步的第一次分配。
+//
+// ⚠ 落点对不对**不靠注释自述**：两个用例各带一条**行为**断言（哨兵文本
+//   未被改写 / 出现"描述本身构造失败"占位且"帧释放：成功"仍在），
+//   外加"注入次数必须恰好落地 N 次"的计数断言 —— 落点一漂就当场转红。
 namespace
 {
 /// 还要让接下来多少次分配失败；**0 表示关闭**。
 int g_allocFailRemaining = 0;
 
-/// 注入失败时抛出的异常种类：`0` = `std::bad_alloc`，`1` = `std::length_error`。
+/// 注入失败时抛出的异常种类：`0` = `std::bad_alloc`（**原异常**），
+/// `1` = `InjectedSecondaryFailure`（**二次失败**）。
 ///
 /// ⚠ 为什么要**两种**种类（V2.5 新增）：只注入一种异常时，"原异常被二次
 ///   异常顶掉"与"原异常正常上抛"是**同一个类型**，用例根本分辨不出自己
 ///   看到的是哪一个 —— 那样的用例即使全绿也证明不了"保住了原异常"。
 ///   两种种类让这两件事可区分：原异常是 `bad_alloc`，而"描述异常／写诊断
-///   这两步自己失败"造成的是 `length_error`。
+///   这两步自己失败"造成的是 `InjectedSecondaryFailure`。
 int g_allocThrowKind = 0;
 
-/// 第一段用尽后自动装载的第二段（次数、种类）。
-int g_allocFailPhase2Remaining = 0;
-int g_allocThrowKindPhase2     = 1;
-
-/// 两段式布防：接下来 `firstCount` 次分配抛 `firstKind`，
-/// **紧接着的** `restCount` 次抛 `restKind`。
+/// 当前这一段用尽后**自动装载**的下一段（次数、种类）；`0` ＝ 没有下一段。
 ///
-/// ⚠ 为什么必须"两段"：异常出口的三步里，第 ① 步（描述异常）紧跟在
-///   抛出之后、**早于**任何替身回调 —— 若只布一种种类，"
-///   原异常被二次异常顶掉"与"原异常正常上抛"就是同一个类型，用例
-///   分辨不出自己收到的是哪一个。两段式让**原异常**（第一段，
-///   `bad_alloc`）与**二次失败**（第二段，`length_error`）可区分，
-///   且各自的落点可控（复制载荷 / 描述 / 写诊断）。
-/// ⚠ 消息用短字面量（`"SECONDARY"`，9 字符 < SSO 上限）：**抛异常本身
-///   也可能分配**，若它再撞上还没用完的倒计时就会自我递归。
-void armAllocFailurePhased(int firstCount, int firstKind, int restCount,
-                           int restKind)
+/// ⚠ 这条链**只**用于"原异常 → 第 ① 步"这一个**相邻**组合：两者之间没有
+///   任何其它分配，故"下一次"是确定的。第 ③ 步**不得**借它指认 ——
+///   它与原异常之间隔着第 ② 步，那段距离里分配与否不由本文件的代码决定。
+int g_allocFailNextRemaining = 0;
+int g_allocThrowKindNext     = 1;
+
+/// 注入**实际抛出**的次数；`disarmAllocFailure()` 会把它清零
+/// ⇒ 「布防 → 触发 → 撤防」构成一个**完整周期**，计数是**本周期的**抛出次数。
+///
+/// ⚠ 为什么要清：它是全局的，不清就会把**前面所有用例**的抛出累加起来
+///   （实测：累加值 4／6，而每个用例各自只该有 1～2 次）。用例据此断言
+///   "注入真的发生了、且恰好发生预期的次数" —— 只看"原异常被保住了"
+///   是不够的：注入一次都没落地时那条断言**同样会绿**（假绿）。
+int g_allocInjectionsFired = 0;
+
+/// 注入的**二次失败**异常（第 ①／第 ③ 步各自失败时看到的类型）。
+///
+/// ⚠ 为什么不用 `std::length_error("SECONDARY")`（C-018 补正）：它要**复制
+///   一个 `std::string`**，"不分配"只是 libstdc++ 短串优化的**巧合**
+///   （9 字符 < 15），既不在标准里、也不由本工程的代码保证。一旦它真的
+///   分配，**抛出这个动作本身**就会撞上还没用完的倒计时，落点从目标那一步
+///   漂走，甚至自我递归（注入器在抛异常时又触发一次注入）。
+///   本类**只存一个指针**（不存字符串）⇒ 构造、复制、销毁都不碰
+///   `operator new`：`throw` 时的异常对象由 `__cxa_allocate_exception`
+///   分配（走 `malloc`），"抛异常不分配"是**结构上的**保证，不是巧合。
+class InjectedSecondaryFailure : public std::exception
 {
-    g_allocFailRemaining       = firstCount;
-    g_allocThrowKind           = firstKind;
-    g_allocFailPhase2Remaining = restCount;
-    g_allocThrowKindPhase2     = restKind;
+public:
+    explicit InjectedSecondaryFailure(const char* text) noexcept : text_(text) {}
+    const char* what() const noexcept override { return text_; }
+
+private:
+    const char* text_;
+};
+
+/// 布防：接下来 `count` 次分配抛 `kind`；这几次用尽后**再**抛 `nextCount`
+/// 次 `nextKind`（`nextCount == 0` ＝ 没有下一段）。
+void armAllocFailure(int count, int kind, int nextCount = 0, int nextKind = 1)
+{
+    g_allocFailRemaining     = count;
+    g_allocThrowKind         = kind;
+    g_allocFailNextRemaining = nextCount;
+    g_allocThrowKindNext     = nextKind;
 }
 
 /// 撤防（用例在捕获到异常后的**第一条**语句就调用它）。
+///
+/// ⚠ 同时把**本周期的抛出计数**清零（见 `g_allocInjectionsFired`）：
+///    每个用例的读法是"读计数 → 撤防"，故计数天然是**本用例**的。
+///    ⚠ 新加异常注入用例时**必须在捕获处撤防一次** —— 漏掉会让计数泄漏到
+///      下一个用例，而下一个用例的断言会以"数字不对"的形式转红（不会
+///      静默通过，但诊断信息会指向错的地方）。
 void disarmAllocFailure()
 {
-    g_allocFailRemaining       = 0;
-    g_allocThrowKind           = 0;
-    g_allocFailPhase2Remaining = 0;
+    g_allocFailRemaining     = 0;
+    g_allocThrowKind         = 0;
+    g_allocFailNextRemaining = 0;
+    g_allocInjectionsFired   = 0;
 }
 }  // namespace
 
@@ -127,14 +183,15 @@ void* operator new(std::size_t size)
         const int kind = g_allocThrowKind;
         if (--g_allocFailRemaining == 0)
         {
-            // 第一段用尽 ⇒ 装载第二段（可能有，也可能没有）。
-            g_allocFailRemaining       = g_allocFailPhase2Remaining;
-            g_allocThrowKind           = g_allocThrowKindPhase2;
-            g_allocFailPhase2Remaining = 0;
+            // 当前段用尽 ⇒ 装载下一段（可能有，也可能没有）。
+            g_allocFailRemaining     = g_allocFailNextRemaining;
+            g_allocThrowKind         = g_allocThrowKindNext;
+            g_allocFailNextRemaining = 0;
         }
+        ++g_allocInjectionsFired;   // 计数在**抛出之前** —— 抛出的动作本身不分配
         if (kind == 1)
         {
-            throw std::length_error("SECONDARY");
+            throw InjectedSecondaryFailure("SECONDARY");
         }
         throw std::bad_alloc();
     }
@@ -1975,7 +2032,7 @@ public:
     bool poisonOnRelease = true;
 
     /// 令 `getFrame` **成功返回之后**紧接着的下一次分配抛 `std::bad_alloc`
-    /// （§5 的异常安全证据；注入器见文件顶部的说明）。
+    /// （＝**原异常**；§5 的异常安全证据，注入器见文件顶部）。
     ///
     /// ⚠ 在**替身内部**布防而不是在用例里数"第 N 次分配"：
     ///    这样一来"注入点落在 `GetFrame` 成功之后、释放之前"这件事
@@ -1985,21 +2042,27 @@ public:
     bool failNextAllocationAfterFrame = false;
 
     /// §5 异常证据（V2.5）：`IMV_ReleaseFrame` 被调用时**抛出**
-    /// `std::out_of_range("THREW")`。用于"释放调用本身抛出"那一条 ——
-    /// 那时在飞的原异常**必须**原样上抛，这次抛出只被如实记成
+    /// `InjectedSecondaryFailure("THREW")`。用于"释放调用本身抛出"那一条
+    /// —— 那时在飞的原异常**必须**原样上抛，这次抛出只被如实记成
     /// "释放未获确认"。**类型必须与原异常可区分**（见 §5 的用例说明）。
+    /// ⚠ 同样用**不分配**的异常类：这次抛出的时刻，注入器的倒计时可能
+    ///    还有余额，若抛出自身分配就会把落点带偏（见文件顶部的说明）。
     bool throwOnReleaseFrame = false;
 
-    /// §5 异常证据（V2.5）：在"复制载荷"那次失败**之后**，让紧接着的
-    /// `secondaryFailureCount` 次分配抛 `std::length_error`（种类可区分）——
-    /// 即异常出口的"描述原异常"（第 ① 步）与"写诊断"（第 ③ 步）各自失败。
-    /// `0` = 关闭（只有原异常那一次注入）；用完自复位。
-    /// · `1`：只有描述失败 ⇒ 诊断仍应写出"描述失败"的占位文本；
-    /// · `2`：描述与写诊断都失败 ⇒ 诊断可以是空的，
-    ///        **只要求原异常仍是原异常**。
-    /// ⚠ 第二段必须**在这次注入里一起布防**（见 `getFrame`）：第 ① 步紧跟
-    ///   在抛出之后、早于任何替身回调，等到"释放"时才布防就已经晚了。
-    int secondaryFailureCount = 0;
+    /// §5 异常证据（V2.5）：让异常出口**第 ① 步**
+    /// （`describeCurrentException()`）的第一次分配失败。布防点在下面的
+    /// `getFrame` 成功返回处 —— 该点与"原异常抛出点"之间只有栈展开，
+    /// 故落点由构造保证（见文件顶部"布防点"一段）。
+    /// ⇒ 诊断里应留下"描述本身构造失败"的**占位文本**，释放结果照写。
+    bool failDescribeStageAllocation = false;
+
+    /// §5 异常证据（V2.5）：让异常出口**第 ③ 步**（`noteGrabException()`）
+    /// 的第一次分配失败。布防点在下面 `releaseFrame` **成功路径的出口**
+    /// （在替身自己的分配**之后**）：从那里到 `noteGrabException` 的第一次
+    /// 分配之间不碰 `operator new`，故落点由构造保证。
+    /// ⇒ 这一步**一个字都写不出来**：`lastErrorText_` 保持调用前的原值 ——
+    /// 用例正是拿"哨兵文本没被改写"当落点证明。
+    bool failDiagnosisStageAllocation = false;
 
     /// `getFrame` 交付的 `data` 指针改由本字段指定（默认指向 `frameBytes`）。
     /// 用于越界／溢出用例：把它指向一块**不可读**的地址，
@@ -2241,17 +2304,19 @@ public:
         {
             return ret;
         }
-        if (failNextAllocationAfterFrame || secondaryFailureCount > 0)
+        if (failNextAllocationAfterFrame || failDescribeStageAllocation)
         {
             // 帧已交出（调用成功）⇒ 从这里往后就是"复制载荷／建显示图"
-            // 那一段 —— 让它的**第一次**分配失败，正是要在那里制造异常
-            // （＝**原异常**）。`secondaryFailureCount` 是第二段：紧接着的
-            // 那几次分配（＝异常出口里"描述异常"与"写诊断"两步各自的
-            // 分配）改成抛 `length_error`，使**二次失败与原异常类型不同**。
-            const int rest               = secondaryFailureCount;
+            // 那一段 —— 让它的**第一次**分配失败（＝**原异常**）。
+            // `failDescribeStageAllocation` 再加一段：**紧接着的**那次分配
+            // （＝异常出口第 ① 步"描述原异常"的第一次分配）改抛二次异常，
+            // 使**二次失败与原异常类型不同**。
+            // ⚠ 这一段链**只能**指认第 ① 步：它与抛出点相邻，中间没有别的
+            //    分配。第 ③ 步另在自己的布防点（见 `releaseFrame`）。
+            const bool thenDescribe      = failDescribeStageAllocation;
             failNextAllocationAfterFrame = false;
-            secondaryFailureCount        = 0;
-            armAllocFailurePhased(1, 0, rest, 1);
+            failDescribeStageAllocation  = false;
+            armAllocFailure(1, 0, thenDescribe ? 1 : 0, 1);
         }
         return 0;
     }
@@ -2263,8 +2328,8 @@ public:
         (void)handle;
         if (throwOnReleaseFrame)
         {
-            // ⚠ 短字面量：抛异常自身若分配，会干扰下面的分配注入倒计时。
-            throw std::out_of_range("THREW");
+            // ⚠ 不分配的异常类：这次抛出的时刻注入器可能还有余额。
+            throw InjectedSecondaryFailure("THREW");
         }
         const int ret = codeOf("IMV_ReleaseFrame");
         if (ret == 0 && poisonOnRelease)
@@ -2274,6 +2339,17 @@ public:
             {
                 // 不可读的替身缓冲改不了 —— 但那一类用例本来就不释放成功。
             }
+        }
+        if (ret == 0 && failDiagnosisStageAllocation)
+        {
+            // ⚠ 布防点必须在**替身自己的分配之后**：上面的
+            //    `callLog.push_back` 与 `codeOf` 里那个临时的
+            //    `"IMV_ReleaseFrame"`（16 字符，短串优化挡不住）都要分配；
+            //    在那里布防会被自己吃掉，落点漂进第 ② 步。
+            //    从本行到 `noteGrabException` 的第一次分配之间没有分配
+            //    （见文件顶部），故这一次分配**就是**第 ③ 步的第一次分配。
+            failDiagnosisStageAllocation = false;
+            armAllocFailure(1, 1);
         }
         return ret;
     }
@@ -3282,18 +3358,22 @@ TEST(ImvCameraBackendTest, GrabExceptionReleasesExactlyOnceAndLeavesDiagnosticsB
 
     data::ImageFrame frame;
     bool threwBadAlloc = false;
+    int  injections    = 0;
     try
     {
         (void)f.backend->grab(frame, 100);
     }
     catch (const std::bad_alloc&)
     {
+        injections = g_allocInjectionsFired;
+        disarmAllocFailure();   // 第一条语句：别让倒计时漏进测试框架
         threwBadAlloc = true;
     }
 
     EXPECT_TRUE(threwBadAlloc) << "异常必须原样上抛，不得被转成状态码";
     EXPECT_EQ(f.api->getFrameCalls, 1) << "注入点必须在取帧**之后**（否则本用例没验到目标路径）";
     EXPECT_EQ(f.api->releaseFrameCalls, 1) << "异常路径上仍须释放，且**恰好一次**";
+    EXPECT_EQ(injections, 1) << "原异常那次注入必须**真的落地**，否则本用例是假绿";
     EXPECT_TRUE(frame.image.empty()) << "异常路径不交付帧";
 
     const std::string text = f.backend->lastErrorText();
@@ -3317,7 +3397,7 @@ TEST(ImvCameraBackendTest, GrabExceptionSurvivesReleaseCallThatThrows)
     // ⚠ 为什么必须有**两种**注入种类：只注入一种异常时，"原异常被顶掉"与
     //   "原异常正常上抛"是同一个类型，下面那条断言**无论如何都会绿** ——
     //   它证明不了任何事。这里原异常是 `bad_alloc`（复制载荷时注入），
-    //   二次异常是 `out_of_range`（替身在释放时抛出），类型可区分。
+    //   二次异常是 `InjectedSecondaryFailure`（替身在释放时抛出），类型可区分。
     OpenRealBackend f;
     ASSERT_TRUE(f.open());
 
@@ -3373,6 +3453,15 @@ TEST(ImvCameraBackendTest, GrabExceptionSurvivesFailingExceptionDescription)
     // §5 第 ① 步：`describeCurrentException()` 自己**要分配内存**，
     // 分配失败时不得顶掉原异常，且诊断里要留下"描述失败"的**占位说明**
     // （写空串会让人以为异常文本本身是空的）。
+    //
+    // ⚠ **落点证明**（C-018 补正）：本用例说"打的是第 ① 步"，这个说法不能
+    //    只靠布防点的注释，要看两条**行为**断言 ——
+    //      · 文本里出现"**描述本身构造失败**" ⇒ 第 ① 步**确实**失败了
+    //        （它是 `what == nullptr` 时才走的分支）；
+    //      · 文本里"帧释放：成功"还在 ⇒ 第 ②③ 步**确实**正常跑完了
+    //        （第 ③ 步的分配没有被误伤）。
+    //    若布防点漂到第 ② 步，这两条会同时变样（释放被记成"未获确认"、
+    //    描述占位不出现）。
     OpenRealBackend f;
     ASSERT_TRUE(f.open());
 
@@ -3382,24 +3471,27 @@ TEST(ImvCameraBackendTest, GrabExceptionSurvivesFailingExceptionDescription)
     f.api->frameView.status      = 0;
     f.api->frameBytes.assign(4, 0x44);
 
-    f.api->failNextAllocationAfterFrame = true;   // 原异常
-    f.api->secondaryFailureCount        = 1;      // 只让"描述异常"这一步失败
+    f.api->failNextAllocationAfterFrame = true;   // 原异常：复制载荷时失败
+    f.api->failDescribeStageAllocation  = true;   // 二次异常：描述异常这一步失败
 
     data::ImageFrame frame;
     bool             sawOriginal  = false;
     bool             sawSecondary = false;
     std::string      other;
+    int              injections   = 0;
     try
     {
         (void)f.backend->grab(frame, 100);
     }
     catch (const std::bad_alloc&)
     {
+        injections = g_allocInjectionsFired;
         disarmAllocFailure();
         sawOriginal = true;
     }
     catch (const std::exception& e)
     {
+        injections = g_allocInjectionsFired;
         disarmAllocFailure();
         sawSecondary = true;
         other        = e.what();
@@ -3409,6 +3501,9 @@ TEST(ImvCameraBackendTest, GrabExceptionSurvivesFailingExceptionDescription)
         << "描述异常这一步失败不得顶掉原异常；实际收到：" << other;
     EXPECT_FALSE(sawSecondary) << other;
     EXPECT_EQ(f.api->releaseFrameCalls, 1);
+    EXPECT_EQ(injections, 2)
+        << "本用例要求**两次注入都真的落地**（原异常 1 次 + 描述异常 1 次）："
+           "只落地一次说明布防点漂了，下面两条断言也就失去了意义";
 
     const std::string text = f.backend->lastErrorText();
     EXPECT_NE(text.find("描述本身构造失败"), std::string::npos)
@@ -3421,9 +3516,20 @@ TEST(ImvCameraBackendTest, GrabExceptionSurvivesFailingExceptionDescription)
 
 TEST(ImvCameraBackendTest, GrabExceptionSurvivesFailingDiagnosticWrite)
 {
-    // §5 第 ③ 步：写诊断这一步同样要分配 —— 它失败时**诊断可以是空的**
-    //（分配不出来就写不出字，这是硬限制），但**原异常必须是原异常**。
+    // §5 第 ③ 步：写诊断这一步同样要分配 —— 分配不出来就写不出字，
+    // 这时**一个字都不该写**（`noteGrabException` 只在最后一句赋值），
+    // 但**原异常必须是原异常**。
     // 这是本组用例的底线：诊断是附加信息，原异常才是调用方要处理的东西。
+    //
+    // ⚠ **落点证明**（C-018 补正）：本用例上一版拿"第 2 次分配失败"指认第 ③
+    //    步 —— 而第 ② 步（释放）自己也会分配，"第 2 次"可能落在那里。
+    //    现在改成两条**行为**证据：
+    //      (1) 先把诊断状态置成一个**已知哨兵**（用 `grab(…, 0)` 触发一次
+    //          本地拒绝：不发任何 SDK 调用）；
+    //      (2) 事后断言诊断**仍是那个哨兵** —— 只有"第 ③ 步的第一次分配
+    //          就失败"才会如此。落点漂到第 ② 步时，第 ③ 步会正常跑完并把
+    //          文本覆盖成"…；帧释放：未获确认（…）"，本断言当场转红。
+    //    再配合"注入恰好落地 2 次"的计数，本用例才真正验到它自称的那一步。
     OpenRealBackend f;
     ASSERT_TRUE(f.open());
 
@@ -3433,24 +3539,33 @@ TEST(ImvCameraBackendTest, GrabExceptionSurvivesFailingDiagnosticWrite)
     f.api->frameView.status      = 0;
     f.api->frameBytes.assign(4, 0x44);
 
-    f.api->failNextAllocationAfterFrame = true;   // 原异常
-    f.api->secondaryFailureCount        = 2;      // 描述与诊断两步都失败
-
+    // 哨兵：`timeoutMs == 0` 是**本地**拒绝（见 `grab()` 的参数校验），
+    // 不发任何 SDK 调用，也不动注入器 —— 只留下一条可辨认的诊断文本。
     data::ImageFrame frame;
-    bool             sawOriginal  = false;
-    bool             sawSecondary = false;
-    std::string      other;
+    (void)f.backend->grab(frame, 0);
+    const std::string seeded = f.backend->lastErrorText();
+    ASSERT_FALSE(seeded.empty()) << "哨兵文本必须是可辨认的，否则下面的断言无从判断";
+
+    f.api->failNextAllocationAfterFrame = true;   // 原异常：复制载荷时失败
+    f.api->failDiagnosisStageAllocation = true;   // 二次异常：写诊断这一步失败
+
+    bool        sawOriginal  = false;
+    bool        sawSecondary = false;
+    std::string other;
+    int         injections   = 0;
     try
     {
         (void)f.backend->grab(frame, 100);
     }
     catch (const std::bad_alloc&)
     {
+        injections = g_allocInjectionsFired;
         disarmAllocFailure();
         sawOriginal = true;
     }
     catch (const std::exception& e)
     {
+        injections = g_allocInjectionsFired;
         disarmAllocFailure();
         sawSecondary = true;
         other        = e.what();
@@ -3461,9 +3576,15 @@ TEST(ImvCameraBackendTest, GrabExceptionSurvivesFailingDiagnosticWrite)
     EXPECT_FALSE(sawSecondary) << other;
     EXPECT_EQ(f.api->releaseFrameCalls, 1)
         << "诊断失败**不得**影响释放：释放是资源问题，与诊断无关";
+    EXPECT_EQ(injections, 2)
+        << "本用例要求**两次注入都真的落地**（原异常 1 次 + 写诊断 1 次）："
+           "只落地一次说明布防点漂了，下面的哨兵断言也就失去了意义";
 
-    // 诊断文本这里允许为空；但**不得**把二次异常写进去冒充原异常。
     const std::string text = f.backend->lastErrorText();
+    EXPECT_EQ(text, seeded)
+        << "写诊断这一步一个字都写不出来时，诊断状态**不得**被改动"
+           "（被改动了说明注入没落在这一步）："
+        << text;
     EXPECT_EQ(text.find("SECONDARY"), std::string::npos)
         << "二次异常不得出现在诊断里：" << text;
 }
