@@ -57,16 +57,53 @@
 
 ---
 
-## 3 与本次相关的、**不提交**的大文件（关联方式＝哈希）
+## 3 原始载荷与配套元数据：**不入版本库，但持久保存**
 
-| 文件 | 大小 | SHA-256 | 位置（本机，未入库） |
-|---|---|---|---|
-| `cam25.raw`（04 的落盘产物） | 24 576 000 字节 | `c097255d6830b457745b619566001ebe44df68f0f6ae237488fe42097ef25e5d` | `/tmp/raw_bypass_out/RAW_BYPASS_FD88772AAK00078/cam25.raw` |
+**载荷本体与配套元数据保存在持久化验收目录**（不是 `/tmp`）：
 
-⚠ 该文件**不入版本库**：24 MB 裸载荷属构建／产物类体积问题（ENG-07 §2.3 第 5 类），
-且它与本目录里的 `04_RAW旁路包_result.json`（含 `raw_image` 几何与
-`pixel_format`／`valid_bits`／`packing`／`declared_byte_order`）**配合**才能解码。
-**可复核性靠"哈希 + 元数据 + 工具 + 日志"**，不靠把裸载荷塞进仓库。
+```
+验收证据/011-A1_批四_RAW旁路/            ← 相对**仓库根** `proj_plane/`
+├── cam25.raw                24 576 000 字节    ← 04 的落盘产物本体
+├── result.json              （＝本目录 04_RAW旁路包_result.json）
+├── failure.json             （＝本目录 04_RAW旁路包_failure.json）
+├── calibration_id.txt / turntable.json
+└── config_snapshot/         当时生效的 7 份配置（camera/measurement/optical_rig/system/trigger/turntable/validation）
+```
+
+⚠ 该目录**被仓库根 `.gitignore` 排除**（`验收证据/`）：24 MB 裸载荷属 ENG-07 §2.3 **第 5 类**（构建／产物类体积），
+且为机器可再生的运行产物；**.gitignore 只解决"进不进库"，不解决"留不留存"** ——
+**不变量是：插件一删、`/tmp` 一清，这份数据仍要能供离线解码复核。**
+（`/tmp/raw_bypass_out/RAW_BYPASS_FD88772AAK00078/cam25.raw` 是**同一份数据的临时副本**，
+**不作追溯依据**；本目录 `04_RAW旁路专项验证.txt` 里出现的 `/tmp` 路径只说明当时写到了哪里。）
+
+**哈希登记**（2026-09-28 复核时在持久化目录实测；`cam25.raw` 的 SHA-256 与首轮登记一致）：
+
+| 文件 | SHA-256 |
+|---|---|
+| `cam25.raw`（24 576 000 字节） | `c097255d6830b457745b619566001ebe44df68f0f6ae237488fe42097ef25e5d` |
+| `result.json` | `4a36437db499f28430abce935dfa9e2b9c9e7cc9190768e4f277ab25102041d7` |
+| `failure.json` | `77e26f816c3d38a1f95eb5f3779a8055ff329ac0c2088bc7fd286c2df74bfcc5` |
+| `calibration_id.txt` | `6efca05c24d1cc2ee3d004292f5c9497ce5d809a6afec7b0600b6a611c3f2dcd` |
+| `turntable.json` | `b836fbbbe4d0a3a480ffbf634637e76df4fd140c991f21953eb741dc2991eae9` |
+| `config_snapshot/camera.yaml` | `64ae3583a3f5def56dc88b270b407d4a75f04f1e87b794463956df57ee352857` |
+| `config_snapshot/measurement.yaml` | `bad176ba87910eb4113a5d6675a6d938919bc4f88e6a41cfd93b9affcaf7065e` |
+| `config_snapshot/optical_rig.yaml` | `800c2f5137d557cd83cf0349d811241efeae695bf58a9dc6c242369b4f7345c6` |
+| `config_snapshot/system.yaml` | `79a9b4b6b6eeef128561315581a22e6b4f2c50c38d9844cda604fd1a068baace` |
+| `config_snapshot/trigger.yaml` | `726cb73e59c7262dbbecad401c1c7f1e73ba89edfff55a3a44c0fc833e57339f` |
+| `config_snapshot/turntable.yaml` | `68bf7f4a00acd32ba7b16bfb9b8ac5c1bf84876989cb1ce4d6015ed8a8e33f31` |
+| `config_snapshot/validation.yaml` | `c3a8998774b6293334638c8b789157398c82706de768388250a2329034912b15` |
+
+（上表 2026-09-28 于持久化目录实测；复核命令：`cd 验收证据/011-A1_批四_RAW旁路 && sha256sum -c …`
+或直接 `sha256sum cam25.raw result.json failure.json calibration_id.txt turntable.json config_snapshot/*`。）
+
+**离线解码复核怎么做**（裸载荷 ＋ 元数据 ＋ 工具 ＋ 日志四件套都在，不依赖本机 `/tmp`）：
+按 `result.json` 的 `raw_image.width/height`、`pixel_format`、`valid_bits`、
+`packing`、`declared_byte_order` 组装 16 位小端像素（`Mono10` ⇒ 左移 `16 − validBits`，
+或等价地 `>> 2` 得 8 位显示值），与 `04_RAW旁路包_result.json` 里记录的统计量
+（范围／均值／>255 计数）对得上即为一致。
+
+⚠ **哈希只核对"文件身份"**（这一帧是不是上次那一帧），**不能代替文件本身**供解码复核 ——
+所以本批不再以"只记哈希"结案。
 
 本目录内四个 JSON 的 SHA-256：
 
@@ -90,7 +127,8 @@
 | 2 | 本机绝对路径（含用户名） | **无用户名、无仓库绝对路径**。仅出现 `/tmp/aps_imv_cfg`、`/tmp/raw_bypass_out/…` 两个**临时目录名**（不含用户名，且不含开发机目录结构） |
 | 3 | 凭据 | **无** |
 | 4 | 厂商 SDK 分发物 | **无**（未收录 SDK 库／头文件／样例） |
-| 5 | 构建产物 | **无**（含 24 MB 裸载荷，见 §3，只记哈希） |
+| 5 | 构建产物 | **无**：本目录里**没有**任何裸载荷／库／可执行文件 —— 24 MB 的 `cam25.raw` 在**持久化验收目录**（§3），入库的只有 `.txt` 摘录与四个小 JSON |
 
-⚠ **检查对象是版本库历史，不只是工作区**（ENG-07 §2.3 末段）；
-本目录为**新增**，本次提交时尚未存在于历史中。
+⚠ **检查对象是版本库历史，不只是工作区**（ENG-07 §2.3 末段）：
+本目录随批四进入历史（`2bfda40`）；后续改动（如本节的持久化登记）**每次推送前同样扫一遍**。
+⚠ **持久化验收目录 `验收证据/` 不在版本库内**，故不受本节约束，但它**同样不得**含内网 IP、凭据或厂商 SDK 分发物。
