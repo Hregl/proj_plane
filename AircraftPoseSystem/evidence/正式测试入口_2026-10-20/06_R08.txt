@@ -1,0 +1,36 @@
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+UpdateCTestConfiguration  from :/media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/DartConfiguration.tcl
+UpdateCTestConfiguration  from :/media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/DartConfiguration.tcl
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 47
+    Start 47: test_algorithm_pipeline.PosePipeline.DescriptorMatcherDoesNotDuplicateCadPointOnConflict
+
+47: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_algorithm_pipeline "--gtest_filter=PosePipeline.DescriptorMatcherDoesNotDuplicateCadPointOnConflict" "--gtest_also_run_disabled_tests"
+47: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/algorithm
+47: Test timeout computed to be: 10000000
+47: Running main() from ./googletest/src/gtest_main.cc
+47: Note: Google Test filter = PosePipeline.DescriptorMatcherDoesNotDuplicateCadPointOnConflict
+47: [==========] Running 1 test from 1 test suite.
+47: [----------] Global test environment set-up.
+47: [----------] 1 test from PosePipeline
+47: [ RUN      ] PosePipeline.DescriptorMatcherDoesNotDuplicateCadPointOnConflict
+47: [       OK ] PosePipeline.DescriptorMatcherDoesNotDuplicateCadPointOnConflict (0 ms)
+47: [----------] 1 test from PosePipeline (0 ms total)
+47: 
+47: [----------] Global test environment tear-down
+47: [==========] 1 test from 1 test suite ran. (0 ms total)
+47: [  PASSED  ] 1 test.
+1/1 Test #47: test_algorithm_pipeline.PosePipeline.DescriptorMatcherDoesNotDuplicateCadPointOnConflict ...   Passed    0.00 sec
+
+The following tests passed:
+	test_algorithm_pipeline.PosePipeline.DescriptorMatcherDoesNotDuplicateCadPointOnConflict
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   0.01 sec

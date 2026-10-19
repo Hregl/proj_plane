@@ -1,0 +1,9 @@
+# 零匹配负探针：确认 CTest 不会把“没跑到任何用例”当成通过
+# 命令：ctest --test-dir build-native-on -R "^definitely_no_such_test$" --no-tests=error
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+No tests were found!!!
+Errors while running CTest
+Output from these tests are in: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/Testing/Temporary/LastTest.log
+Use "--rerun-failed --output-on-failure" to re-run the failed cases verbosely.
+exit=8

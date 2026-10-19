@@ -1,0 +1,42 @@
+# 正式 GoogleTest 版本与来源记录（2026-10-20）
+
+## 系统状态
+dpkg 查询 libgtest-dev：dpkg-query: 没有找到与 libgtest-dev 相匹配的软件包
+本机无 root 权限，未做系统级安装；改用 UOS 仓库 .deb 本地解包。
+
+## 安装包
+-rw-r--r-- 1 hjm hjm 242278 2025年 3月25日 /home/hjm/opt/gtest-1.12.1/libgtest-dev_1.12.1-0.2_amd64.deb
+e53f75127338c750b9c624c8036e0a27f6b44138c9e26efcf6b2c62e23384ce1  /home/hjm/opt/gtest-1.12.1/libgtest-dev_1.12.1-0.2_amd64.deb
+Package: libgtest-dev
+Version: 1.12.1-0.2
+Architecture: amd64
+
+## 本地解包结果
+/home/hjm/opt/gtest-1.12.1/root/usr/include/gtest/gtest-assertion-result.h
+/home/hjm/opt/gtest-1.12.1/root/usr/include/gtest/gtest-death-test.h
+/home/hjm/opt/gtest-1.12.1/root/usr/include/gtest/gtest.h
+/home/hjm/opt/gtest-1.12.1/root/usr/include/gtest/gtest-matchers.h
+/home/hjm/opt/gtest-1.12.1/root/usr/include/gtest/gtest-message.h
+/home/hjm/opt/gtest-1.12.1/root/usr/include/gtest/gtest-param-test.h
+/home/hjm/opt/gtest-1.12.1/root/usr/include/gtest/gtest_pred_impl.h
+/home/hjm/opt/gtest-1.12.1/root/usr/include/gtest/gtest-printers.h
+/home/hjm/opt/gtest-1.12.1/root/usr/include/gtest/gtest_prod.h
+/home/hjm/opt/gtest-1.12.1/root/usr/include/gtest/gtest-spi.h
+/home/hjm/opt/gtest-1.12.1/root/usr/include/gtest/gtest-test-part.h
+/home/hjm/opt/gtest-1.12.1/root/usr/include/gtest/gtest-typed-test.h
+/home/hjm/opt/gtest-1.12.1/root/usr/lib/x86_64-linux-gnu/libgtest.a
+/home/hjm/opt/gtest-1.12.1/root/usr/lib/x86_64-linux-gnu/libgtest_main.a
+
+## 库与头文件哈希
+a62b9d45cf2cd368aa6172809fde5b9cd4bf57ae03aa6c13ec65e3a9d0c6febe  /home/hjm/opt/gtest-1.12.1/root/usr/lib/x86_64-linux-gnu/libgtest.a
+94b9e9065aa0b13f54b7a58f0336d7c4ec759d61d23e6f57835c0daf6e5a4df8  /home/hjm/opt/gtest-1.12.1/root/usr/lib/x86_64-linux-gnu/libgtest_main.a
+
+## CMake 实际使用的 GTest
+CMAKE_BUILD_TYPE:STRING=Debug
+CMAKE_CXX_COMPILER:FILEPATH=/usr/bin/c++
+GTest_DIR:PATH=/home/hjm/opt/gtest-1.12.1/root/usr/lib/x86_64-linux-gnu/cmake/GTest
+CMAKE_BUILD_TYPE-STRINGS:INTERNAL=Debug;Release;RelWithDebInfo;MinSizeRel
+
+## 构建目录
+build-native-on:  APS_SDK_MODE:STRING=ON
+build-native-off: APS_SDK_MODE:STRING=OFF

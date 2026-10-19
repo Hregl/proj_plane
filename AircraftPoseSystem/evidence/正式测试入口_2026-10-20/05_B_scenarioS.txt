@@ -1,0 +1,260 @@
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+UpdateCTestConfiguration  from :/media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/DartConfiguration.tcl
+UpdateCTestConfiguration  from :/media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/DartConfiguration.tcl
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 329
+    Start 329: test_system_initializer.SystemInitializerTest.场景S_合成靶标六点非共面性可复核
+
+329: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_system_initializer "--gtest_filter=SystemInitializerTest.场景S_合成靶标六点非共面性可复核" "--gtest_also_run_disabled_tests"
+329: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/integration
+329: Test timeout computed to be: 10000000
+329: Running main() from ./googletest/src/gtest_main.cc
+329: Note: Google Test filter = SystemInitializerTest.场景S_合成靶标六点非共面性可复核
+329: [==========] Running 1 test from 1 test suite.
+329: [----------] Global test environment set-up.
+329: [----------] 1 test from SystemInitializerTest
+329: [ RUN      ] SystemInitializerTest.场景S_合成靶标六点非共面性可复核
+329: [       OK ] SystemInitializerTest.场景S_合成靶标六点非共面性可复核 (0 ms)
+329: [----------] 1 test from SystemInitializerTest (0 ms total)
+329: 
+329: [----------] Global test environment tear-down
+329: [==========] 1 test from 1 test suite ran. (0 ms total)
+329: [  PASSED  ] 1 test.
+1/5 Test #329: test_system_initializer.SystemInitializerTest.场景S_合成靶标六点非共面性可复核 ..................   Passed    0.01 sec
+test 330
+    Start 330: test_system_initializer.SystemInitializerTest.场景S_仿真运行模式走通生产链并落盘真值对照
+
+330: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_system_initializer "--gtest_filter=SystemInitializerTest.场景S_仿真运行模式走通生产链并落盘真值对照" "--gtest_also_run_disabled_tests"
+330: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/integration
+330: Test timeout computed to be: 10000000
+330: Running main() from ./googletest/src/gtest_main.cc
+330: Note: Google Test filter = SystemInitializerTest.场景S_仿真运行模式走通生产链并落盘真值对照
+330: [==========] Running 1 test from 1 test suite.
+330: [----------] Global test environment set-up.
+330: [----------] 1 test from SystemInitializerTest
+330: [ RUN      ] SystemInitializerTest.场景S_仿真运行模式走通生产链并落盘真值对照
+330: 
+330: [SystemInitializerTest] 临时工作目录：/tmp/aps_sysinit_Rjp2cP —— 仓库 config/ 的 7 个 yaml 已拷入（camera.yaml **已改写为三路全虚拟**，其余未重写取值）；logs/ output/ runtime/ 均落在该目录，仓库目录不被污染
+330: [WARN ] [app] 配置告警：optical_rig.calibration_mode = "synthetic"：标定文件缺失时改用合成内参，**结果不具测量意义**（仅用于 M1 合成闭环）
+330: [WARN ] [app] 配置告警：measurement：取帧预算无余量 —— capture_frame_count(5) × 3 路 × grab_timeout_ms(500) = 7500 ms ≥ capture_timeout_ns(1500 ms)，且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断（取值余量见《待裁决问题汇总》Q-D2）
+330: [WARN ] [app] 配置告警：measurement.sigma_a/b/c 全为 0：E 项未生效（未标定），评分退化为 Q/F/M —— 结果包中的 predictedErrorCalibrated 将为 false
+330: [WARN ] [app] 配置告警：measurement.illum_band_edges 均为 0：光照分带未标定，所有光照条件落入同一桶，M_hist 的光照维度暂不可用
+330: 2026-10-20 04:57:52.056 [INFO] [app] === AircraftPoseSystem V2.1 启动 ===
+330: 2026-10-20 04:57:52.056 [INFO] [app] /tmp/aps_sim_cfg_ET86pl：7 文件 / 3 相机 / 0 项取默认值 / 4 项告警
+330: 2026-10-20 04:57:52.056 [INFO] [app] 运行模式：simulation
+330: 2026-10-20 04:57:52.056 [WARN] [app] calibration_mode=synthetic：使用**默认矩阵标定**，本次运行的姿态精度不具参考意义（M1 打通链路专用）
+330: 2026-10-20 04:57:52.056 [WARN] [app] 标定告警：正在使用**合成标定**：内参为标称视场角反推的占位值，外参为单位变换。由其算出的任何姿态结果都没有物理意义，仅可用于数据通路调试（M1/M2）。
+330: 2026-10-20 04:57:52.056 [INFO] [app] 标定：SYNTHETIC-NO-CALIBRATION（模式 synthetic）
+330: 2026-10-20 04:57:52.056 [INFO] [app] 合成场景：三路虚拟相机已安装同一份几何（synthetic_aircraft_6pt），真值 aircraftToShip 已就绪（仅用于渲染与事后比较）
+330: 2026-10-20 04:57:52.056 [INFO] [app] 装配摘要：
+330: 2026-10-20 04:57:52.056 [INFO] [app]   · CAM25（cam25）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪；增益 配置了 gain_raw，但虚拟后端不连接设备、该值未被下发
+330: 2026-10-20 04:57:52.056 [INFO] [app]   · CAM50（cam50）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪
+330: 2026-10-20 04:57:52.056 [INFO] [app]   · CAM100（cam100）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪
+330: 2026-10-20 04:57:52.056 [INFO] [app] 设备：触发已使能、转台已就绪；取帧预算 500 ms/路，组预算 300 ms
+330: 2026-10-20 04:57:52.056 [INFO] [app] 预览：AUTO 模式，队列容量 5
+330: 2026-10-20 04:57:52.056 [INFO] [app] 机型库：synthetic_aircraft_6pt / 1（sim_models）
+330: 2026-10-20 04:57:52.056 [INFO] [app] 历史匹配统计：冷启动（runtime/match_stats.yaml 不存在，属正常首次运行）
+330: 2026-10-20 04:57:52.056 [INFO] [app] 粗姿态：synthetic 先验 elevation=5.000000 deg, distance=40.000000 m（coarse_prior=synthetic）
+330: 2026-10-20 04:57:52.056 [INFO] [app] 算法链：MockTargetDetector / PinholeScaleEstimator / SiftFeatureExtractor / DescriptorFeatureMatcher / CvPnPPoseEstimator
+330: 2026-10-20 04:57:52.056 [WARN] [app] 算法链使用的是**桩检测器**（MockTargetDetector）：它按图像的亮块给出检测框，不是真实的 YOLO 目标检测。该链路只用于打通 M1 闭环，检测与位姿精度均不具参考意义。
+330: 2026-10-20 04:57:52.057 [INFO] [app] 装配完成：MeasurementController 已就绪，等待 startMeasurement()
+330: 2026-10-20 04:57:52.057 [INFO] [app] 输出目录就绪：sim_output
+330: 2026-10-20 04:57:52.057 [INFO] [app] 启动完成，共 7 条告警（见 WARN 行）
+330: 
+330: [场景S] 仿真装配完成：机型库=0 标定=1；开始 startMeasurement() → 逐拍推进
+330: 2026-10-20 04:57:52.057 [INFO] [app] 收到测量启动请求：状态机已启动
+330:   [ 1] SEARCH         -> TARGET_FOUND    Δcam25=1 Δcam50=1 Δcam100=1  ΔidleFrames=0 Δpushed=1  (状态迁移)
+330:   [ 2] TARGET_FOUND   -> ALIGN           Δcam25=0 Δcam50=0 Δcam100=0  ΔidleFrames=0 Δpushed=0  (状态迁移)
+330:   [ 3] ALIGN          -> STABILIZE       Δcam25=1 Δcam50=1 Δcam100=1  ΔidleFrames=0 Δpushed=1  (状态迁移)
+330:   [ 4] STABILIZE      -> STABILIZE       Δcam25=1 Δcam50=1 Δcam100=1  ΔidleFrames=0 Δpushed=1
+330:   [ 5] STABILIZE      -> STABILIZE       Δcam25=1 Δcam50=1 Δcam100=1  ΔidleFrames=0 Δpushed=1
+330:   [ 6] STABILIZE      -> MEASURE_SELECT  Δcam25=1 Δcam50=1 Δcam100=1  ΔidleFrames=0 Δpushed=1  (状态迁移)
+330:   [ 7] MEASURE_SELECT -> CAPTURE         Δcam25=1 Δcam50=1 Δcam100=1  ΔidleFrames=0 Δpushed=1  (状态迁移)
+330:   [ 8] CAPTURE        -> POSE_SOLVE      Δcam25=5 Δcam50=5 Δcam100=5  ΔidleFrames=0 Δpushed=5  (状态迁移)
+330:   [ 9] POSE_SOLVE     -> VALIDATE        Δcam25=0 Δcam50=0 Δcam100=0  ΔidleFrames=0 Δpushed=0  (状态迁移)
+330:   [10] VALIDATE       -> SAVE            Δcam25=0 Δcam50=0 Δcam100=0  ΔidleFrames=0 Δpushed=0  (状态迁移)
+330: 2026-10-20 04:57:52.307 [INFO] [app] 结果包：sim_output/measurement_2379404865646228
+330:   [11] SAVE           -> COMPLETE        Δcam25=0 Δcam50=0 Δcam100=0  ΔidleFrames=0 Δpushed=0  (状态迁移)
+330: [场景S] 结果包：sim_output/measurement_2379404865646228
+330: [场景S] 链路成功与精度分列：
+330:   应用终态 COMPLETE → 状态机与自动保存通路跑通
+330:   旋转误差 0.321607 deg = 19.296 角分 → 不构成一角分精度证据
+330:   平移误差 0.143426 m = 143.4 mm → 随本场景真值定义记录
+330:   重投影 0.324563 px → 当前对应集的图像拟合结果
+330: [       OK ] SystemInitializerTest.场景S_仿真运行模式走通生产链并落盘真值对照 (252 ms)
+330: [----------] 1 test from SystemInitializerTest (252 ms total)
+330: 
+330: [----------] Global test environment tear-down
+330: [==========] 1 test from 1 test suite ran. (252 ms total)
+330: [  PASSED  ] 1 test.
+2/5 Test #330: test_system_initializer.SystemInitializerTest.场景S_仿真运行模式走通生产链并落盘真值对照 ...   Passed    0.28 sec
+test 331
+    Start 331: test_system_initializer.SystemInitializerTest.场景S_模型标识相同但点表不同源时拒绝启动
+
+331: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_system_initializer "--gtest_filter=SystemInitializerTest.场景S_模型标识相同但点表不同源时拒绝启动" "--gtest_also_run_disabled_tests"
+331: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/integration
+331: Test timeout computed to be: 10000000
+331: Running main() from ./googletest/src/gtest_main.cc
+331: Note: Google Test filter = SystemInitializerTest.场景S_模型标识相同但点表不同源时拒绝启动
+331: [==========] Running 1 test from 1 test suite.
+331: [----------] Global test environment set-up.
+331: [----------] 1 test from SystemInitializerTest
+331: [ RUN      ] SystemInitializerTest.场景S_模型标识相同但点表不同源时拒绝启动
+331: 
+331: [SystemInitializerTest] 临时工作目录：/tmp/aps_sysinit_AXlMm9 —— 仓库 config/ 的 7 个 yaml 已拷入（camera.yaml **已改写为三路全虚拟**，其余未重写取值）；logs/ output/ runtime/ 均落在该目录，仓库目录不被污染
+331: [WARN ] [app] 配置告警：optical_rig.calibration_mode = "synthetic"：标定文件缺失时改用合成内参，**结果不具测量意义**（仅用于 M1 合成闭环）
+331: [WARN ] [app] 配置告警：measurement：取帧预算无余量 —— capture_frame_count(5) × 3 路 × grab_timeout_ms(500) = 7500 ms ≥ capture_timeout_ns(1500 ms)，且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断（取值余量见《待裁决问题汇总》Q-D2）
+331: [WARN ] [app] 配置告警：measurement.sigma_a/b/c 全为 0：E 项未生效（未标定），评分退化为 Q/F/M —— 结果包中的 predictedErrorCalibrated 将为 false
+331: [WARN ] [app] 配置告警：measurement.illum_band_edges 均为 0：光照分带未标定，所有光照条件落入同一桶，M_hist 的光照维度暂不可用
+331: 2026-10-20 04:57:52.339 [INFO] [app] === AircraftPoseSystem V2.1 启动 ===
+331: 2026-10-20 04:57:52.339 [INFO] [app] /tmp/aps_sim_cfg_nE4j8x：7 文件 / 3 相机 / 0 项取默认值 / 4 项告警
+331: 2026-10-20 04:57:52.339 [INFO] [app] 运行模式：simulation
+331: 2026-10-20 04:57:52.339 [WARN] [app] calibration_mode=synthetic：使用**默认矩阵标定**，本次运行的姿态精度不具参考意义（M1 打通链路专用）
+331: 2026-10-20 04:57:52.339 [WARN] [app] 标定告警：正在使用**合成标定**：内参为标称视场角反推的占位值，外参为单位变换。由其算出的任何姿态结果都没有物理意义，仅可用于数据通路调试（M1/M2）。
+331: 2026-10-20 04:57:52.339 [INFO] [app] 标定：SYNTHETIC-NO-CALIBRATION（模式 synthetic）
+331: 2026-10-20 04:57:52.339 [INFO] [app] 合成场景：三路虚拟相机已安装同一份几何（synthetic_aircraft_6pt），真值 aircraftToShip 已就绪（仅用于渲染与事后比较）
+331: 2026-10-20 04:57:52.339 [INFO] [app] 装配摘要：
+331: 2026-10-20 04:57:52.339 [INFO] [app]   · CAM25（cam25）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪；增益 配置了 gain_raw，但虚拟后端不连接设备、该值未被下发
+331: 2026-10-20 04:57:52.339 [INFO] [app]   · CAM50（cam50）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪
+331: 2026-10-20 04:57:52.339 [INFO] [app]   · CAM100（cam100）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪
+331: 2026-10-20 04:57:52.339 [INFO] [app] 设备：触发已使能、转台已就绪；取帧预算 500 ms/路，组预算 300 ms
+331: 2026-10-20 04:57:52.339 [INFO] [app] 预览：AUTO 模式，队列容量 5
+331: 2026-10-20 04:57:52.339 [INFO] [app] 机型库：synthetic_aircraft_6pt / 1（sim_models_scaled）
+331: [WARN ] [app] 配置告警：optical_rig.calibration_mode = "synthetic"：标定文件缺失时改用合成内参，**结果不具测量意义**（仅用于 M1 合成闭环）
+331: [WARN ] [app] 配置告警：measurement：取帧预算无余量 —— capture_frame_count(5) × 3 路 × grab_timeout_ms(500) = 7500 ms ≥ capture_timeout_ns(1500 ms)，且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断（取值余量见《待裁决问题汇总》Q-D2）
+331: [WARN ] [app] 配置告警：measurement.sigma_a/b/c 全为 0：E 项未生效（未标定），评分退化为 Q/F/M —— 结果包中的 predictedErrorCalibrated 将为 false
+331: [WARN ] [app] 配置告警：measurement.illum_band_edges 均为 0：光照分带未标定，所有光照条件落入同一桶，M_hist 的光照维度暂不可用
+331: 2026-10-20 04:57:52.341 [INFO] [app] === AircraftPoseSystem V2.1 启动 ===
+331: 2026-10-20 04:57:52.341 [INFO] [app] /tmp/aps_sim_cfg_iIRyRq：7 文件 / 3 相机 / 0 项取默认值 / 4 项告警
+331: 2026-10-20 04:57:52.341 [INFO] [app] 运行模式：simulation
+331: 2026-10-20 04:57:52.341 [WARN] [app] calibration_mode=synthetic：使用**默认矩阵标定**，本次运行的姿态精度不具参考意义（M1 打通链路专用）
+331: 2026-10-20 04:57:52.341 [WARN] [app] 标定告警：正在使用**合成标定**：内参为标称视场角反推的占位值，外参为单位变换。由其算出的任何姿态结果都没有物理意义，仅可用于数据通路调试（M1/M2）。
+331: 2026-10-20 04:57:52.341 [INFO] [app] 标定：SYNTHETIC-NO-CALIBRATION（模式 synthetic）
+331: 2026-10-20 04:57:52.341 [INFO] [app] 合成场景：三路虚拟相机已安装同一份几何（synthetic_aircraft_6pt），真值 aircraftToShip 已就绪（仅用于渲染与事后比较）
+331: 2026-10-20 04:57:52.341 [INFO] [app] 装配摘要：
+331: 2026-10-20 04:57:52.341 [INFO] [app]   · CAM25（cam25）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪；增益 配置了 gain_raw，但虚拟后端不连接设备、该值未被下发
+331: 2026-10-20 04:57:52.341 [INFO] [app]   · CAM50（cam50）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪
+331: 2026-10-20 04:57:52.341 [INFO] [app]   · CAM100（cam100）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪
+331: 2026-10-20 04:57:52.341 [INFO] [app] 设备：触发已使能、转台已就绪；取帧预算 500 ms/路，组预算 300 ms
+331: 2026-10-20 04:57:52.341 [INFO] [app] 预览：AUTO 模式，队列容量 5
+331: 2026-10-20 04:57:52.341 [INFO] [app] 机型库：synthetic_aircraft_6pt / 1（sim_models_onept）
+331: [       OK ] SystemInitializerTest.场景S_模型标识相同但点表不同源时拒绝启动 (3 ms)
+331: [----------] 1 test from SystemInitializerTest (3 ms total)
+331: 
+331: [----------] Global test environment tear-down
+331: [==========] 1 test from 1 test suite ran. (3 ms total)
+331: [  PASSED  ] 1 test.
+3/5 Test #331: test_system_initializer.SystemInitializerTest.场景S_模型标识相同但点表不同源时拒绝启动 ......   Passed    0.01 sec
+test 332
+    Start 332: test_system_initializer.SystemInitializerTest.场景S_仿真模式拒绝混入真实部件
+
+332: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_system_initializer "--gtest_filter=SystemInitializerTest.场景S_仿真模式拒绝混入真实部件" "--gtest_also_run_disabled_tests"
+332: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/integration
+332: Test timeout computed to be: 10000000
+332: Running main() from ./googletest/src/gtest_main.cc
+332: Note: Google Test filter = SystemInitializerTest.场景S_仿真模式拒绝混入真实部件
+332: [==========] Running 1 test from 1 test suite.
+332: [----------] Global test environment set-up.
+332: [----------] 1 test from SystemInitializerTest
+332: [ RUN      ] SystemInitializerTest.场景S_仿真模式拒绝混入真实部件
+332: 
+332: [SystemInitializerTest] 临时工作目录：/tmp/aps_sysinit_ATV1Sq —— 仓库 config/ 的 7 个 yaml 已拷入（camera.yaml **已改写为三路全虚拟**，其余未重写取值）；logs/ output/ runtime/ 均落在该目录，仓库目录不被污染
+332: [WARN ] [app] 配置告警：optical_rig.calibration_mode = "synthetic"：标定文件缺失时改用合成内参，**结果不具测量意义**（仅用于 M1 合成闭环）
+332: [WARN ] [app] 配置告警：measurement：取帧预算无余量 —— capture_frame_count(5) × 3 路 × grab_timeout_ms(500) = 7500 ms ≥ capture_timeout_ns(1500 ms)，且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断（取值余量见《待裁决问题汇总》Q-D2）
+332: [WARN ] [app] 配置告警：measurement.sigma_a/b/c 全为 0：E 项未生效（未标定），评分退化为 Q/F/M —— 结果包中的 predictedErrorCalibrated 将为 false
+332: [WARN ] [app] 配置告警：measurement.illum_band_edges 均为 0：光照分带未标定，所有光照条件落入同一桶，M_hist 的光照维度暂不可用
+332: 2026-10-20 04:57:52.356 [INFO] [app] === AircraftPoseSystem V2.1 启动 ===
+332: 2026-10-20 04:57:52.356 [INFO] [app] /tmp/aps_sim_cfg_a34eZt：7 文件 / 3 相机 / 0 项取默认值 / 4 项告警
+332: [ERROR] run_mode=simulation 要求三路相机全部为虚拟后端，但通道 cam25 配置为 "imv"。拒绝启动：混合真实部件的运行不能标为 simulation（结果包会与实际采集条件不符）。
+332: 2026-10-20 04:57:52.356 [INFO] [app] 启动失败：run_mode=simulation 要求三路相机全部为虚拟后端，但通道 cam25 配置为 "imv"。拒绝启动：混合真实部件的运行不能标为 simulation（结果包会与实际采集条件不符）。
+332: [WARN ] [app] 配置告警：optical_rig.calibration_mode = "synthetic"：标定文件缺失时改用合成内参，**结果不具测量意义**（仅用于 M1 合成闭环）
+332: [WARN ] [app] 配置告警：measurement：取帧预算无余量 —— capture_frame_count(5) × 3 路 × grab_timeout_ms(500) = 7500 ms ≥ capture_timeout_ns(1500 ms)，且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断（取值余量见《待裁决问题汇总》Q-D2）
+332: [WARN ] [app] 配置告警：measurement.sigma_a/b/c 全为 0：E 项未生效（未标定），评分退化为 Q/F/M —— 结果包中的 predictedErrorCalibrated 将为 false
+332: [WARN ] [app] 配置告警：measurement.illum_band_edges 均为 0：光照分带未标定，所有光照条件落入同一桶，M_hist 的光照维度暂不可用
+332: 2026-10-20 04:57:52.358 [INFO] [app] === AircraftPoseSystem V2.1 启动 ===
+332: 2026-10-20 04:57:52.358 [INFO] [app] /tmp/aps_sim_cfg_v5LyYf：7 文件 / 3 相机 / 0 项取默认值 / 4 项告警
+332: [ERROR] run_mode=simulation 要求 trigger.source="virtual"，当前为 "hardware"。拒绝启动：硬触发会引入真实时序部件。
+332: 2026-10-20 04:57:52.358 [INFO] [app] 启动失败：run_mode=simulation 要求 trigger.source="virtual"，当前为 "hardware"。拒绝启动：硬触发会引入真实时序部件。
+332: [WARN ] [app] 配置字段缺失，已取默认值：turntable.reply_timeout_ms
+332: [WARN ] [app] 配置字段缺失，已取默认值：turntable.poll_interval_ms
+332: [WARN ] [app] 配置字段缺失，已取默认值：turntable.stable_read_count
+332: [WARN ] [app] 配置字段缺失，已取默认值：turntable.stable_threshold_deg
+332: [WARN ] [app] 配置字段缺失，已取默认值：turntable.arrival_tolerance_deg
+332: [WARN ] [app] 配置字段缺失，已取默认值：turntable.comm_failure_threshold
+332: [WARN ] [app] 配置字段缺失，已取默认值：turntable.use_speed_control
+332: [WARN ] [app] 配置字段缺失，已取默认值：turntable.sample_stale_ms
+332: [WARN ] [app] 配置字段缺失，已取默认值：turntable.stop_timeout_ms
+332: [WARN ] [app] 配置字段缺失，已取默认值：turntable.stop_retry_count
+332: [WARN ] [app] 配置字段缺失，已取默认值：turntable.stop_retry_window_ms
+332: [WARN ] [app] 配置字段缺失，已取默认值：turntable.stop_backoff_ms
+332: [WARN ] [app] 配置告警：optical_rig.calibration_mode = "synthetic"：标定文件缺失时改用合成内参，**结果不具测量意义**（仅用于 M1 合成闭环）
+332: [WARN ] [app] 配置告警：measurement：取帧预算无余量 —— capture_frame_count(5) × 3 路 × grab_timeout_ms(500) = 7500 ms ≥ capture_timeout_ns(1500 ms)，且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断（取值余量见《待裁决问题汇总》Q-D2）
+332: [WARN ] [app] 配置告警：measurement.sigma_a/b/c 全为 0：E 项未生效（未标定），评分退化为 Q/F/M —— 结果包中的 predictedErrorCalibrated 将为 false
+332: [WARN ] [app] 配置告警：measurement.illum_band_edges 均为 0：光照分带未标定，所有光照条件落入同一桶，M_hist 的光照维度暂不可用
+332: 2026-10-20 04:57:52.359 [INFO] [app] === AircraftPoseSystem V2.1 启动 ===
+332: 2026-10-20 04:57:52.359 [INFO] [app] /tmp/aps_sim_cfg_UqFoLz：7 文件 / 3 相机 / 12 项取默认值 / 4 项告警
+332: [ERROR] run_mode=simulation 要求 turntable.protocol="sdk"（VirtualTurntable），当前为 "pelco_d_udp"。拒绝启动：任何真实转台协议都不属于 simulation。
+332: 2026-10-20 04:57:52.359 [INFO] [app] 启动失败：run_mode=simulation 要求 turntable.protocol="sdk"（VirtualTurntable），当前为 "pelco_d_udp"。拒绝启动：任何真实转台协议都不属于 simulation。
+332: [       OK ] SystemInitializerTest.场景S_仿真模式拒绝混入真实部件 (4 ms)
+332: [----------] 1 test from SystemInitializerTest (4 ms total)
+332: 
+332: [----------] Global test environment tear-down
+332: [==========] 1 test from 1 test suite ran. (4 ms total)
+332: [  PASSED  ] 1 test.
+4/5 Test #332: test_system_initializer.SystemInitializerTest.场景S_仿真模式拒绝混入真实部件 .....................   Passed    0.02 sec
+test 333
+    Start 333: test_system_initializer.SystemInitializerTest.场景S_机型库不是合成几何时拒绝启动
+
+333: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_system_initializer "--gtest_filter=SystemInitializerTest.场景S_机型库不是合成几何时拒绝启动" "--gtest_also_run_disabled_tests"
+333: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/integration
+333: Test timeout computed to be: 10000000
+333: Running main() from ./googletest/src/gtest_main.cc
+333: Note: Google Test filter = SystemInitializerTest.场景S_机型库不是合成几何时拒绝启动
+333: [==========] Running 1 test from 1 test suite.
+333: [----------] Global test environment set-up.
+333: [----------] 1 test from SystemInitializerTest
+333: [ RUN      ] SystemInitializerTest.场景S_机型库不是合成几何时拒绝启动
+333: 
+333: [SystemInitializerTest] 临时工作目录：/tmp/aps_sysinit_ZZJP8T —— 仓库 config/ 的 7 个 yaml 已拷入（camera.yaml **已改写为三路全虚拟**，其余未重写取值）；logs/ output/ runtime/ 均落在该目录，仓库目录不被污染
+333: [WARN ] [app] 配置告警：optical_rig.calibration_mode = "synthetic"：标定文件缺失时改用合成内参，**结果不具测量意义**（仅用于 M1 合成闭环）
+333: [WARN ] [app] 配置告警：measurement：取帧预算无余量 —— capture_frame_count(5) × 3 路 × grab_timeout_ms(500) = 7500 ms ≥ capture_timeout_ns(1500 ms)，且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断（取值余量见《待裁决问题汇总》Q-D2）
+333: [WARN ] [app] 配置告警：measurement.sigma_a/b/c 全为 0：E 项未生效（未标定），评分退化为 Q/F/M —— 结果包中的 predictedErrorCalibrated 将为 false
+333: [WARN ] [app] 配置告警：measurement.illum_band_edges 均为 0：光照分带未标定，所有光照条件落入同一桶，M_hist 的光照维度暂不可用
+333: 2026-10-20 04:57:52.371 [INFO] [app] === AircraftPoseSystem V2.1 启动 ===
+333: 2026-10-20 04:57:52.371 [INFO] [app] /tmp/aps_sim_cfg_oTwVI7：7 文件 / 3 相机 / 0 项取默认值 / 4 项告警
+333: 2026-10-20 04:57:52.371 [INFO] [app] 运行模式：simulation
+333: 2026-10-20 04:57:52.372 [WARN] [app] calibration_mode=synthetic：使用**默认矩阵标定**，本次运行的姿态精度不具参考意义（M1 打通链路专用）
+333: 2026-10-20 04:57:52.372 [WARN] [app] 标定告警：正在使用**合成标定**：内参为标称视场角反推的占位值，外参为单位变换。由其算出的任何姿态结果都没有物理意义，仅可用于数据通路调试（M1/M2）。
+333: 2026-10-20 04:57:52.372 [INFO] [app] 标定：SYNTHETIC-NO-CALIBRATION（模式 synthetic）
+333: 2026-10-20 04:57:52.372 [INFO] [app] 合成场景：三路虚拟相机已安装同一份几何（synthetic_aircraft_6pt），真值 aircraftToShip 已就绪（仅用于渲染与事后比较）
+333: 2026-10-20 04:57:52.372 [INFO] [app] 装配摘要：
+333: 2026-10-20 04:57:52.372 [INFO] [app]   · CAM25（cam25）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪；增益 配置了 gain_raw，但虚拟后端不连接设备、该值未被下发
+333: 2026-10-20 04:57:52.372 [INFO] [app]   · CAM50（cam50）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪
+333: 2026-10-20 04:57:52.372 [INFO] [app]   · CAM100（cam100）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪
+333: 2026-10-20 04:57:52.372 [INFO] [app] 设备：触发已使能、转台已就绪；取帧预算 500 ms/路，组预算 300 ms
+333: 2026-10-20 04:57:52.372 [INFO] [app] 预览：AUTO 模式，队列容量 5
+333: 2026-10-20 04:57:52.372 [INFO] [app] 机型库：production_aircraft / 1（sim_models_badid）
+333: [       OK ] SystemInitializerTest.场景S_机型库不是合成几何时拒绝启动 (2 ms)
+333: [----------] 1 test from SystemInitializerTest (2 ms total)
+333: 
+333: [----------] Global test environment tear-down
+333: [==========] 1 test from 1 test suite ran. (2 ms total)
+333: [  PASSED  ] 1 test.
+5/5 Test #333: test_system_initializer.SystemInitializerTest.场景S_机型库不是合成几何时拒绝启动 ...............   Passed    0.01 sec
+
+The following tests passed:
+	test_system_initializer.SystemInitializerTest.场景S_合成靶标六点非共面性可复核
+	test_system_initializer.SystemInitializerTest.场景S_仿真运行模式走通生产链并落盘真值对照
+	test_system_initializer.SystemInitializerTest.场景S_模型标识相同但点表不同源时拒绝启动
+	test_system_initializer.SystemInitializerTest.场景S_仿真模式拒绝混入真实部件
+	test_system_initializer.SystemInitializerTest.场景S_机型库不是合成几何时拒绝启动
+
+100% tests passed, 0 tests failed out of 5
+
+Total Test time (real) =   0.35 sec

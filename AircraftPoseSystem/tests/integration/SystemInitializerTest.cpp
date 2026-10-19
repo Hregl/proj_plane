@@ -1166,20 +1166,37 @@ TEST(SystemInitializerTest, 场景D_显式请求真实后端不可用即启动�
     // ---- 不静默换虚拟（本用例的核心）----
     // 这一路显式声明了 imv，打不开就必须**失败**。若被悄悄换成虚拟后端，
     // 本次启动会看起来成功，而三路图全是合成的 —— 这是本批最要防的失效形态。
-    // 垫片与有 SDK 两种构建下 `ctx.backend25` 都非空，故两处断言都成立。
-    ASSERT_TRUE(ctx.backend25 != nullptr)
-        << "真实后端被造出来过（或压根没造），两种情形都要能看出它**不是**虚拟后端";
-    EXPECT_EQ(std::dynamic_pointer_cast<VirtualCameraBackend>(ctx.backend25), nullptr)
-        << "显式请求的真实后端不可用时被静默换成了虚拟后端";
+    //
+    // 两种构建形态都必须被覆盖，且都不能把虚拟后端当作替代品：
+    //   · 无 SDK 构建：makeBackend 直接失败，`backend25` 就是 nullptr；
+    //   · 有 SDK 构建：后端对象造得出来但初始化失败，`backend25` 非空且
+    //     必须不是 VirtualCameraBackend。
+    // 旧断言无条件要求非空，在 OFF 原生构建下把“未构造后端”误判成了失败。
+    if (namedSdkMissing)
+    {
+        EXPECT_EQ(ctx.backend25, nullptr)
+            << "文本称未接入 SDK，却留下了相机后端对象；必须确认它不是"
+               "被静默换上的虚拟后端";
+    }
+    else
+    {
+        ASSERT_TRUE(ctx.backend25 != nullptr)
+            << "有 SDK 构建下真实后端应在初始化失败后仍可检查身份";
+        EXPECT_EQ(std::dynamic_pointer_cast<VirtualCameraBackend>(
+                      ctx.backend25),
+                  nullptr)
+            << "显式请求的真实后端不可用时被静默换成了虚拟后端";
 
-    // ---- 设备身份不得从配置复制 ----
-    // 没有读到设备时，报告里必须是"未取得"，而**不得**把配置里的目标序列号
-    // 抄成实际身份 —— 抄了的话"配置写 A、实际连 B"这类错装配在摘要里
-    // 会看起来完全正常（§2.3）。
-    const aircraft::data::DeviceIdentity id = ctx.backend25->deviceIdentity();
-    EXPECT_FALSE(id.serialNumber.has_value() &&
-                 *id.serialNumber == "SN-CAM25-TEST-0001")
-        << "后端把配置里的目标序列号当成了实际读到的设备身份";
+        // ---- 设备身份不得从配置复制 ----
+        // 没有读到设备时，报告里必须是"未取得"，而**不得**把配置里的目标
+        // 序列号抄成实际身份 —— 抄了的话"配置写 A、实际连 B"这类错装配在
+        // 摘要里会看起来完全正常（§2.3）。
+        const aircraft::data::DeviceIdentity id =
+            ctx.backend25->deviceIdentity();
+        EXPECT_FALSE(id.serialNumber.has_value() &&
+                     *id.serialNumber == "SN-CAM25-TEST-0001")
+            << "后端把配置里的目标序列号当成了实际读到的设备身份";
+    }
 }
 
 TEST(SystemInitializerTest, 场景D_缺backend键即启动失败)

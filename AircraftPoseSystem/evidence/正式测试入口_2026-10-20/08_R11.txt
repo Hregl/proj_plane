@@ -1,0 +1,116 @@
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+UpdateCTestConfiguration  from :/media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/DartConfiguration.tcl
+UpdateCTestConfiguration  from :/media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/DartConfiguration.tcl
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 295
+    Start 295: test_recorder_package.RecorderPackageTest.FailedSaveLeavesNeitherFinalNorStagingDirectory
+
+295: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_recorder_package "--gtest_filter=RecorderPackageTest.FailedSaveLeavesNeitherFinalNorStagingDirectory" "--gtest_also_run_disabled_tests"
+295: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/integration
+295: Test timeout computed to be: 10000000
+295: Running main() from ./googletest/src/gtest_main.cc
+295: Note: Google Test filter = RecorderPackageTest.FailedSaveLeavesNeitherFinalNorStagingDirectory
+295: [==========] Running 1 test from 1 test suite.
+295: [----------] Global test environment set-up.
+295: [----------] 1 test from RecorderPackageTest
+295: [ RUN      ] RecorderPackageTest.FailedSaveLeavesNeitherFinalNorStagingDirectory
+295: [       OK ] RecorderPackageTest.FailedSaveLeavesNeitherFinalNorStagingDirectory (2 ms)
+295: [----------] 1 test from RecorderPackageTest (2 ms total)
+295: 
+295: [----------] Global test environment tear-down
+295: [==========] 1 test from 1 test suite ran. (2 ms total)
+295: [  PASSED  ] 1 test.
+1/5 Test #295: test_recorder_package.RecorderPackageTest.FailedSaveLeavesNeitherFinalNorStagingDirectory ...   Passed    0.01 sec
+test 296
+    Start 296: test_recorder_package.RecorderPackageTest.ExistingPackageIsNeverOverwritten
+
+296: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_recorder_package "--gtest_filter=RecorderPackageTest.ExistingPackageIsNeverOverwritten" "--gtest_also_run_disabled_tests"
+296: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/integration
+296: Test timeout computed to be: 10000000
+296: Running main() from ./googletest/src/gtest_main.cc
+296: Note: Google Test filter = RecorderPackageTest.ExistingPackageIsNeverOverwritten
+296: [==========] Running 1 test from 1 test suite.
+296: [----------] Global test environment set-up.
+296: [----------] 1 test from RecorderPackageTest
+296: [ RUN      ] RecorderPackageTest.ExistingPackageIsNeverOverwritten
+296: [       OK ] RecorderPackageTest.ExistingPackageIsNeverOverwritten (2 ms)
+296: [----------] 1 test from RecorderPackageTest (2 ms total)
+296: 
+296: [----------] Global test environment tear-down
+296: [==========] 1 test from 1 test suite ran. (3 ms total)
+296: [  PASSED  ] 1 test.
+2/5 Test #296: test_recorder_package.RecorderPackageTest.ExistingPackageIsNeverOverwritten .................   Passed    0.01 sec
+test 297
+    Start 297: test_recorder_package.RecorderPackageTest.ExistingEmptyDirectoryIsNotReplaced
+
+297: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_recorder_package "--gtest_filter=RecorderPackageTest.ExistingEmptyDirectoryIsNotReplaced" "--gtest_also_run_disabled_tests"
+297: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/integration
+297: Test timeout computed to be: 10000000
+297: Running main() from ./googletest/src/gtest_main.cc
+297: Note: Google Test filter = RecorderPackageTest.ExistingEmptyDirectoryIsNotReplaced
+297: [==========] Running 1 test from 1 test suite.
+297: [----------] Global test environment set-up.
+297: [----------] 1 test from RecorderPackageTest
+297: [ RUN      ] RecorderPackageTest.ExistingEmptyDirectoryIsNotReplaced
+297: [       OK ] RecorderPackageTest.ExistingEmptyDirectoryIsNotReplaced (3 ms)
+297: [----------] 1 test from RecorderPackageTest (3 ms total)
+297: 
+297: [----------] Global test environment tear-down
+297: [==========] 1 test from 1 test suite ran. (3 ms total)
+297: [  PASSED  ] 1 test.
+3/5 Test #297: test_recorder_package.RecorderPackageTest.ExistingEmptyDirectoryIsNotReplaced ...............   Passed    0.01 sec
+test 298
+    Start 298: test_recorder_package.RecorderPackageTest.SuccessfulSavePublishesOnlyTheFinalDirectory
+
+298: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_recorder_package "--gtest_filter=RecorderPackageTest.SuccessfulSavePublishesOnlyTheFinalDirectory" "--gtest_also_run_disabled_tests"
+298: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/integration
+298: Test timeout computed to be: 10000000
+298: Running main() from ./googletest/src/gtest_main.cc
+298: Note: Google Test filter = RecorderPackageTest.SuccessfulSavePublishesOnlyTheFinalDirectory
+298: [==========] Running 1 test from 1 test suite.
+298: [----------] Global test environment set-up.
+298: [----------] 1 test from RecorderPackageTest
+298: [ RUN      ] RecorderPackageTest.SuccessfulSavePublishesOnlyTheFinalDirectory
+298: [       OK ] RecorderPackageTest.SuccessfulSavePublishesOnlyTheFinalDirectory (5 ms)
+298: [----------] 1 test from RecorderPackageTest (5 ms total)
+298: 
+298: [----------] Global test environment tear-down
+298: [==========] 1 test from 1 test suite ran. (5 ms total)
+298: [  PASSED  ] 1 test.
+4/5 Test #298: test_recorder_package.RecorderPackageTest.SuccessfulSavePublishesOnlyTheFinalDirectory ......   Passed    0.01 sec
+test 299
+    Start 299: test_recorder_package.RecorderPackageTest.SecondSaveOfTheSameTaskCannotReplaceTheFirst
+
+299: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_recorder_package "--gtest_filter=RecorderPackageTest.SecondSaveOfTheSameTaskCannotReplaceTheFirst" "--gtest_also_run_disabled_tests"
+299: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/integration
+299: Test timeout computed to be: 10000000
+299: Running main() from ./googletest/src/gtest_main.cc
+299: Note: Google Test filter = RecorderPackageTest.SecondSaveOfTheSameTaskCannotReplaceTheFirst
+299: [==========] Running 1 test from 1 test suite.
+299: [----------] Global test environment set-up.
+299: [----------] 1 test from RecorderPackageTest
+299: [ RUN      ] RecorderPackageTest.SecondSaveOfTheSameTaskCannotReplaceTheFirst
+299: [       OK ] RecorderPackageTest.SecondSaveOfTheSameTaskCannotReplaceTheFirst (5 ms)
+299: [----------] 1 test from RecorderPackageTest (5 ms total)
+299: 
+299: [----------] Global test environment tear-down
+299: [==========] 1 test from 1 test suite ran. (5 ms total)
+299: [  PASSED  ] 1 test.
+5/5 Test #299: test_recorder_package.RecorderPackageTest.SecondSaveOfTheSameTaskCannotReplaceTheFirst ......   Passed    0.01 sec
+
+The following tests passed:
+	test_recorder_package.RecorderPackageTest.FailedSaveLeavesNeitherFinalNorStagingDirectory
+	test_recorder_package.RecorderPackageTest.ExistingPackageIsNeverOverwritten
+	test_recorder_package.RecorderPackageTest.ExistingEmptyDirectoryIsNotReplaced
+	test_recorder_package.RecorderPackageTest.SuccessfulSavePublishesOnlyTheFinalDirectory
+	test_recorder_package.RecorderPackageTest.SecondSaveOfTheSameTaskCannotReplaceTheFirst
+
+100% tests passed, 0 tests failed out of 5
+
+Total Test time (real) =   0.05 sec

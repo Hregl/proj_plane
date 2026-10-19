@@ -1,0 +1,15 @@
+# 垫片逐套件重跑（SystemInitializerTest.cpp 修改后；不使用通配汇总）
+# LD_LIBRARY_PATH=build/imvsdk_runtime；每个二进制单独执行
+== flowtest exit=0 cases=46 failed_asserts=0
+== RecorderPackageTest exit=0 cases=29 failed_asserts=0
+== RecorderAdapterTest exit=0 cases=8 failed_asserts=0
+== StateMachineTest exit=0 cases=27 failed_asserts=0
+== AlgorithmStageTest exit=0 cases=23 failed_asserts=0
+== PipelineTest exit=0 cases=29 failed_asserts=0
+== DeviceLayerTest exit=0 cases=83 failed_asserts=0
+== PelcoDTest exit=0 cases=87 failed_asserts=0
+== OpticalLayerTest exit=0 cases=48 failed_asserts=0
+== PreviewLayerTest exit=0 cases=40 failed_asserts=0
+== AlignmentControllerTest exit=0 cases=21 failed_asserts=0
+== sysinittest exit=0 cases=26 failed_asserts=0
+TOTAL cases=467 failed_suites=0

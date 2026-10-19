@@ -1,0 +1,438 @@
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+UpdateCTestConfiguration  from :/media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/DartConfiguration.tcl
+UpdateCTestConfiguration  from :/media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/DartConfiguration.tcl
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Constructing a list of tests
+Done constructing a list of tests
+Updating test list for fixtures
+Added 0 tests to meet fixture requirements
+Checking test dependency graph...
+Checking test dependency graph end
+test 340
+      Start 340: test_optical_layer.CalibrationDirFixture.LoadsAllSevenFiles
+
+340: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.LoadsAllSevenFiles" "--gtest_also_run_disabled_tests"
+340: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+340: Test timeout computed to be: 10000000
+340: Running main() from ./googletest/src/gtest_main.cc
+340: Note: Google Test filter = CalibrationDirFixture.LoadsAllSevenFiles
+340: [==========] Running 1 test from 1 test suite.
+340: [----------] Global test environment set-up.
+340: [----------] 1 test from CalibrationDirFixture
+340: [ RUN      ] CalibrationDirFixture.LoadsAllSevenFiles
+340: [       OK ] CalibrationDirFixture.LoadsAllSevenFiles (0 ms)
+340: [----------] 1 test from CalibrationDirFixture (0 ms total)
+340: 
+340: [----------] Global test environment tear-down
+340: [==========] 1 test from 1 test suite ran. (0 ms total)
+340: [  PASSED  ] 1 test.
+ 1/21 Test #340: test_optical_layer.CalibrationDirFixture.LoadsAllSevenFiles ......................   Passed    0.00 sec
+test 341
+      Start 341: test_optical_layer.CalibrationDirFixture.ConvertsMillimetresToMetres
+
+341: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.ConvertsMillimetresToMetres" "--gtest_also_run_disabled_tests"
+341: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+341: Test timeout computed to be: 10000000
+341: Running main() from ./googletest/src/gtest_main.cc
+341: Note: Google Test filter = CalibrationDirFixture.ConvertsMillimetresToMetres
+341: [==========] Running 1 test from 1 test suite.
+341: [----------] Global test environment set-up.
+341: [----------] 1 test from CalibrationDirFixture
+341: [ RUN      ] CalibrationDirFixture.ConvertsMillimetresToMetres
+341: [       OK ] CalibrationDirFixture.ConvertsMillimetresToMetres (0 ms)
+341: [----------] 1 test from CalibrationDirFixture (0 ms total)
+341: 
+341: [----------] Global test environment tear-down
+341: [==========] 1 test from 1 test suite ran. (0 ms total)
+341: [  PASSED  ] 1 test.
+ 2/21 Test #341: test_optical_layer.CalibrationDirFixture.ConvertsMillimetresToMetres .............   Passed    0.00 sec
+test 342
+      Start 342: test_optical_layer.CalibrationDirFixture.DoesNotConvertIntrinsics
+
+342: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.DoesNotConvertIntrinsics" "--gtest_also_run_disabled_tests"
+342: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+342: Test timeout computed to be: 10000000
+342: Running main() from ./googletest/src/gtest_main.cc
+342: Note: Google Test filter = CalibrationDirFixture.DoesNotConvertIntrinsics
+342: [==========] Running 1 test from 1 test suite.
+342: [----------] Global test environment set-up.
+342: [----------] 1 test from CalibrationDirFixture
+342: [ RUN      ] CalibrationDirFixture.DoesNotConvertIntrinsics
+342: [       OK ] CalibrationDirFixture.DoesNotConvertIntrinsics (0 ms)
+342: [----------] 1 test from CalibrationDirFixture (0 ms total)
+342: 
+342: [----------] Global test environment tear-down
+342: [==========] 1 test from 1 test suite ran. (0 ms total)
+342: [  PASSED  ] 1 test.
+ 3/21 Test #342: test_optical_layer.CalibrationDirFixture.DoesNotConvertIntrinsics ................   Passed    0.00 sec
+test 343
+      Start 343: test_optical_layer.CalibrationDirFixture.ReadsResolutionAndRotation
+
+343: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.ReadsResolutionAndRotation" "--gtest_also_run_disabled_tests"
+343: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+343: Test timeout computed to be: 10000000
+343: Running main() from ./googletest/src/gtest_main.cc
+343: Note: Google Test filter = CalibrationDirFixture.ReadsResolutionAndRotation
+343: [==========] Running 1 test from 1 test suite.
+343: [----------] Global test environment set-up.
+343: [----------] 1 test from CalibrationDirFixture
+343: [ RUN      ] CalibrationDirFixture.ReadsResolutionAndRotation
+343: [       OK ] CalibrationDirFixture.ReadsResolutionAndRotation (0 ms)
+343: [----------] 1 test from CalibrationDirFixture (0 ms total)
+343: 
+343: [----------] Global test environment tear-down
+343: [==========] 1 test from 1 test suite ran. (0 ms total)
+343: [  PASSED  ] 1 test.
+ 4/21 Test #343: test_optical_layer.CalibrationDirFixture.ReadsResolutionAndRotation ..............   Passed    0.00 sec
+test 344
+      Start 344: test_optical_layer.CalibrationDirFixture.CalibrationIdComesFromTheFile
+
+344: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.CalibrationIdComesFromTheFile" "--gtest_also_run_disabled_tests"
+344: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+344: Test timeout computed to be: 10000000
+344: Running main() from ./googletest/src/gtest_main.cc
+344: Note: Google Test filter = CalibrationDirFixture.CalibrationIdComesFromTheFile
+344: [==========] Running 1 test from 1 test suite.
+344: [----------] Global test environment set-up.
+344: [----------] 1 test from CalibrationDirFixture
+344: [ RUN      ] CalibrationDirFixture.CalibrationIdComesFromTheFile
+344: [       OK ] CalibrationDirFixture.CalibrationIdComesFromTheFile (0 ms)
+344: [----------] 1 test from CalibrationDirFixture (0 ms total)
+344: 
+344: [----------] Global test environment tear-down
+344: [==========] 1 test from 1 test suite ran. (0 ms total)
+344: [  PASSED  ] 1 test.
+ 5/21 Test #344: test_optical_layer.CalibrationDirFixture.CalibrationIdComesFromTheFile ...........   Passed    0.00 sec
+test 345
+      Start 345: test_optical_layer.CalibrationDirFixture.MissingExtrinsicFileFailsStartup
+
+345: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.MissingExtrinsicFileFailsStartup" "--gtest_also_run_disabled_tests"
+345: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+345: Test timeout computed to be: 10000000
+345: Running main() from ./googletest/src/gtest_main.cc
+345: Note: Google Test filter = CalibrationDirFixture.MissingExtrinsicFileFailsStartup
+345: [==========] Running 1 test from 1 test suite.
+345: [----------] Global test environment set-up.
+345: [----------] 1 test from CalibrationDirFixture
+345: [ RUN      ] CalibrationDirFixture.MissingExtrinsicFileFailsStartup
+345: [ERROR:0@0.000] global ./modules/core/src/persistence.cpp (505) open Can't open file: '/tmp/aps_optical_test_3741589/cam25_to_rig.yaml' in read mode
+345: [       OK ] CalibrationDirFixture.MissingExtrinsicFileFailsStartup (0 ms)
+345: [----------] 1 test from CalibrationDirFixture (0 ms total)
+345: 
+345: [----------] Global test environment tear-down
+345: [==========] 1 test from 1 test suite ran. (0 ms total)
+345: [  PASSED  ] 1 test.
+ 6/21 Test #345: test_optical_layer.CalibrationDirFixture.MissingExtrinsicFileFailsStartup ........   Passed    0.00 sec
+test 346
+      Start 346: test_optical_layer.CalibrationDirFixture.MissingRigToShipFileFailsStartup
+
+346: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.MissingRigToShipFileFailsStartup" "--gtest_also_run_disabled_tests"
+346: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+346: Test timeout computed to be: 10000000
+346: Running main() from ./googletest/src/gtest_main.cc
+346: Note: Google Test filter = CalibrationDirFixture.MissingRigToShipFileFailsStartup
+346: [==========] Running 1 test from 1 test suite.
+346: [----------] Global test environment set-up.
+346: [----------] 1 test from CalibrationDirFixture
+346: [ RUN      ] CalibrationDirFixture.MissingRigToShipFileFailsStartup
+346: [ERROR:0@0.001] global ./modules/core/src/persistence.cpp (505) open Can't open file: '/tmp/aps_optical_test_3741590/rig_to_ship.yaml' in read mode
+346: [       OK ] CalibrationDirFixture.MissingRigToShipFileFailsStartup (0 ms)
+346: [----------] 1 test from CalibrationDirFixture (0 ms total)
+346: 
+346: [----------] Global test environment tear-down
+346: [==========] 1 test from 1 test suite ran. (0 ms total)
+346: [  PASSED  ] 1 test.
+ 7/21 Test #346: test_optical_layer.CalibrationDirFixture.MissingRigToShipFileFailsStartup ........   Passed    0.00 sec
+test 347
+      Start 347: test_optical_layer.CalibrationDirFixture.RejectsNonOrthogonalRotation
+
+347: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.RejectsNonOrthogonalRotation" "--gtest_also_run_disabled_tests"
+347: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+347: Test timeout computed to be: 10000000
+347: Running main() from ./googletest/src/gtest_main.cc
+347: Note: Google Test filter = CalibrationDirFixture.RejectsNonOrthogonalRotation
+347: [==========] Running 1 test from 1 test suite.
+347: [----------] Global test environment set-up.
+347: [----------] 1 test from CalibrationDirFixture
+347: [ RUN      ] CalibrationDirFixture.RejectsNonOrthogonalRotation
+347: [       OK ] CalibrationDirFixture.RejectsNonOrthogonalRotation (0 ms)
+347: [----------] 1 test from CalibrationDirFixture (0 ms total)
+347: 
+347: [----------] Global test environment tear-down
+347: [==========] 1 test from 1 test suite ran. (0 ms total)
+347: [  PASSED  ] 1 test.
+ 8/21 Test #347: test_optical_layer.CalibrationDirFixture.RejectsNonOrthogonalRotation ............   Passed    0.00 sec
+test 348
+      Start 348: test_optical_layer.CalibrationDirFixture.RejectsReflectionRotation
+
+348: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.RejectsReflectionRotation" "--gtest_also_run_disabled_tests"
+348: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+348: Test timeout computed to be: 10000000
+348: Running main() from ./googletest/src/gtest_main.cc
+348: Note: Google Test filter = CalibrationDirFixture.RejectsReflectionRotation
+348: [==========] Running 1 test from 1 test suite.
+348: [----------] Global test environment set-up.
+348: [----------] 1 test from CalibrationDirFixture
+348: [ RUN      ] CalibrationDirFixture.RejectsReflectionRotation
+348: [       OK ] CalibrationDirFixture.RejectsReflectionRotation (0 ms)
+348: [----------] 1 test from CalibrationDirFixture (0 ms total)
+348: 
+348: [----------] Global test environment tear-down
+348: [==========] 1 test from 1 test suite ran. (0 ms total)
+348: [  PASSED  ] 1 test.
+ 9/21 Test #348: test_optical_layer.CalibrationDirFixture.RejectsReflectionRotation ...............   Passed    0.00 sec
+test 349
+      Start 349: test_optical_layer.CalibrationDirFixture.RejectsNonFiniteTranslation
+
+349: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.RejectsNonFiniteTranslation" "--gtest_also_run_disabled_tests"
+349: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+349: Test timeout computed to be: 10000000
+349: Running main() from ./googletest/src/gtest_main.cc
+349: Note: Google Test filter = CalibrationDirFixture.RejectsNonFiniteTranslation
+349: [==========] Running 1 test from 1 test suite.
+349: [----------] Global test environment set-up.
+349: [----------] 1 test from CalibrationDirFixture
+349: [ RUN      ] CalibrationDirFixture.RejectsNonFiniteTranslation
+349: [       OK ] CalibrationDirFixture.RejectsNonFiniteTranslation (0 ms)
+349: [----------] 1 test from CalibrationDirFixture (0 ms total)
+349: 
+349: [----------] Global test environment tear-down
+349: [==========] 1 test from 1 test suite ran. (0 ms total)
+349: [  PASSED  ] 1 test.
+10/21 Test #349: test_optical_layer.CalibrationDirFixture.RejectsNonFiniteTranslation .............   Passed    0.00 sec
+test 350
+      Start 350: test_optical_layer.CalibrationDirFixture.RejectsNonPositiveFocalLength
+
+350: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.RejectsNonPositiveFocalLength" "--gtest_also_run_disabled_tests"
+350: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+350: Test timeout computed to be: 10000000
+350: Running main() from ./googletest/src/gtest_main.cc
+350: Note: Google Test filter = CalibrationDirFixture.RejectsNonPositiveFocalLength
+350: [==========] Running 1 test from 1 test suite.
+350: [----------] Global test environment set-up.
+350: [----------] 1 test from CalibrationDirFixture
+350: [ RUN      ] CalibrationDirFixture.RejectsNonPositiveFocalLength
+350: [       OK ] CalibrationDirFixture.RejectsNonPositiveFocalLength (0 ms)
+350: [----------] 1 test from CalibrationDirFixture (0 ms total)
+350: 
+350: [----------] Global test environment tear-down
+350: [==========] 1 test from 1 test suite ran. (0 ms total)
+350: [  PASSED  ] 1 test.
+11/21 Test #350: test_optical_layer.CalibrationDirFixture.RejectsNonPositiveFocalLength ...........   Passed    0.00 sec
+test 351
+      Start 351: test_optical_layer.CalibrationDirFixture.RejectsBadHomogeneousRow
+
+351: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.RejectsBadHomogeneousRow" "--gtest_also_run_disabled_tests"
+351: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+351: Test timeout computed to be: 10000000
+351: Running main() from ./googletest/src/gtest_main.cc
+351: Note: Google Test filter = CalibrationDirFixture.RejectsBadHomogeneousRow
+351: [==========] Running 1 test from 1 test suite.
+351: [----------] Global test environment set-up.
+351: [----------] 1 test from CalibrationDirFixture
+351: [ RUN      ] CalibrationDirFixture.RejectsBadHomogeneousRow
+351: [       OK ] CalibrationDirFixture.RejectsBadHomogeneousRow (0 ms)
+351: [----------] 1 test from CalibrationDirFixture (0 ms total)
+351: 
+351: [----------] Global test environment tear-down
+351: [==========] 1 test from 1 test suite ran. (0 ms total)
+351: [  PASSED  ] 1 test.
+12/21 Test #351: test_optical_layer.CalibrationDirFixture.RejectsBadHomogeneousRow ................   Passed    0.00 sec
+test 352
+      Start 352: test_optical_layer.CalibrationDirFixture.RejectsPrincipalPointOutsideImage
+
+352: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.RejectsPrincipalPointOutsideImage" "--gtest_also_run_disabled_tests"
+352: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+352: Test timeout computed to be: 10000000
+352: Running main() from ./googletest/src/gtest_main.cc
+352: Note: Google Test filter = CalibrationDirFixture.RejectsPrincipalPointOutsideImage
+352: [==========] Running 1 test from 1 test suite.
+352: [----------] Global test environment set-up.
+352: [----------] 1 test from CalibrationDirFixture
+352: [ RUN      ] CalibrationDirFixture.RejectsPrincipalPointOutsideImage
+352: [       OK ] CalibrationDirFixture.RejectsPrincipalPointOutsideImage (0 ms)
+352: [----------] 1 test from CalibrationDirFixture (0 ms total)
+352: 
+352: [----------] Global test environment tear-down
+352: [==========] 1 test from 1 test suite ran. (0 ms total)
+352: [  PASSED  ] 1 test.
+13/21 Test #352: test_optical_layer.CalibrationDirFixture.RejectsPrincipalPointOutsideImage .......   Passed    0.00 sec
+test 353
+      Start 353: test_optical_layer.CalibrationDirFixture.RejectsNonFiniteDistortion
+
+353: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.RejectsNonFiniteDistortion" "--gtest_also_run_disabled_tests"
+353: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+353: Test timeout computed to be: 10000000
+353: Running main() from ./googletest/src/gtest_main.cc
+353: Note: Google Test filter = CalibrationDirFixture.RejectsNonFiniteDistortion
+353: [==========] Running 1 test from 1 test suite.
+353: [----------] Global test environment set-up.
+353: [----------] 1 test from CalibrationDirFixture
+353: [ RUN      ] CalibrationDirFixture.RejectsNonFiniteDistortion
+353: [       OK ] CalibrationDirFixture.RejectsNonFiniteDistortion (0 ms)
+353: [----------] 1 test from CalibrationDirFixture (0 ms total)
+353: 
+353: [----------] Global test environment tear-down
+353: [==========] 1 test from 1 test suite ran. (0 ms total)
+353: [  PASSED  ] 1 test.
+14/21 Test #353: test_optical_layer.CalibrationDirFixture.RejectsNonFiniteDistortion ..............   Passed    0.00 sec
+test 354
+      Start 354: test_optical_layer.CalibrationDirFixture.RejectsWrongShapeCameraMatrix
+
+354: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.RejectsWrongShapeCameraMatrix" "--gtest_also_run_disabled_tests"
+354: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+354: Test timeout computed to be: 10000000
+354: Running main() from ./googletest/src/gtest_main.cc
+354: Note: Google Test filter = CalibrationDirFixture.RejectsWrongShapeCameraMatrix
+354: [==========] Running 1 test from 1 test suite.
+354: [----------] Global test environment set-up.
+354: [----------] 1 test from CalibrationDirFixture
+354: [ RUN      ] CalibrationDirFixture.RejectsWrongShapeCameraMatrix
+354: [       OK ] CalibrationDirFixture.RejectsWrongShapeCameraMatrix (0 ms)
+354: [----------] 1 test from CalibrationDirFixture (0 ms total)
+354: 
+354: [----------] Global test environment tear-down
+354: [==========] 1 test from 1 test suite ran. (0 ms total)
+354: [  PASSED  ] 1 test.
+15/21 Test #354: test_optical_layer.CalibrationDirFixture.RejectsWrongShapeCameraMatrix ...........   Passed    0.00 sec
+test 355
+      Start 355: test_optical_layer.CalibrationDirFixture.MalformedFileIsRejectedNotThrown
+
+355: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.MalformedFileIsRejectedNotThrown" "--gtest_also_run_disabled_tests"
+355: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+355: Test timeout computed to be: 10000000
+355: Running main() from ./googletest/src/gtest_main.cc
+355: Note: Google Test filter = CalibrationDirFixture.MalformedFileIsRejectedNotThrown
+355: [==========] Running 1 test from 1 test suite.
+355: [----------] Global test environment set-up.
+355: [----------] 1 test from CalibrationDirFixture
+355: [ RUN      ] CalibrationDirFixture.MalformedFileIsRejectedNotThrown
+355: [       OK ] CalibrationDirFixture.MalformedFileIsRejectedNotThrown (0 ms)
+355: [----------] 1 test from CalibrationDirFixture (0 ms total)
+355: 
+355: [----------] Global test environment tear-down
+355: [==========] 1 test from 1 test suite ran. (0 ms total)
+355: [  PASSED  ] 1 test.
+16/21 Test #355: test_optical_layer.CalibrationDirFixture.MalformedFileIsRejectedNotThrown ........   Passed    0.00 sec
+test 356
+      Start 356: test_optical_layer.CalibrationDirFixture.MissingDistortionWarnsButStillLoads
+
+356: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.MissingDistortionWarnsButStillLoads" "--gtest_also_run_disabled_tests"
+356: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+356: Test timeout computed to be: 10000000
+356: Running main() from ./googletest/src/gtest_main.cc
+356: Note: Google Test filter = CalibrationDirFixture.MissingDistortionWarnsButStillLoads
+356: [==========] Running 1 test from 1 test suite.
+356: [----------] Global test environment set-up.
+356: [----------] 1 test from CalibrationDirFixture
+356: [ RUN      ] CalibrationDirFixture.MissingDistortionWarnsButStillLoads
+356: [       OK ] CalibrationDirFixture.MissingDistortionWarnsButStillLoads (0 ms)
+356: [----------] 1 test from CalibrationDirFixture (0 ms total)
+356: 
+356: [----------] Global test environment tear-down
+356: [==========] 1 test from 1 test suite ran. (0 ms total)
+356: [  PASSED  ] 1 test.
+17/21 Test #356: test_optical_layer.CalibrationDirFixture.MissingDistortionWarnsButStillLoads .....   Passed    0.00 sec
+test 357
+      Start 357: test_optical_layer.CalibrationDirFixture.ComposesRotationChainInTheFrozenOrder
+
+357: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.ComposesRotationChainInTheFrozenOrder" "--gtest_also_run_disabled_tests"
+357: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+357: Test timeout computed to be: 10000000
+357: Running main() from ./googletest/src/gtest_main.cc
+357: Note: Google Test filter = CalibrationDirFixture.ComposesRotationChainInTheFrozenOrder
+357: [==========] Running 1 test from 1 test suite.
+357: [----------] Global test environment set-up.
+357: [----------] 1 test from CalibrationDirFixture
+357: [ RUN      ] CalibrationDirFixture.ComposesRotationChainInTheFrozenOrder
+357: [       OK ] CalibrationDirFixture.ComposesRotationChainInTheFrozenOrder (0 ms)
+357: [----------] 1 test from CalibrationDirFixture (0 ms total)
+357: 
+357: [----------] Global test environment tear-down
+357: [==========] 1 test from 1 test suite ran. (0 ms total)
+357: [  PASSED  ] 1 test.
+18/21 Test #357: test_optical_layer.CalibrationDirFixture.ComposesRotationChainInTheFrozenOrder ...   Passed    0.00 sec
+test 358
+      Start 358: test_optical_layer.CalibrationDirFixture.ComposesTranslationLevelByLevel
+
+358: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.ComposesTranslationLevelByLevel" "--gtest_also_run_disabled_tests"
+358: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+358: Test timeout computed to be: 10000000
+358: Running main() from ./googletest/src/gtest_main.cc
+358: Note: Google Test filter = CalibrationDirFixture.ComposesTranslationLevelByLevel
+358: [==========] Running 1 test from 1 test suite.
+358: [----------] Global test environment set-up.
+358: [----------] 1 test from CalibrationDirFixture
+358: [ RUN      ] CalibrationDirFixture.ComposesTranslationLevelByLevel
+358: [       OK ] CalibrationDirFixture.ComposesTranslationLevelByLevel (0 ms)
+358: [----------] 1 test from CalibrationDirFixture (0 ms total)
+358: 
+358: [----------] Global test environment tear-down
+358: [==========] 1 test from 1 test suite ran. (0 ms total)
+358: [  PASSED  ] 1 test.
+19/21 Test #358: test_optical_layer.CalibrationDirFixture.ComposesTranslationLevelByLevel .........   Passed    0.00 sec
+test 359
+      Start 359: test_optical_layer.CalibrationDirFixture.UsesPerCameraExtrinsics
+
+359: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.UsesPerCameraExtrinsics" "--gtest_also_run_disabled_tests"
+359: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+359: Test timeout computed to be: 10000000
+359: Running main() from ./googletest/src/gtest_main.cc
+359: Note: Google Test filter = CalibrationDirFixture.UsesPerCameraExtrinsics
+359: [==========] Running 1 test from 1 test suite.
+359: [----------] Global test environment set-up.
+359: [----------] 1 test from CalibrationDirFixture
+359: [ RUN      ] CalibrationDirFixture.UsesPerCameraExtrinsics
+359: [       OK ] CalibrationDirFixture.UsesPerCameraExtrinsics (0 ms)
+359: [----------] 1 test from CalibrationDirFixture (0 ms total)
+359: 
+359: [----------] Global test environment tear-down
+359: [==========] 1 test from 1 test suite ran. (0 ms total)
+359: [  PASSED  ] 1 test.
+20/21 Test #359: test_optical_layer.CalibrationDirFixture.UsesPerCameraExtrinsics .................   Passed    0.00 sec
+test 360
+      Start 360: test_optical_layer.CalibrationDirFixture.CarriesReprojectionErrorForward
+
+360: Test command: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/test_optical_layer "--gtest_filter=CalibrationDirFixture.CarriesReprojectionErrorForward" "--gtest_also_run_disabled_tests"
+360: Working Directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on/tests/optical
+360: Test timeout computed to be: 10000000
+360: Running main() from ./googletest/src/gtest_main.cc
+360: Note: Google Test filter = CalibrationDirFixture.CarriesReprojectionErrorForward
+360: [==========] Running 1 test from 1 test suite.
+360: [----------] Global test environment set-up.
+360: [----------] 1 test from CalibrationDirFixture
+360: [ RUN      ] CalibrationDirFixture.CarriesReprojectionErrorForward
+360: [       OK ] CalibrationDirFixture.CarriesReprojectionErrorForward (0 ms)
+360: [----------] 1 test from CalibrationDirFixture (0 ms total)
+360: 
+360: [----------] Global test environment tear-down
+360: [==========] 1 test from 1 test suite ran. (0 ms total)
+360: [  PASSED  ] 1 test.
+21/21 Test #360: test_optical_layer.CalibrationDirFixture.CarriesReprojectionErrorForward .........   Passed    0.00 sec
+
+The following tests passed:
+	test_optical_layer.CalibrationDirFixture.LoadsAllSevenFiles
+	test_optical_layer.CalibrationDirFixture.ConvertsMillimetresToMetres
+	test_optical_layer.CalibrationDirFixture.DoesNotConvertIntrinsics
+	test_optical_layer.CalibrationDirFixture.ReadsResolutionAndRotation
+	test_optical_layer.CalibrationDirFixture.CalibrationIdComesFromTheFile
+	test_optical_layer.CalibrationDirFixture.MissingExtrinsicFileFailsStartup
+	test_optical_layer.CalibrationDirFixture.MissingRigToShipFileFailsStartup
+	test_optical_layer.CalibrationDirFixture.RejectsNonOrthogonalRotation
+	test_optical_layer.CalibrationDirFixture.RejectsReflectionRotation
+	test_optical_layer.CalibrationDirFixture.RejectsNonFiniteTranslation
+	test_optical_layer.CalibrationDirFixture.RejectsNonPositiveFocalLength
+	test_optical_layer.CalibrationDirFixture.RejectsBadHomogeneousRow
+	test_optical_layer.CalibrationDirFixture.RejectsPrincipalPointOutsideImage
+	test_optical_layer.CalibrationDirFixture.RejectsNonFiniteDistortion
+	test_optical_layer.CalibrationDirFixture.RejectsWrongShapeCameraMatrix
+	test_optical_layer.CalibrationDirFixture.MalformedFileIsRejectedNotThrown
+	test_optical_layer.CalibrationDirFixture.MissingDistortionWarnsButStillLoads
+	test_optical_layer.CalibrationDirFixture.ComposesRotationChainInTheFrozenOrder
+	test_optical_layer.CalibrationDirFixture.ComposesTranslationLevelByLevel
+	test_optical_layer.CalibrationDirFixture.UsesPerCameraExtrinsics
+	test_optical_layer.CalibrationDirFixture.CarriesReprojectionErrorForward
+
+100% tests passed, 0 tests failed out of 21
+
+Total Test time (real) =   0.07 sec

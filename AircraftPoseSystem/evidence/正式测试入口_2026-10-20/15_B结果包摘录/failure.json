@@ -1,0 +1,128 @@
+{
+  "first_failed_state": "IDLE",
+  "first_error": {
+    "code": 0,
+    "name": "OK",
+    "message": "",
+    "timestamp_ns": 0
+  },
+  "final_failed_state": "IDLE",
+  "final_error": {
+    "code": 0,
+    "name": "OK",
+    "message": "",
+    "timestamp_ns": 0
+  },
+  "history": [
+    {
+      "from": "IDLE",
+      "to": "SEARCH",
+      "timestamp_ns": 2379404865646228,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "SEARCH",
+      "to": "TARGET_FOUND",
+      "timestamp_ns": 2379404865657808,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "TARGET_FOUND",
+      "to": "ALIGN",
+      "timestamp_ns": 2379404873555188,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "ALIGN",
+      "to": "STABILIZE",
+      "timestamp_ns": 2379404873560858,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "STABILIZE",
+      "to": "MEASURE_SELECT",
+      "timestamp_ns": 2379404892830168,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "MEASURE_SELECT",
+      "to": "CAPTURE",
+      "timestamp_ns": 2379404897428723,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "CAPTURE",
+      "to": "POSE_SOLVE",
+      "timestamp_ns": 2379404919814050,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "POSE_SOLVE",
+      "to": "VALIDATE",
+      "timestamp_ns": 2379404957898173,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "VALIDATE",
+      "to": "SAVE",
+      "timestamp_ns": 2379405112851849,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    },
+    {
+      "from": "SAVE",
+      "to": "COMPLETE",
+      "timestamp_ns": 2379405112858033,
+      "error": {
+        "code": 0,
+        "name": "OK",
+        "message": "",
+        "timestamp_ns": 0
+      }
+    }
+  ]
+}
