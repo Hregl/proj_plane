@@ -502,6 +502,7 @@ bool PelcoDSession::initialize(std::string& error)
     stopPending_          = false;
     stopSent_             = false;
     stopRetryArmed_       = false;
+    stopBudgetSpent_      = false;
     stopStationaryCount_  = 0;
     stopHasLast_          = false;
     stopObservationDeadlineNs_ = 0;
@@ -602,9 +603,9 @@ bool PelcoDSession::initialize(std::string& error)
     }
 
     sampleCycleId_.store(0);
-    publishSample(azimuth, elevation, nowNs(), true);  // cycle = 1
+    publishSample(azimuth, elevation, nowNs(), true,
+                  data::TurntableMotionState::IDLE);  // cycle = 1
     initialized_ = true;
-    motion_.store(data::TurntableMotionState::IDLE);
     return true;
 }
 
@@ -743,6 +744,7 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
     // 新事务清零；否则上层会看到“正在 MOVING 且已观测到静止”。
     stopSent_               = false;
     stopRetryArmed_         = false;
+    stopBudgetSpent_        = false;
     stopPending_            = false;
     stopStationaryCount_    = 0;
     stopHasLast_            = false;
@@ -883,15 +885,15 @@ void PelcoDSession::pollOnce(const std::function<bool()>& shouldAbort)
     // 新方位角与旧俯仰角拼在一起发布。
     if (!gotAzimuth || !gotElevation)
     {
-        publishSample(azimuth_.load(), elevation_.load(), now, false);
         ++consecutiveFailures_;
         stableCount_ = 0;
         hasLastRead_ = false;
 
         // 没有新鲜样本时不能继续声称 STABLE。
-        if (motion_.load() == data::TurntableMotionState::STABLE)
+        data::TurntableMotionState nextMotion = motion_.load();
+        if (nextMotion == data::TurntableMotionState::STABLE)
         {
-            motion_.store(data::TurntableMotionState::IDLE);
+            nextMotion = data::TurntableMotionState::IDLE;
         }
 
         if (consecutiveFailures_ >= config_.commFailureThreshold &&
@@ -904,21 +906,36 @@ void PelcoDSession::pollOnce(const std::function<bool()>& shouldAbort)
             // 同看门狗：stopForFault 已按“停止是否交付”写好当前错误；
             // 停止未交付（2005）优先于本故障码，不能被它覆盖。
             stopForFault(data::kErrTurntableComm, text, "poll/lost_link");
-            motion_.store(data::TurntableMotionState::ERROR);
+            // 与看门狗同一收口：停止已交付时把失联错误本身锁存，
+            // 否则锁存的是 stopForFault 写下的更严重 2005。
+            // 先前这里无条件不锁存，导致恢复读后 motion 回到 IDLE、
+            // move() 又被接受 —— 失联故障没有留下任何拒绝依据。
+            if (stopFrameDelivered_.load())
+            {
+                setError(data::kErrTurntableComm, text, true,
+                         "poll/lost_link");
+            }
+            nextMotion = data::TurntableMotionState::ERROR;
         }
+        // 无效样本与它对应的 motion 一起发布：读端不会拿到“上一轮角度
+        // 仍然有效”的样本配一个已经撤销的 STABLE。
+        publishSample(azimuth_.load(), elevation_.load(), now, false,
+                      nextMotion);
         return;
     }
 
     consecutiveFailures_ = 0;
-    publishSample(azimuth, elevation, now, true);
-
+    data::TurntableMotionState nextMotion;
     if (stopPending_ && stopFrameDelivered_)
     {
-        handleStopObservation(azimuth, elevation, now);
-        return;
+        nextMotion = handleStopObservation(azimuth, elevation, now);
     }
-
-    updateMotion(azimuth, elevation);
+    else
+    {
+        nextMotion = updateMotion(azimuth, elevation);
+    }
+    // 本轮样本与由它得出的 motion 在同一 seqlock 窗口发布。
+    publishSample(azimuth, elevation, now, true, nextMotion);
 }
 
 bool PelcoDSession::performStop(int faultCode, const std::string& faultMessage,
@@ -934,6 +951,13 @@ bool PelcoDSession::performStop(int faultCode, const std::string& faultMessage,
     if (stopSent_ && !stopRetryArmed_)
     {
         return true;  // 已经交付过，等待观测；不自动重发
+    }
+    if (stopBudgetSpent_ && !stopRetryArmed_)
+    {
+        // 本次停止请求的预算已经耗尽（例如取消补帧已用掉全部重试）。
+        // 停止屏障与取消补帧共享一份预算，不能因为换了一个调用点
+        // 就再发一轮 —— 只有新的外部 stop(true) 才能重新武装。
+        return false;
     }
     if (stopRetryArmed_)
     {
@@ -979,6 +1003,7 @@ bool PelcoDSession::performStop(int faultCode, const std::string& faultMessage,
     stopSent_ = delivered;
     if (delivered)
     {
+        stopBudgetSpent_        = false;
         stopFrameDelivered_     = true;
         stopObservedStationary_ = false;
         stopPending_            = true;
@@ -997,6 +1022,7 @@ bool PelcoDSession::performStop(int faultCode, const std::string& faultMessage,
     }
 
     // 窗口耗尽仍无法交付：2005 + motionUncertain，停止自动重试。
+    stopBudgetSpent_      = true;
     motionUncertain_      = true;
     stopFrameDelivered_   = false;
     stopObservedStationary_ = false;
@@ -1042,7 +1068,7 @@ void PelcoDSession::stopForFault(int faultCode, const std::string& message,
     }
 }
 
-void PelcoDSession::stop()
+void PelcoDSession::stop(bool allowRearm)
 {
     if (!initialized_.load())
     {
@@ -1062,7 +1088,15 @@ void PelcoDSession::stop()
     // 显式停止是唯一允许“重新武装停止重试”的入口之一
     //（另一处是成功的 initialize()）。只有**上次未交付**时才重新武装；
     // 已交付的停止再次调用 stop() 不重复发帧。
-    stopRetryArmed_ = motionUncertain_.load() && !stopFrameDelivered_.load();
+    //
+    // allowRearm=false 用于停止屏障：该屏障只是落实**同一次**停止请求，
+    // 其取消补帧已经用掉预算时不得再发一轮。
+    stopRetryArmed_ = allowRearm && motionUncertain_.load() &&
+                      !stopFrameDelivered_.load();
+    if (stopRetryArmed_)
+    {
+        stopBudgetSpent_ = false;
+    }
     performStop(0, "显式停止", "stop/explicit", false);
     stopRetryArmed_ = false;
 
@@ -1073,7 +1107,8 @@ void PelcoDSession::stop()
 }
 
 void PelcoDSession::publishSample(double az, double el, std::uint64_t now,
-                                  bool valid)
+                                  bool valid,
+                                  data::TurntableMotionState motion)
 {
     // seqlock：奇数为“写入中”。读端若在写入过程中取到奇序号，或前后
     // 序号不同，就重读 —— 因此不可能读到 (新方位角, 旧俯仰角) 这种
@@ -1093,12 +1128,24 @@ void PelcoDSession::publishSample(double az, double el, std::uint64_t now,
     sampleValid_.store(valid, std::memory_order_relaxed);
     sampleCycleId_.store(sampleCycleId_.load(std::memory_order_relaxed) + 1,
                          std::memory_order_relaxed);
+    // motion 由本轮样本得出，必须和样本字段处在**同一个**写入窗口：
+    // 若在释放 seqlock 之后再单独写 motion_，读端可以读到本轮角度却
+    // 配上下一轮的 STABLE/MOVING。
+    motion_.store(motion, std::memory_order_relaxed);
 
     sampleSeq_.store(seq + 2, std::memory_order_release);
+
+    if (samplePublishedHook_)
+    {
+        // 仅测试：完整发布之后进入。固定实现的 motion 已在窗口内写好；
+        // 若被移到发布之后，本钩子期间读端会看到新样本 + 旧 motion。
+        samplePublishedHook_();
+    }
 }
 
 void PelcoDSession::loadSample(double& az, double& el, std::uint64_t& now,
-                               std::uint64_t& cycle, bool& valid) const
+                               std::uint64_t& cycle, bool& valid,
+                               data::TurntableMotionState& motion) const
 {
     for (;;)
     {
@@ -1114,6 +1161,7 @@ void PelcoDSession::loadSample(double& az, double& el, std::uint64_t& now,
         now   = sampleTimestampNs_.load(std::memory_order_relaxed);
         cycle = sampleCycleId_.load(std::memory_order_relaxed);
         valid = sampleValid_.load(std::memory_order_relaxed);
+        motion = motion_.load(std::memory_order_relaxed);
 
         std::atomic_thread_fence(std::memory_order_acquire);
         if (sampleSeq_.load(std::memory_order_relaxed) == begin)
@@ -1130,8 +1178,8 @@ bool PelcoDSession::withinTolerance(double az, double el) const
            std::fabs(el - targetEl_) <= config_.arrivalToleranceDeg;
 }
 
-void PelcoDSession::handleStopObservation(double az, double el,
-                                          std::uint64_t now)
+data::TurntableMotionState PelcoDSession::handleStopObservation(
+    double az, double el, std::uint64_t now)
 {
     const bool unchanged =
         stopHasLast_ &&
@@ -1155,11 +1203,8 @@ void PelcoDSession::handleStopObservation(double az, double el,
     {
         stopObservedStationary_ = true;
         stopPending_            = false;
-        if (!errorLatched_.load())
-        {
-            motion_.store(data::TurntableMotionState::IDLE);
-        }
-        return;
+        return errorLatched_.load() ? motion_.load()
+                                    : data::TurntableMotionState::IDLE;
     }
 
     if (now >= stopObservationDeadlineNs_)
@@ -1172,15 +1217,18 @@ void PelcoDSession::handleStopObservation(double az, double el,
         setError(data::kErrTurntableStopNotObserved,
                  "停止后未在观测窗口内观察到静止", true,
                  "stop/observe_timeout");
-        motion_.store(data::TurntableMotionState::ERROR);
+        return data::TurntableMotionState::ERROR;
     }
+
+    // 仍在观测窗口内：保持 MOVING，不谎报 IDLE/STABLE。
+    return motion_.load();
 }
 
-void PelcoDSession::updateMotion(double az, double el)
+data::TurntableMotionState PelcoDSession::updateMotion(double az, double el)
 {
     if (errorLatched_.load() || motionUncertain_.load())
     {
-        return;
+        return motion_.load();
     }
 
     const bool inTolerance = withinTolerance(az, el);
@@ -1189,15 +1237,13 @@ void PelcoDSession::updateMotion(double az, double el)
     {
         // C2：已到位后读数明显偏离 ⇒ **撤销** STABLE，不得一次置位后
         // 永久保持。STABLE 必须是“本轮样本满足判据”的结论。
-        if (motion_.load() == data::TurntableMotionState::STABLE &&
-            !inTolerance)
-        {
-            motion_.store(data::TurntableMotionState::IDLE);
-        }
+        const data::TurntableMotionState current = motion_.load();
+        const bool demote =
+            current == data::TurntableMotionState::STABLE && !inTolerance;
         lastAz_      = az;
         lastEl_      = el;
         hasLastRead_ = true;
-        return;
+        return demote ? data::TurntableMotionState::IDLE : current;
     }
 
     const bool unchanged =
@@ -1222,12 +1268,9 @@ void PelcoDSession::updateMotion(double az, double el)
         stableCount_ >= std::max(1, config_.stableReadCount))
     {
         moving_ = false;
-        motion_.store(data::TurntableMotionState::STABLE);
+        return data::TurntableMotionState::STABLE;
     }
-    else
-    {
-        motion_.store(data::TurntableMotionState::MOVING);
-    }
+    return data::TurntableMotionState::MOVING;
 }
 
 data::TurntableState PelcoDSession::snapshot() const
@@ -1236,9 +1279,18 @@ data::TurntableState PelcoDSession::snapshot() const
     std::uint64_t ts    = 0;
     std::uint64_t cycle = 0;
     bool valid = false;
-    // 一次读出**同一轮**的方位/俯仰/时刻/有效性：两轴不得跨发布拼接。
-    loadSample(state.azimuth, state.elevation, ts, cycle, valid);
-    state.motion = motion_.load();
+    data::TurntableMotionState motion = data::TurntableMotionState::IDLE;
+    // 一次读出**同一轮**的方位/俯仰/时刻/有效性与 motion：两轴不得
+    // 跨发布拼接，motion 也不得来自另一次发布（否则会出现“新角度 +
+    // 上一轮的 STABLE”）。
+    loadSample(state.azimuth, state.elevation, ts, cycle, valid, motion);
+    if (snapshotReadHook_)
+    {
+        // 仅测试：确定性地把读端停在“样本与 motion 都已读出、尚未
+        // 返回”的窗口，验证后续发布不会改变本次读数的语义。
+        snapshotReadHook_();
+    }
+    state.motion = motion;
 
     if (initialized_.load())
     {
@@ -1258,9 +1310,10 @@ data::TurntableState PelcoDSession::snapshot() const
 data::TurntableDiagnostics PelcoDSession::diagnostics() const
 {
     data::TurntableDiagnostics d;
+    data::TurntableMotionState motion = data::TurntableMotionState::IDLE;
     loadSample(d.sample.azimuth, d.sample.elevation,
                d.sample.sampleTimestampNs, d.sample.cycleId,
-               d.sample.valid);
+               d.sample.valid, motion);
     d.sample.source = d.sample.valid ? data::TurntableSampleSource::Poll
                                      : data::TurntableSampleSource::None;
 

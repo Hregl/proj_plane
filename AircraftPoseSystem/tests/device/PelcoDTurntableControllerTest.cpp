@@ -528,6 +528,49 @@ TEST(PelcoDTurntableControllerTest, PartialSendCancelStillSendsStopFrame)
     EXPECT_GE(d.stopCompletedSeq, d.stopRequestSeq);
 }
 
+/// 一次停止请求只有一份重试预算：取消补帧已失败 `1+stopRetryCount`
+/// 次后，同一请求的停止屏障不得再次重新武装。旧实现总共发送 6 次
+///（取消 3 次 + 屏障 3 次）。
+TEST(PelcoDTurntableControllerTest, CancelAndBarrierShareOneStopRetryBudget)
+{
+    auto fake = std::make_shared<FakePelcoTransport>();
+    FakePelcoDevice dev;
+    dev.transport = fake.get();
+    dev.install();
+
+    data::TurntableConfig cfg = makeConfig(true);
+    cfg.stopRetryCount    = 2;   // 1 + 2 = 3 次
+    cfg.stopRetryWindowMs = 200;
+    cfg.stopBackoffMs     = 0;
+
+    PelcoDTurntableController controller(cfg, fake);
+    controller.setTestMotionGate(true);
+    ASSERT_TRUE(controller.initialize());
+
+    // 停止发送全部失败；第一轴已发出但回显被抑制。
+    fake->failStopSends.store(100);
+    fake->dropMoveEchoAxis.store(1);
+
+    data::TurntableCommand command;
+    command.azimuthCommand   = 1.0;
+    command.elevationCommand = 0.0;
+    ASSERT_TRUE(controller.move(command));
+
+    ASSERT_TRUE(waitFor([&fake] {
+        return fake->countSent(isPositioningFrame) >= 1;
+    })) << "未能进入第一轴等待窗口";
+
+    controller.stop();
+
+    EXPECT_EQ(fake->stopSendAttempts.load(), 3)
+        << "取消补帧与屏障共享同一请求的预算，总尝试次数应为 1+retry=3";
+
+    const auto d = controller.diagnostics();
+    EXPECT_GE(d.stopCompletedSeq, d.stopRequestSeq);
+    EXPECT_TRUE(d.motionUncertain);
+    EXPECT_FALSE(d.stopFrameDelivered);
+}
+
 /// 轮询中的停止请求必须按接收切片处理，不能等满两轴各自的期限。
 /// 每轴 200 ms、切片 10 ms：旧实现 stop() 要等当前轮询结束（可达 ~400 ms）。
 TEST(PelcoDTurntableControllerTest, StopDuringPollingIsHandledWithinOneSlice)

@@ -245,6 +245,9 @@ void PelcoDTurntableController::handleCommand(const PendingMove& move)
 
     if (stopRequestSeq_.load() > stopCompletedSeq_.load())
     {
+        // 取消路径已在 session->move() 内补发过停止帧（若第一轴已发出）。
+        // 记下落实它的停止序号：随后同一序号的屏障不得再重新武装预算。
+        stopSeqHandledByCancel_ = stopRequestSeq_.load();
         setCommandOutcome(move.seq, data::TurntableCommandOutcome::Cancelled,
                           "命令被停止屏障取消");
         return;
@@ -307,7 +310,12 @@ void PelcoDTurntableController::workerLoop()
                                   "命令被停止屏障取消");
             }
 
-            session_->stop();
+            // 同一次停止请求只在取消路径与屏障之间共享一份重试预算。
+            // 若取消路径已落实该序号，屏障不再重新武装；只有更新的
+            // 外部 stop()（新序号）才允许重臂。
+            const bool allowRearm = (stopSeq != stopSeqHandledByCancel_);
+            stopSeqHandledByCancel_ = 0;
+            session_->stop(allowRearm);
             stopCompletedSeq_.store(stopSeq);
             stopWaitCv_.notify_all();
             continue;

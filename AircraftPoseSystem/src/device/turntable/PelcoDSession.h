@@ -83,8 +83,13 @@ public:
     void pollOnce(const std::function<bool()>& shouldAbort =
                       std::function<bool()>());
 
-    /// 显式停止：允许重新武装停止重试。ReadOnly 下为无帧 no-op。
-    void stop();
+    /// 显式停止。ReadOnly 下为无帧 no-op。
+    ///
+    /// @param allowRearm 只有**新的外部停止请求**才能重新武装已耗尽的
+    ///        停止重试预算（默认 true）。停止屏障在取消一条已被其自身
+    ///        部分发送路径消耗过预算的命令时传 false：取消补帧与屏障
+    ///        必须共享**同一个**停止请求的预算，不能在销毁前再发一轮。
+    void stop(bool allowRearm = true);
 
     /// 故障收口使用的停止：保留原始首因，记录停止结果；停止未交付/
     /// 未观测到静止时升级为 2005/2006 并锁存 motionUncertain。
@@ -120,6 +125,22 @@ public:
         samplePublishHook_ = std::move(hook);
     }
 
+    /// ⚠ 单元测试专用：`snapshot()` 在**读完整轮样本（含 motion）之后、
+    /// 写入返回值之前**调用一次。用于确定性验证读端不会把旧样本与
+    /// 另一次发布得出的 motion 拼在一起。生产装配从不设置。
+    void setSnapshotReadHookForTest(std::function<void()> hook)
+    {
+        snapshotReadHook_ = std::move(hook);
+    }
+
+    /// ⚠ 单元测试专用：在 `publishSample()` **完整发布之后**调用一次。
+    /// 用于确定性验证 motion 是在样本窗口**之内**写入的：若实现把
+    /// motion 写放到发布之后，读端会拿到新样本配旧 motion。
+    void setSamplePublishedHookForTest(std::function<void()> hook)
+    {
+        samplePublishedHook_ = std::move(hook);
+    }
+
 private:
     // ---- 单次收发的辅助 ----
     std::uint64_t nowNs() const;
@@ -147,15 +168,22 @@ private:
                   const std::string& context = std::string());
     void setFirstFault(int code, const std::string& text,
                        const std::string& context);
-    void publishSample(double az, double el, std::uint64_t now, bool valid);
-    /// 一次性读出**同一轮次**的样本（seqlock）。任何一轴/时刻/有效性/
-    /// 轮次都不会来自两次发布。
+    /// @param motion 由本轮样本得出的运动状态，与样本字段在**同一个**
+    ///        seqlock 写入窗口内发布；读端不可能看到“本轮样本 + 上一轮
+    ///        motion”的拼接。
+    void publishSample(double az, double el, std::uint64_t now, bool valid,
+                       data::TurntableMotionState motion);
+    /// 一次性读出**同一轮次**的样本与由它得出的 motion（seqlock）。
+    /// 任何一轴/时刻/有效性/轮次/motion 都不会来自两次发布。
     void loadSample(double& az, double& el, std::uint64_t& now,
-                    std::uint64_t& cycle, bool& valid) const;
+                    std::uint64_t& cycle, bool& valid,
+                    data::TurntableMotionState& motion) const;
     void checkStaleLocked() const;
     bool withinTolerance(double az, double el) const;
-    void updateMotion(double az, double el);
-    void handleStopObservation(double az, double el, std::uint64_t now);
+    /// 返回本轮样本应发布的状态；不在函数内单独写 motion_。
+    data::TurntableMotionState updateMotion(double az, double el);
+    data::TurntableMotionState handleStopObservation(double az, double el,
+                                                     std::uint64_t now);
     bool performStop(int faultCode, const std::string& faultMessage,
                      const std::string& context, bool recordFirstFault);
     bool resolveAzimuth(double command, double& resolved) const;
@@ -184,6 +212,10 @@ private:
     bool     stopPending_              = false;
     bool     stopSent_                 = false;
     bool     stopRetryArmed_           = false;
+    // 本次停止请求的重试预算是否已耗尽。预算按“停止请求”而不是按
+    // “performStop 调用”计算：取消补帧与停止屏障共享同一份预算，
+    // 只有新的外部 stop()（allowRearm=true）或成功 initialize() 才重置。
+    bool     stopBudgetSpent_          = false;
     int      stopStationaryCount_      = 0;
     bool     stopHasLast_              = false;
     double   stopLastAz_               = 0.0;
@@ -209,6 +241,8 @@ private:
     std::atomic<std::uint64_t> sampleCycleId_{0};
     std::atomic<bool>     sampleValid_{false};
     std::function<void()> samplePublishHook_;
+    std::function<void()> samplePublishedHook_;
+    std::function<void()> snapshotReadHook_;
     std::atomic<data::TurntableMotionState> motion_{
         data::TurntableMotionState::IDLE};
     std::atomic<data::WorkModeTrust> workModeTrust_{

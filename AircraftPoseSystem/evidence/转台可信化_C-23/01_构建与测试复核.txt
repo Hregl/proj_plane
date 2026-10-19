@@ -110,3 +110,60 @@ $ bash tests/run_tests.sh
 ## ASan/UBSan
 本整改批未重跑。上一批 76/45/21 例的结果不代表新增用例。
 
+# ============================================================================
+# 第二次独立复核整改批复测（2026-10-20，基线 3bf70ee）
+# 代码状态：HEAD 3bf70ee + 未提交整改改动；已确认无 MUTATION 残留
+# ============================================================================
+
+## 构建
+$ cmake --build build -j8
+结果：PASS（Built target AircraftPoseSystem）
+$ cmake --build build_nosdk -j8
+结果：PASS（Built target AircraftPoseSystem）
+
+## 垫片套件（逐个运行，未通配汇总）
+LD_LIBRARY_PATH=$PWD/build/imvsdk_runtime /tmp/gtshim/<suite>
+# 工作目录：<repo>/AircraftPoseSystem
+PelcoDTest:              运行 86 个用例 | 失败断言数：0，异常用例数：0
+flowtest:                运行 46 个用例 | 失败断言数：0，异常用例数：0
+OpticalLayerTest:        运行 48 个用例 | 失败断言数：0，异常用例数：0
+DeviceLayerTest:         运行 83 个用例 | 失败断言数：0，异常用例数：0
+PreviewLayerTest:        运行 40 个用例 | 失败断言数：0，异常用例数：0
+PipelineTest:            运行 29 个用例 | 失败断言数：0，异常用例数：0
+RecorderPackageTest:     运行 29 个用例 | 失败断言数：0，异常用例数：0
+StateMachineTest:        运行 27 个用例 | 失败断言数：0，异常用例数：0
+sysinittest:             运行 26 个用例 | 失败断言数：0，异常用例数：0
+AlgorithmStageTest:      运行 23 个用例 | 失败断言数：0，异常用例数：0
+AlignmentControllerTest: 运行 21 个用例 | 失败断言数：0，异常用例数：0
+RecorderAdapterTest:     运行 8 个用例 | 失败断言数：0，异常用例数：0
+
+合计：12 个垫片目标，466 个用例，0 失败断言，0 异常用例。
+新增：PelcoDTest 82→86（失联锁存回归、样本/motion 读侧、写侧、停止预算）。
+12 个可执行文件的 mtime 均随本次 rebuild 更新，逐项核对无 MISSING。
+
+## 原生入口
+项目仍未执行 `bash tests/run_tests.sh`（本机无 GoogleTest）。
+
+为核对 `TEST_PREFIX` 本身而非项目入口，另建最小真实 CMake 工程
+（/tmp/prefix_probe，CMake 3.31.4，`gtest_discover_tests(... TEST_PREFIX
+"probe." DISCOVERY_MODE PRE_TEST)`，用打印 `--gtest_list_tests` 的假可执行）：
+$ ctest --test-dir build -N
+  → Test #1: probe.Alpha.one / #2: probe.Alpha.two / #3: probe.Beta.three
+$ ctest --test-dir build -R '^probe\.' --output-on-failure
+  → 3/3 Passed
+$ ctest --test-dir build -R '^test_' --no-tests=error
+  → No tests were found!!!（前缀过滤行为与预期一致）
+
+⚠ 该探针只证明本机 CMake 3.31.4 的 TEST_PREFIX 枚举/执行；
+项目 CTest 路径仍未执行，CMake 3.16–3.19 实机版本也未实测，
+不作为“原生入口已通过”的证据。
+
+## ASan/UBSan
+本整改批未重跑；上一批 76/45/21 例的结果不代表新增用例。
+
+## 文档改版
+ENG-09 V2.8 → V2.9（转台事务归属字段补充版）：V2.8 已 `cp -p` 入
+`项目文档/软件工程设计/archive/`，归档件不含新字段关键词；
+`diff` 仅含标题、V2.9 变更块、§5.34 两行字段与规则 7，以及 §12.2 的
+“唯一有效版本/引用版本”指针与 V2.8 字段面说明；无正文删除。
+

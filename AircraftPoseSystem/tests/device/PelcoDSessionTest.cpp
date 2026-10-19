@@ -1025,6 +1025,152 @@ TEST(PelcoDSessionTest, WatchdogStopNotDeliveredKeeps2005AsCurrentError)
     EXPECT_EQ(f.snap().motion, data::TurntableMotionState::ERROR);
 }
 
+/// 失联锁存回归：停止帧已交付时，失联故障本身必须锁存。旧实现只在
+/// stopForFault 里写“当前错误”（不锁存），于是恢复读后 motion 回到
+/// IDLE、move() 又被接受 —— 失联没有留下任何拒绝依据。
+TEST(PelcoDSessionTest, LostLinkFaultStaysLatchedAfterRecovery)
+{
+    data::TurntableConfig cfg = makeConfig(true);
+    cfg.commFailureThreshold = 2;
+
+    Fixture f(cfg, true);
+    f.dev.azimuth   = 3.0;
+    f.dev.elevation = -2.0;
+    ASSERT_TRUE(f.init());
+
+    f.dev.dropHorizontal = true;
+    f.dev.dropVertical   = true;
+    f.session->pollOnce();
+    f.session->pollOnce();
+
+    EXPECT_TRUE(f.session->errorLatched())
+        << "连续失联达到阈值必须锁存";
+    EXPECT_EQ(f.session->lastError().code, data::kErrTurntableComm);
+    EXPECT_TRUE(f.diag().stopFrameDelivered)
+        << "本用例的前提是停止帧已交付（未交付时应保留 2005）";
+    EXPECT_EQ(f.snap().motion, data::TurntableMotionState::ERROR);
+
+    // 链路恢复：锁存不得自动清除，motion 不得回到 IDLE。
+    f.dev.dropHorizontal = false;
+    f.dev.dropVertical   = false;
+    for (int i = 0; i < 5; ++i)
+    {
+        f.session->pollOnce();
+    }
+
+    EXPECT_TRUE(f.session->errorLatched())
+        << "恢复通信不得自动清除失联锁存";
+    EXPECT_EQ(f.snap().motion, data::TurntableMotionState::ERROR)
+        << "恢复读后 motion 回到了 IDLE";
+
+    data::TurntableCommand command;
+    command.azimuthCommand   = 1.0;
+    command.elevationCommand = 0.0;
+    std::string error;
+    EXPECT_FALSE(f.session->move(command, error))
+        << "失联锁存后新运动命令必须被拒绝";
+    EXPECT_EQ(f.session->lastError().code, data::kErrTurntableComm);
+}
+
+/// 样本与 motion 必须同轮发布：读端不能拿到旧一轮的角度却配上新一轮
+/// 得出的 STABLE。
+TEST(PelcoDSessionTest, SnapshotNeverPairsOldSampleWithNewMotion)
+{
+    Fixture f(makeConfig(true), true);
+    f.dev.azimuth   = 25.0;
+    f.dev.elevation = 0.0;
+    ASSERT_TRUE(f.init());
+    EXPECT_DOUBLE_EQ(f.snap().azimuth, 25.0);
+    ASSERT_EQ(f.snap().motion, data::TurntableMotionState::IDLE);
+
+    data::TurntableCommand command;
+    command.azimuthCommand   = 10.0;
+    command.elevationCommand = 0.0;
+    std::string error;
+    ASSERT_TRUE(f.session->move(command, error));
+
+    // stableReadCount = 3：三轮 MOVING 之后，下一轮才会得出 STABLE。
+    for (int i = 0; i < 3; ++i)
+    {
+        f.session->pollOnce();
+    }
+    EXPECT_DOUBLE_EQ(f.snap().azimuth, 10.0);
+    ASSERT_EQ(f.snap().motion, data::TurntableMotionState::MOVING);
+
+    std::atomic<bool> entered{false};
+    f.session->setSnapshotReadHookForTest([&entered] {
+        entered.store(true);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    });
+
+    data::TurntableState observed;
+    std::thread reader([&f, &observed] { observed = f.session->snapshot(); });
+
+    while (!entered.load())
+    {
+        std::this_thread::yield();
+    }
+
+    // 读端已取走上一轮 (10, MOVING) 并停在钩子里；此时完整发布
+    // 新一轮 (10, STABLE)。固定实现返回旧一轮的**一对**值。
+    f.session->pollOnce();
+
+    reader.join();
+    f.session->setSnapshotReadHookForTest(nullptr);
+
+    EXPECT_DOUBLE_EQ(observed.azimuth, 10.0);
+    EXPECT_EQ(observed.motion, data::TurntableMotionState::MOVING)
+        << "旧样本配上了新发布的 STABLE：motion 未与样本同窗发布";
+    EXPECT_DOUBLE_EQ(f.snap().azimuth, 10.0);
+    EXPECT_EQ(f.snap().motion, data::TurntableMotionState::STABLE);
+}
+
+/// 写端：motion 必须在样本 seqlock 窗口**之内**写入。若发布完成后再写
+/// motion，读端会在“新样本已可见、motion 还是上一轮”的窗口里拿到
+/// 10° + MOVING，而该样本本轮其实已经判为 STABLE。
+TEST(PelcoDSessionTest, MotionIsPublishedInsideSampleWindow)
+{
+    Fixture f(makeConfig(true), true);
+    f.dev.azimuth   = 25.0;
+    f.dev.elevation = 0.0;
+    ASSERT_TRUE(f.init());
+
+    data::TurntableCommand command;
+    command.azimuthCommand   = 10.0;
+    command.elevationCommand = 0.0;
+    std::string error;
+    ASSERT_TRUE(f.session->move(command, error));
+    for (int i = 0; i < 3; ++i)
+    {
+        f.session->pollOnce();
+    }
+    EXPECT_EQ(f.snap().motion, data::TurntableMotionState::MOVING);
+
+    std::atomic<bool> entered{false};
+    f.session->setSamplePublishedHookForTest([&entered] {
+        entered.store(true);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    });
+
+    data::TurntableState observed;
+    std::thread reader([&entered, &observed, &f] {
+        while (!entered.load())
+        {
+            std::this_thread::yield();
+        }
+        observed = f.session->snapshot();
+    });
+
+    f.session->pollOnce();  // 完整发布 (10, STABLE) 并进入钩子
+
+    reader.join();
+    f.session->setSamplePublishedHookForTest(nullptr);
+
+    EXPECT_DOUBLE_EQ(observed.azimuth, 10.0);
+    EXPECT_EQ(observed.motion, data::TurntableMotionState::STABLE)
+        << "motion 在样本发布之后才写入：读端拿到新样本配旧 motion";
+}
+
 }  // namespace
 }  // namespace device
 }  // namespace aircraft

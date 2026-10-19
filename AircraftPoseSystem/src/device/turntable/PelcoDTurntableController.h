@@ -124,6 +124,10 @@ private:
     // ---- 停止屏障 ----
     std::atomic<std::uint64_t>        stopRequestSeq_{0};
     std::atomic<std::uint64_t>        stopCompletedSeq_{0};
+    // worker 线程独占：该停止序号已经被 handleCommand 的取消路径落实
+    //（session 在部分发送取消时已补发过停止帧并可能耗尽预算）。屏障
+    // 对同一序号不得再次重新武装，否则一次停止请求会烧掉两轮重试。
+    std::uint64_t                     stopSeqHandledByCancel_ = 0;
     std::mutex                        stopWaitMutex_;
     std::condition_variable           stopWaitCv_;
 
