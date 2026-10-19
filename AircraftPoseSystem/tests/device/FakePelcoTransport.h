@@ -58,6 +58,9 @@ public:
     /// 按帧内容识别，不影响查询与定位帧。
     std::atomic<int> failStopSends{0};
     std::atomic<int> stopSendAttempts{0};
+    /// socket 已关闭后仍尝试发送的**停止帧**次数。正常路径应为 0：
+    /// 内部清理（worker 退出、析构）不得在 close() 之后重发停止。
+    std::atomic<int> stopSendsAfterClose{0};
 
     std::vector<std::vector<std::uint8_t>> sent;
     std::deque<std::vector<std::uint8_t>> inbox;
@@ -89,8 +92,14 @@ public:
               std::string& error) override
     {
         ++sendCalls;
+        const std::vector<std::uint8_t> bytes(data, data + size);
+        const bool stopFrame = isStopFrame(bytes);
         if (!opened_)
         {
+            if (stopFrame)
+            {
+                ++stopSendsAfterClose;
+            }
             error = "socket 未打开";
             return false;
         }
@@ -99,8 +108,7 @@ public:
             error = "模拟发送失败";
             return false;
         }
-        std::vector<std::uint8_t> bytes(data, data + size);
-        if (isStopFrame(bytes))
+        if (stopFrame)
         {
             ++stopSendAttempts;
             int remaining = failStopSends.load();

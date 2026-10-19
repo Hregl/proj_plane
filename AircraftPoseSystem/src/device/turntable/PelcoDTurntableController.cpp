@@ -37,7 +37,9 @@ PelcoDTurntableController::~PelcoDTurntableController()
     }
 
     // worker 已退出：此后的 session 调用不再有并发方。
-    session_->stop();
+    // 内部清理不是新的外部停止请求，不得重新武装已耗尽的停止预算；
+    // 否则 socket 关闭后还会再尝试发送一轮停止帧。
+    session_->stop(false);
     transport_->close();
     initialized_.store(false);
 }
@@ -86,7 +88,8 @@ bool PelcoDTurntableController::initialize()
         // 与其返回 true 让上层以为"能等到位"，不如如实失败。
         running_.store(false);
         initialized_.store(false);
-        session_->stop();
+        // 内部清理：不重新武装停止预算（与 worker 退出、析构一致）。
+        session_->stop(false);
         transport_->close();
         return false;
     }
@@ -368,7 +371,8 @@ void PelcoDTurntableController::workerLoop()
     }
 
     // ---- 退出路径 ----
-    session_->stop();
+    // 同析构：内部清理沿用既有停止结果，不重新武装预算。
+    session_->stop(false);
     transport_->close();
 }
 

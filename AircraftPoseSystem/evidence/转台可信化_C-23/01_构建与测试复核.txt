@@ -167,3 +167,45 @@ ENG-09 V2.8 → V2.9（转台事务归属字段补充版）：V2.8 已 `cp -p` �
 `diff` 仅含标题、V2.9 变更块、§5.34 两行字段与规则 7，以及 §12.2 的
 “唯一有效版本/引用版本”指针与 V2.8 字段面说明；无正文删除。
 
+
+# ============================================================================
+# 第三次独立复核整改批复测（2026-10-20，基线 c117b95）
+# 代码状态：HEAD c117b95 + 未提交整改改动；已确认无 MUTATION 残留
+# ============================================================================
+
+## 构建
+$ cmake --build build -j8
+结果：PASS（Built target AircraftPoseSystem）
+$ cmake --build build_nosdk -j8
+结果：PASS（Built target AircraftPoseSystem）
+
+## 垫片套件（逐个运行，未通配汇总）
+LD_LIBRARY_PATH=$PWD/build/imvsdk_runtime /tmp/gtshim/<suite>
+PelcoDTest:              运行 87 个用例 | 失败断言数：0，异常用例数：0
+flowtest:                运行 46 个用例 | 失败断言数：0，异常用例数：0
+OpticalLayerTest:        运行 48 个用例 | 失败断言数：0，异常用例数：0
+DeviceLayerTest:         运行 83 个用例 | 失败断言数：0，异常用例数：0
+PreviewLayerTest:        运行 40 个用例 | 失败断言数：0，异常用例数：0
+PipelineTest:            运行 29 个用例 | 失败断言数：0，异常用例数：0
+RecorderPackageTest:     运行 29 个用例 | 失败断言数：0，异常用例数：0
+StateMachineTest:        运行 27 个用例 | 失败断言数：0，异常用例数：0
+sysinittest:             运行 26 个用例 | 失败断言数：0，异常用例数：0
+AlgorithmStageTest:      运行 23 个用例 | 失败断言数：0，异常用例数：0
+AlignmentControllerTest: 运行 21 个用例 | 失败断言数：0，异常用例数：0
+RecorderAdapterTest:     运行 8 个用例 | 失败断言数：0，异常用例数：0
+
+合计：12 个垫片目标，467 个用例，0 失败断言，0 异常用例。
+新增：PelcoDTest 86→87（TeardownDoesNotRearmSpentStopBudget）；
+CancelAndBarrierShareOneStopRetryBudget 增加正对照：再次显式 stop() 允许
+新增一份预算（3 → 6 次）。
+
+## 独立复核方的官方 GoogleTest 结果（不是本机复测）
+复核方报告：用官方 GoogleTest 直接编译运行 85 条转台用例，全部通过；
+未执行 Qt 专属用例、项目 CMake/CTest、完整回归或 ASan/UBSan。
+本机无 GoogleTest，**未复现**该结果，也不把它当作本机原生入口证据。
+
+## 原生入口
+项目仍未执行 `bash tests/run_tests.sh`（本机无 GoogleTest）。
+
+## ASan/UBSan
+本整改批未重跑；此前 76/45/21 例的结果不代表本批新增/修改路径。

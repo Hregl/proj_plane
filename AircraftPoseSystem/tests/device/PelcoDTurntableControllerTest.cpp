@@ -569,6 +569,54 @@ TEST(PelcoDTurntableControllerTest, CancelAndBarrierShareOneStopRetryBudget)
     EXPECT_GE(d.stopCompletedSeq, d.stopRequestSeq);
     EXPECT_TRUE(d.motionUncertain);
     EXPECT_FALSE(d.stopFrameDelivered);
+
+    // 对照：新的外部停止请求是唯一允许重新武装的入口，应再得一份预算。
+    controller.stop();
+    EXPECT_EQ(fake->stopSendAttempts.load(), 6)
+        << "显式外部 stop() 应作为新请求重新武装一份预算";
+}
+
+/// 内部清理不是外部停止请求：worker 退出与析构不得重新武装已耗尽的
+/// 停止预算，更不得在 socket 关闭后继续尝试发送停止帧。
+/// 旧实现：外部停止 3 次 → worker 退出再 3 次 → 析构（socket 已关）再 3 次。
+TEST(PelcoDTurntableControllerTest, TeardownDoesNotRearmSpentStopBudget)
+{
+    auto fake = std::make_shared<FakePelcoTransport>();
+    FakePelcoDevice dev;
+    dev.transport = fake.get();
+    dev.install();
+
+    data::TurntableConfig cfg = makeConfig(true);
+    cfg.stopRetryCount    = 2;   // 1 + 2 = 3 次
+    cfg.stopRetryWindowMs = 200;
+    cfg.stopBackoffMs     = 0;
+
+    {
+        PelcoDTurntableController controller(cfg, fake);
+        controller.setTestMotionGate(true);
+        ASSERT_TRUE(controller.initialize());
+
+        // 停止发送全部失败；第一轴已发出但回显被抑制。
+        fake->failStopSends.store(100);
+        fake->dropMoveEchoAxis.store(1);
+
+        data::TurntableCommand command;
+        command.azimuthCommand   = 1.0;
+        command.elevationCommand = 0.0;
+        ASSERT_TRUE(controller.move(command));
+
+        ASSERT_TRUE(waitFor([&fake] {
+            return fake->countSent(isPositioningFrame) >= 1;
+        })) << "未能进入第一轴等待窗口";
+
+        controller.stop();   // 外部停止：3 次尝试后预算耗尽
+        EXPECT_EQ(fake->stopSendAttempts.load(), 3);
+    }   // worker 退出 → close → 析构
+
+    EXPECT_EQ(fake->stopSendAttempts.load(), 3)
+        << "worker 退出或析构重新武装了已耗尽的停止预算";
+    EXPECT_EQ(fake->stopSendsAfterClose.load(), 0)
+        << "socket 关闭后仍尝试发送停止帧";
 }
 
 /// 轮询中的停止请求必须按接收切片处理，不能等满两轴各自的期限。

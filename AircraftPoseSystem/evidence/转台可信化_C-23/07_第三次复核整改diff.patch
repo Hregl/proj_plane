@@ -1,0 +1,169 @@
+diff --git a/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp b/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp
+index df36a14..0fa605e 100644
+--- a/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp
++++ b/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp
+@@ -37,7 +37,9 @@ PelcoDTurntableController::~PelcoDTurntableController()
+     }
+ 
+     // worker 已退出：此后的 session 调用不再有并发方。
+-    session_->stop();
++    // 内部清理不是新的外部停止请求，不得重新武装已耗尽的停止预算；
++    // 否则 socket 关闭后还会再尝试发送一轮停止帧。
++    session_->stop(false);
+     transport_->close();
+     initialized_.store(false);
+ }
+@@ -86,7 +88,8 @@ bool PelcoDTurntableController::initialize()
+         // 与其返回 true 让上层以为"能等到位"，不如如实失败。
+         running_.store(false);
+         initialized_.store(false);
+-        session_->stop();
++        // 内部清理：不重新武装停止预算（与 worker 退出、析构一致）。
++        session_->stop(false);
+         transport_->close();
+         return false;
+     }
+@@ -368,7 +371,8 @@ void PelcoDTurntableController::workerLoop()
+     }
+ 
+     // ---- 退出路径 ----
+-    session_->stop();
++    // 同析构：内部清理沿用既有停止结果，不重新武装预算。
++    session_->stop(false);
+     transport_->close();
+ }
+ 
+diff --git a/AircraftPoseSystem/tests/device/FakePelcoTransport.h b/AircraftPoseSystem/tests/device/FakePelcoTransport.h
+index 9b2562f..58b718e 100644
+--- a/AircraftPoseSystem/tests/device/FakePelcoTransport.h
++++ b/AircraftPoseSystem/tests/device/FakePelcoTransport.h
+@@ -58,6 +58,9 @@ public:
+     /// 按帧内容识别，不影响查询与定位帧。
+     std::atomic<int> failStopSends{0};
+     std::atomic<int> stopSendAttempts{0};
++    /// socket 已关闭后仍尝试发送的**停止帧**次数。正常路径应为 0：
++    /// 内部清理（worker 退出、析构）不得在 close() 之后重发停止。
++    std::atomic<int> stopSendsAfterClose{0};
+ 
+     std::vector<std::vector<std::uint8_t>> sent;
+     std::deque<std::vector<std::uint8_t>> inbox;
+@@ -89,8 +92,14 @@ public:
+               std::string& error) override
+     {
+         ++sendCalls;
++        const std::vector<std::uint8_t> bytes(data, data + size);
++        const bool stopFrame = isStopFrame(bytes);
+         if (!opened_)
+         {
++            if (stopFrame)
++            {
++                ++stopSendsAfterClose;
++            }
+             error = "socket 未打开";
+             return false;
+         }
+@@ -99,8 +108,7 @@ public:
+             error = "模拟发送失败";
+             return false;
+         }
+-        std::vector<std::uint8_t> bytes(data, data + size);
+-        if (isStopFrame(bytes))
++        if (stopFrame)
+         {
+             ++stopSendAttempts;
+             int remaining = failStopSends.load();
+diff --git a/AircraftPoseSystem/tests/device/PelcoDTurntableControllerTest.cpp b/AircraftPoseSystem/tests/device/PelcoDTurntableControllerTest.cpp
+index 722d362..55cdb3f 100644
+--- a/AircraftPoseSystem/tests/device/PelcoDTurntableControllerTest.cpp
++++ b/AircraftPoseSystem/tests/device/PelcoDTurntableControllerTest.cpp
+@@ -569,6 +569,54 @@ TEST(PelcoDTurntableControllerTest, CancelAndBarrierShareOneStopRetryBudget)
+     EXPECT_GE(d.stopCompletedSeq, d.stopRequestSeq);
+     EXPECT_TRUE(d.motionUncertain);
+     EXPECT_FALSE(d.stopFrameDelivered);
++
++    // 对照：新的外部停止请求是唯一允许重新武装的入口，应再得一份预算。
++    controller.stop();
++    EXPECT_EQ(fake->stopSendAttempts.load(), 6)
++        << "显式外部 stop() 应作为新请求重新武装一份预算";
++}
++
++/// 内部清理不是外部停止请求：worker 退出与析构不得重新武装已耗尽的
++/// 停止预算，更不得在 socket 关闭后继续尝试发送停止帧。
++/// 旧实现：外部停止 3 次 → worker 退出再 3 次 → 析构（socket 已关）再 3 次。
++TEST(PelcoDTurntableControllerTest, TeardownDoesNotRearmSpentStopBudget)
++{
++    auto fake = std::make_shared<FakePelcoTransport>();
++    FakePelcoDevice dev;
++    dev.transport = fake.get();
++    dev.install();
++
++    data::TurntableConfig cfg = makeConfig(true);
++    cfg.stopRetryCount    = 2;   // 1 + 2 = 3 次
++    cfg.stopRetryWindowMs = 200;
++    cfg.stopBackoffMs     = 0;
++
++    {
++        PelcoDTurntableController controller(cfg, fake);
++        controller.setTestMotionGate(true);
++        ASSERT_TRUE(controller.initialize());
++
++        // 停止发送全部失败；第一轴已发出但回显被抑制。
++        fake->failStopSends.store(100);
++        fake->dropMoveEchoAxis.store(1);
++
++        data::TurntableCommand command;
++        command.azimuthCommand   = 1.0;
++        command.elevationCommand = 0.0;
++        ASSERT_TRUE(controller.move(command));
++
++        ASSERT_TRUE(waitFor([&fake] {
++            return fake->countSent(isPositioningFrame) >= 1;
++        })) << "未能进入第一轴等待窗口";
++
++        controller.stop();   // 外部停止：3 次尝试后预算耗尽
++        EXPECT_EQ(fake->stopSendAttempts.load(), 3);
++    }   // worker 退出 → close → 析构
++
++    EXPECT_EQ(fake->stopSendAttempts.load(), 3)
++        << "worker 退出或析构重新武装了已耗尽的停止预算";
++    EXPECT_EQ(fake->stopSendsAfterClose.load(), 0)
++        << "socket 关闭后仍尝试发送停止帧";
+ }
+ 
+ /// 轮询中的停止请求必须按接收切片处理，不能等满两轴各自的期限。
+diff --git a/AircraftPoseSystem/待裁决问题汇总.md b/AircraftPoseSystem/待裁决问题汇总.md
+index af7de62..06d3740 100644
+--- a/AircraftPoseSystem/待裁决问题汇总.md
++++ b/AircraftPoseSystem/待裁决问题汇总.md
+@@ -143,6 +143,31 @@
+ > ⚠ **状态仍为“已实施，待独立复核关闭”**；A 批不得关闭。生产只读门禁
+ > 保持不变；实机运动未授权。
+ >
++> **C-23 第三次独立复核整改记录（2026-10-20，基线 c117b95）**：
++> 复核认可第二次整改的全部修复与 ENG-09 V2.9 归档保真，但指出 A 批仍有一个
++> **退出路径缺口**：`workerLoop()` 退出段与析构函数仍各调用一次默认
++> `session_->stop()`，会在停止预算已耗尽后重新武装。独立探针实测
++> （`stopRetryCount=2`、停止发送全部失败）累计停止发送尝试为
++> 外部停止 3 次 → worker 退出 6 次 → 析构 **9 次**，最后 3 次发生在
++> socket 已关闭之后；该遗漏此前各版均存在。
++>
++> 本批修复：三处**内部清理**（worker 退出、析构、线程启动失败）统一改为
++> `session_->stop(false)`；停止预算只能由新的外部 `stop()` 或成功
++> `initialize()` 重新武装。新增控制器用例
++> `TeardownDoesNotRearmSpentStopBudget`：外部停止 3 次后析构，断言总尝试数
++> 仍为 3、socket 关闭后停止发送尝试为 0；并在
++> `CancelAndBarrierShareOneStopRetryBudget` 增加正对照（再次显式 `stop()`
++> 应新增一份预算，总计 6 次）。`FakePelcoTransport` 增加
++> `stopSendsAfterClose` 计数。
++>
++> 验证：两构建树通过；12 个垫片套件共 **467 例**，0 失败断言、0 异常；
++> 2 项定向变异先红后绿（worker 退出重臂 → `:616`；析构重臂 →
++> `:618` 关闭后发送），记录见 `evidence/转台可信化_C-23/02_变异检查记录.md`
++> 第 7 节。⚠ 本机仍无 GoogleTest，项目原生 CMake/CTest 路径与 Qt 专属用例
++> **未执行**；ASan/UBSan 本批未重跑。
++> ⚠ **状态仍为“已实施，待独立复核关闭”**；A 批不得关闭。生产只读门禁
++> 保持不变；实机运动未授权。
++>
+ > 本文件继续作为缺口登记总表使用。**其余条目仍未处置**，其中 Q-B3 经复核
+ > **不属 C-002 范围**（其卡点是 `distanceBand` / `illumBand` 无生产者），需单独立项。
+ 
