@@ -54,7 +54,7 @@ def main():
     print(f"平移差值          : {abs(tr - pkg['truth']['error']['translation_m']):.3e} m")
     print(f"重投影误差        : {pkg['reprojection_error']:.6f} px")
     print(f"使用相机          : {pkg['camera_used']}")
-    print(f"内点数/对应数     : {pkg['statistics']['match_count']}/"
+    print(f"匹配数/CAD 对应数 : {pkg['statistics']['match_count']}/"
           f"{pkg['statistics']['cad_count']}，inlier_ratio="
           f"{pkg['validation']['inlier_ratio']:.6f}")
     return 0

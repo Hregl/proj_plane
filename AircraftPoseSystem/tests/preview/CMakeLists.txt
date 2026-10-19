@@ -15,9 +15,12 @@
 #  事件循环或 xvfb 即可运行完整链路。这也是当初取舍 SYS-09 §15 的
 #  直接收益（理由见 PreviewManager.h / PreviewWorker.h 文件头）。
 #
-#  ⚠ 本目录的测试当前**未运行**：本机未安装 GoogleTest，
-#  tests/CMakeLists.txt 会提前 return() 跳过全部测试目标。
-#  安装 libgtest-dev 后重新 cmake 即自动启用，无需改动本文件。
+#  ⚠ 测试启用状态（2026-10-20 更新）：本机已通过本地解包的
+#  GoogleTest 1.12.1 启用原生 CTest，本目录 40 条在 ON/OFF 两棵
+#  构建树均实际执行并通过（证据见 evidence/正式测试入口_2026-10-20/）。
+#  此前“本机未安装 GoogleTest、测试未运行”的记录仍按垫片路径保留，
+#  不追改为原生结果。缺少 GoogleTest 时 tests/CMakeLists.txt 仍会
+#  提前 return()；安装后重新 cmake 即自动启用，无需改动本文件。
 # ============================================================================
 
 aps_add_test(test_preview_layer

@@ -135,7 +135,7 @@ if(GTest_FOUND)
     endif()
 
     message(STATUS "[APS] 找到 GoogleTest，测试目标将正常生成")
-else()
+elseif(BUILD_TESTING)
     message(WARNING
         "[APS] 未找到 GoogleTest：测试目标将被跳过，BUILD_TESTING=ON 实际不生效。\n"
         "      ENG-08 §5 Sprint 1 的交付项含\"测试框架\"，1.md 第一阶段范围亦列出\n"
@@ -144,6 +144,11 @@ else()
         "          sudo apt install googletest          # 若上者不存在\n"
         "      安装后无需改动任何 CMake 文件，重新执行 cmake .. 即可自动启用。\n"
         "      （本项目为离线部署，不采用 FetchContent 联网拉取。）")
+else()
+    # BUILD_TESTING=OFF 是调用者的显式选择（如仿真交付入口），测试目标本
+    # 就不会生成；此时缺 GoogleTest 不构成告警，更不能写成“BUILD_TESTING=ON
+    # 实际不生效”——那会把主动关闭测试说成配置失败。
+    message(STATUS "[APS] 未找到 GoogleTest：BUILD_TESTING=OFF，不需要测试框架")
 endif()
 
 # ----------------------------------------------------------------------------

@@ -17,9 +17,12 @@
 #  没有 QApplication 与事件循环的条件下被逐 tick 推导。这正是把状态机
 #  放在 application 层的收益（ENG-03 §20 第 6 条）。
 #
-#  ⚠ 唯一例外是 test_system_initializer（文件末尾）：它编译 src/app 的一个
-#  源文件，而 `SystemInitializer.h` 含 `ui/MeasurementView.h`（`<QString>`），
-#  故它链接 ui / Qt5::Widgets。它同样**不起事件循环**，仍是逐 tick 调用的。
+#  ⚠ 例外是文件末尾的两个目标，它们都编译 src/app 的源文件并链接 ui：
+#  · test_system_initializer —— `SystemInitializer.h` 含
+#    `ui/MeasurementView.h`（`<QString>`），故链接 ui / Qt5::Widgets；
+#    它**不起事件循环**，仍是逐 tick 调用的。
+#  · test_qt_simulation_ui —— 需要 `MainWindow` 与 Qt 事件循环，验证
+#    空格键启动路径（见该目标处的说明）。
 #
 #  ⚠ 源文件显式列举，不用 GLOB —— 见 tests/CMakeLists.txt 中的约定说明。
 # ============================================================================
@@ -111,10 +114,11 @@ target_compile_definitions(test_recorder_adapter PRIVATE
 #    返回它，而 ui 目标 PUBLIC 链到 Qt5::Widgets。测试本身不起 QApplication、
 #    不开窗口（`view()` 是纯读）。
 #
-#  ⚠ 本目标今日**无法在 CMake 侧实测**：本机未装 GoogleTest，tests/CMakeLists.txt
-#    在配置期就 return()，全部测试目标（含既有的 10 个）都不生成。
-#    实际执行走 `/tmp/gtshim/build_tests.sh`（见 README §6），那里同样把
-#    `src/app/SystemInitializer.cpp` 编进该目标。两条路径中已跑过的是 shim。
+#  ⚠ 测试启用状态（2026-10-20 更新）：本机已通过本地解包的 GoogleTest
+#    1.12.1 启用原生 CTest，本目标 26 条在 ON/OFF 两棵构建树均实际执行
+#    并通过（证据见 evidence/正式测试入口_2026-10-20/）。此前“本机未装
+#    GoogleTest、只跑垫片”的记录仍按垫片路径保留，不追改为原生结果。
+#    缺少 GoogleTest 时 tests/CMakeLists.txt 仍会在配置期 return()。
 # ----------------------------------------------------------------------------
 aps_add_test(test_system_initializer
     SOURCES
@@ -135,5 +139,41 @@ aps_add_test(test_system_initializer
 #   临时工作目录，见用例内的说明）。**必须已展开**为绝对路径 ——
 #   `${PROJECT_SOURCE_DIR}` 在配置期展开，正是这一点。
 target_compile_definitions(test_system_initializer PRIVATE
+    APS_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+# ----------------------------------------------------------------------------
+#  Qt 仿真交付：界面空格键连续两次测量（2026-10-20）
+#
+#  依据：交付要求“可复现启动入口 → 界面连续完成两次测量 → 两个独立结果包”。
+#
+#  ⚠ 本目标验的是**界面入口**，不是新的算法能力：
+#    · 配置直接拷贝 `simulation/config/`（交付脚本使用的同一份）；
+#    · 开始动作由 `QKeyEvent(Qt::Key_Space)` 送入 MainWindow 触发，
+#      不直接调 `SystemInitializer::startMeasurement()`；
+#    · 两次 COMPLETE 的任务号/结果目录必须不同。
+#
+#  ⚠ 运行在 `QT_QPA_PLATFORM=offscreen`（用例内设置）：这是输入路径与
+#    落盘连通的证据，**不是**人工观察窗口的视觉验收。
+#
+#  ⚠ 与 test_system_initializer 一样，把 `SystemInitializer.cpp` 列为源文件；
+#    app 层仍无库目标。本目标需要 ui（MainWindow）与 Qt 事件循环。
+# ----------------------------------------------------------------------------
+aps_add_test(test_qt_simulation_ui
+    SOURCES
+        QtSimulationUiTest.cpp
+        ../../src/app/SystemInitializer.cpp
+    DEPENDS
+        data
+        optical
+        preview
+        algorithm
+        device
+        application
+        infrastructure
+        ui
+)
+
+target_compile_definitions(test_qt_simulation_ui PRIVATE
     APS_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
 )

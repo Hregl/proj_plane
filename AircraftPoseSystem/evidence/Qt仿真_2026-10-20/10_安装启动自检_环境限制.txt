@@ -1,0 +1,32 @@
+安装自检中的 install_launch_check：2026-10-20 实测
+说明：该检查从安装前缀以默认 config/（现场配置）启动；当前 config/ 的 CAM25
+      为 backend=imv、目标序列号 FD88772AAK00078。本机当前未枚举到相机；
+      OFF 构建树又没有 SDK。两者都在初始化阶段明确拒绝，未进入事件循环。
+      这是既有环境/配置前提，不是 Qt 仿真入口的失败；仿真入口使用
+      simulation/config（三路 virtual），不经过本检查。
+      注：install_launch_check 带 FIXTURES_REQUIRED，单跑它会自动带上
+      install_check，故其 "1 failed out of 2" 是这一对检查的计数。
+
+== build-native-on: install_check ==
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   0.06 sec
+
+== build-native-on: install_launch_check ==
+[APS] 启动自检失败：退出码 1（期望 124=被 timeout 杀掉，即事件循环已起来）
+启动失败：真实相机接入失败（设备打开）：通道 cam25（backend: imv，目标序列号 "FD88772AAK00078"）在设备打开检查时不可用。设备层报告：未找到序列号为 "FD88772AAK00078" 的相机（通道 cam25）。已枚举到 0 台设备：
+50% tests passed, 1 tests failed out of 2
+The following tests FAILED:
+
+== build-native-off: install_check ==
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   0.06 sec
+
+== build-native-off: install_launch_check ==
+[APS] 启动自检失败：退出码 1（期望 124=被 timeout 杀掉，即事件循环已起来）
+启动失败：CAM25 后端装配失败：通道 cam25 配置为真实后端（backend: imv），但**本次构建未接入 SDK**。请用 -DIMV_SDK_ROOT=<SDK 根目录> 重新配置后重建；若本轮只想跑软件闭环，请把该通道的 backend 改为 "virtual"（本程序**不会**替你静默切换）。
+50% tests passed, 1 tests failed out of 2
+The following tests FAILED:

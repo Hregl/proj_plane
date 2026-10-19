@@ -1,0 +1,76 @@
+Qt 仿真交付：真实 X 窗口两次空格测量
+时间：2026-10-20 05:29:59 +0800
+显示：DISPLAY=:0
+启动命令：scripts/run_simulation.sh --no-build
+进程：3763226 3763360 3763363 
+
+== 窗口树（xwininfo -root -tree，仅 AircraftPoseSystem 相关）==
+0x7200008 "AircraftPoseSystem": ()  1x1+0+0  +0+0
+0x7200004 "Qt Selection Owner for AircraftPoseSystem": ()  3x3+0+0  +0+0
+0x7200006 "AircraftPoseSystem V2.1": ("AircraftPoseSystem" "AircraftPoseSystem")  1600x984+0+0  +160+50
+
+== 主窗口几何（xdotool getwindowgeometry）==
+window_id=119537670
+WINDOW=119537670
+X=160
+Y=50
+WIDTH=1600
+HEIGHT=984
+SCREEN=0
+
+== 按键时序 ==
+第一次空格：05:29:45.509929823
+第二次空格：05:29:49.554271258
+
+== 应用日志（收到启动请求 / 结果包）==
+2026-10-20 05:29:45.498 [INFO] [app] 收到测量启动请求：状态机已启动
+2026-10-20 05:29:45.841 [INFO] [app] 结果包：simulation/output/measurement_2381318307093340
+2026-10-20 05:29:49.547 [INFO] [app] 收到测量启动请求：状态机已启动
+2026-10-20 05:29:49.879 [INFO] [app] 结果包：simulation/output/measurement_2381322353144937
+
+== 结果包 ==
+-- simulation/output/measurement_2381318307093340
+  "task_id": "measurement_2381318307093340",
+  "state": "COMPLETE",
+  "model_id": "synthetic_aircraft_6pt",
+  "model_type": "synthetic",
+  "run_mode": "simulation",
+      "rotation_deg": 0.321607,
+      "translation_m": 0.143426
+  "success": true,
+calibration_id.txt
+cam100.raw
+cam25.raw
+cam50.raw
+config_snapshot
+failure.json
+result.json
+turntable.json
+-- simulation/output/measurement_2381322353144937
+  "task_id": "measurement_2381322353144937",
+  "state": "COMPLETE",
+  "model_id": "synthetic_aircraft_6pt",
+  "model_type": "synthetic",
+  "run_mode": "simulation",
+      "rotation_deg": 0.321607,
+      "translation_m": 0.143426
+  "success": true,
+calibration_id.txt
+cam100.raw
+cam25.raw
+cam50.raw
+config_snapshot
+failure.json
+result.json
+turntable.json
+
+== 边界 ==
+窗口已在 X 上映射（几何 1600x984+160+50），按键经 X 事件送入生产 MainWindow。
+本机没有 xwd/import/scrot 等截图工具，未留截图；这不构成视觉验收。
+检测器仍为 MockTargetDetector，纹理匹配数 0；不是精度/实机/长跑证据。
+
+== 采证后的结束方式 ==
+证据采集完成后先执行 `xdotool windowclose`（XDestroyWindow，非窗口管理器关闭），
+应用进程未随之退出并打印了 BadDrawable；随后以 SIGTERM 结束进程。该 XCB 错误
+是强制销毁窗口的采证方式造成的，不作为产品缺陷或正常关闭路径的证据。
+持久目录中的 run.log 复制于强制关闭之前，故不含这段 XCB 输出。

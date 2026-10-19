@@ -1,0 +1,50 @@
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = QtSimulationUiTest.*
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from QtSimulationUiTest
+[ RUN      ] QtSimulationUiTest.界面空格连续两次测量生成两个独立结果包
+
+[QtSim] 工作目录：/media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/../验收证据/Qt仿真_2026-10-20/run_on/session_20261020_052456
+[QtSim] 配置：工作目录下 simulation/config（交付目录原样拷贝）
+[WARN ] [app] 配置告警：optical_rig.calibration_mode = "synthetic"：标定文件缺失时改用合成内参，**结果不具测量意义**（仅用于 M1 合成闭环）
+[WARN ] [app] 配置告警：measurement：取帧预算无余量 —— capture_frame_count(5) × 3 路 × grab_timeout_ms(500) = 7500 ms ≥ capture_timeout_ns(1500 ms)，且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断（取值余量见《待裁决问题汇总》Q-D2）
+[WARN ] [app] 配置告警：measurement.sigma_a/b/c 全为 0：E 项未生效（未标定），评分退化为 Q/F/M —— 结果包中的 predictedErrorCalibrated 将为 false
+[WARN ] [app] 配置告警：measurement.illum_band_edges 均为 0：光照分带未标定，所有光照条件落入同一桶，M_hist 的光照维度暂不可用
+2026-10-20 05:24:56.320 [INFO] [app] === AircraftPoseSystem V2.1 启动 ===
+2026-10-20 05:24:56.320 [INFO] [app] simulation/config：7 文件 / 3 相机 / 0 项取默认值 / 4 项告警
+2026-10-20 05:24:56.320 [INFO] [app] 运行模式：simulation
+2026-10-20 05:24:56.320 [WARN] [app] calibration_mode=synthetic：使用**默认矩阵标定**，本次运行的姿态精度不具参考意义（M1 打通链路专用）
+2026-10-20 05:24:56.320 [WARN] [app] 标定告警：正在使用**合成标定**：内参为标称视场角反推的占位值，外参为单位变换。由其算出的任何姿态结果都没有物理意义，仅可用于数据通路调试（M1/M2）。
+2026-10-20 05:24:56.320 [INFO] [app] 标定：SYNTHETIC-NO-CALIBRATION（模式 synthetic）
+2026-10-20 05:24:56.320 [INFO] [app] 合成场景：三路虚拟相机已安装同一份几何（synthetic_aircraft_6pt），真值 aircraftToShip 已就绪（仅用于渲染与事后比较）
+2026-10-20 05:24:56.320 [INFO] [app] 装配摘要：
+2026-10-20 05:24:56.320 [INFO] [app]   · CAM25（cam25）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪；增益 配置了 gain_raw，但虚拟后端不连接设备、该值未被下发
+2026-10-20 05:24:56.320 [INFO] [app]   · CAM50（cam50）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪
+2026-10-20 05:24:56.320 [INFO] [app]   · CAM100（cam100）：虚拟（VirtualCameraBackend）；设备身份 未查询（本后端不连设备）；配置目标序列号 "（未绑定）"；可用性 就绪
+2026-10-20 05:24:56.320 [INFO] [app] 设备：触发已使能、转台已就绪；取帧预算 500 ms/路，组预算 300 ms
+2026-10-20 05:24:56.320 [INFO] [app] 预览：AUTO 模式，队列容量 5
+2026-10-20 05:24:56.320 [INFO] [app] 机型库：synthetic_aircraft_6pt / 1（simulation/models）
+2026-10-20 05:24:56.320 [INFO] [app] 历史匹配统计：冷启动（runtime/match_stats.yaml 不存在，属正常首次运行）
+2026-10-20 05:24:56.320 [INFO] [app] 粗姿态：synthetic 先验 elevation=5.000000 deg, distance=40.000000 m（coarse_prior=synthetic）
+2026-10-20 05:24:56.320 [INFO] [app] 算法链：MockTargetDetector / PinholeScaleEstimator / SiftFeatureExtractor / DescriptorFeatureMatcher / CvPnPPoseEstimator
+2026-10-20 05:24:56.320 [WARN] [app] 算法链使用的是**桩检测器**（MockTargetDetector）：它按图像的亮块给出检测框，不是真实的 YOLO 目标检测。该链路只用于打通 M1 闭环，检测与位姿精度均不具参考意义。
+2026-10-20 05:24:56.320 [INFO] [app] 装配完成：MeasurementController 已就绪，等待 startMeasurement()
+2026-10-20 05:24:56.320 [INFO] [app] 输出目录就绪：simulation/output
+2026-10-20 05:24:56.320 [INFO] [app] 启动完成，共 7 条告警（见 WARN 行）
+This plugin does not support propagateSizeHints()
+2026-10-20 05:24:56.336 [INFO] [app] 收到测量启动请求：状态机已启动
+2026-10-20 05:24:56.699 [INFO] [app] 结果包：simulation/output/measurement_2381029145433244
+This plugin does not support propagateSizeHints()
+[QtSim] 第一次结果包：simulation/output/measurement_2381029145433244（task_id=measurement_2381029145433244）
+2026-10-20 05:24:56.700 [INFO] [app] 收到测量启动请求：状态机已启动
+This plugin does not support propagateSizeHints()
+2026-10-20 05:24:57.042 [INFO] [app] 结果包：simulation/output/measurement_2381029509079188
+This plugin does not support propagateSizeHints()
+[QtSim] 第二次结果包：simulation/output/measurement_2381029509079188（task_id=measurement_2381029509079188）
+[       OK ] QtSimulationUiTest.界面空格连续两次测量生成两个独立结果包 (733 ms)
+[----------] 1 test from QtSimulationUiTest (733 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (733 ms total)
+[  PASSED  ] 1 test.

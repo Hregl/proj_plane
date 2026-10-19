@@ -78,6 +78,11 @@ include(cmake/InstallRules.cmake)
 # tests/ → GoogleTest 单元/集成测试（内部按 BUILD_TESTING 自行短路）
 # ----------------------------------------------------------------------------
 add_subdirectory(src)
+
+# tools/ 依赖 src/ 的模块库（gen_synthetic_model 链 data + algorithm），
+# 故必须排在 src/ 之后。它不参与生产可执行文件的链接。
+add_subdirectory(tools)
+
 add_subdirectory(tests)
 
 # ----------------------------------------------------------------------------

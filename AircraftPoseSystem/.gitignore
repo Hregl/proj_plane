@@ -91,6 +91,19 @@ logs/
 core
 core.*
 
+# ---------- 仿真交付的运行产物 ----------
+#
+# `simulation/models/` 由 `tools/gen_synthetic_model` 在**每次启动前**从
+# `data/SyntheticTargetGeometry.h` 重新生成，不是独立交付资产，故不入库
+# ——入库会让“模型文件”和“渲染几何”出现两个可分别修改的来源，而这正是
+# `SystemInitializer::buildAlgorithm()` 的同源校验要防的分叉。
+# 与 `models/`（真实机型库，必须版本化）的区别：后者是外部交付事实，
+# 不能由源码重建；前者完全由源码派生。
+#
+# `simulation/logs/` 与 `simulation/output/` 已由上面的 `logs/`、`output/`
+# 模式覆盖；这里不重复列出，也不取消它们的忽略。
+/simulation/models/
+
 # ---------- 测量运行产物 ----------
 #
 # 运行 `AircraftPoseSystem`（真机或虚拟设备）会在**当前工作目录**下建

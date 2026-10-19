@@ -1,0 +1,82 @@
+%YAML:1.0
+# ============================================================================
+#  ⚠ 本文件是**仿真启动入口的副本**（simulation/config/），不是现场配置。
+#     由 config/ 复制后只改下表中与仿真前提相关的取值；差异清单见
+#     simulation/README.md §2。修改现场配置时请同步核对该清单。
+# ============================================================================
+# ============================================================================
+#  config/turntable.yaml  —— 转台配置
+#
+#  依据：SYS-10 §3.2（工作范围）、§3.3（运动速度）、ENG-09 §6.3（中心判据）
+#        TurntableConfig.h（字段与约束）、SYS-04 §6.5
+#
+#  ⚠ 行程与速度的取值直接取自 SYS-10 的冻结值，ConfigManager 按同一组
+#    边界做越界校验（越界即启动失败）：
+#      行程：水平 360°（±180°）、俯仰 -60° ~ +60°
+#      速度：两轴 1.2 ~ 60 / 30 °/s（共用上限取俯仰的 30 °/s，
+#            因为 coarse_speed 是单值，必须两轴都可行）
+#
+#  ⚠ center_threshold 的单位是 **pixel**，判据为
+#      |TargetOffset::pixelX| <= center_threshold 且 |pixelY| <= center_threshold
+#    该判据完全依赖 TargetOffset 以**图像中心**为原点（裁决 C-11）。
+#    阈值取 50（ENG-09 §6.3 冻结的默认值）。
+# ============================================================================
+
+---
+turntable:
+   # 通信协议："sdk" | "pelco_d_udp" | "rs485" | "network"（C-22）
+   #   "sdk"         → VirtualTurntable（仓库默认；虚拟件）
+   #   "pelco_d_udp" → PelcoDTurntableController（真实 Pelco-D over UDP）
+   #   "rs485"/"network" → 已登记但未实现，启动时**显式失败**，
+   #                      不会静默回落虚拟后端
+   # 旧取值 "pekod" 已删除；保留在配置里会导致启动失败并提示迁移。
+   protocol: "sdk"
+   # 方位角行程（deg）。360° 水平回转 → ±180°。
+   azimuth_min: -180.0
+   azimuth_max: 180.0
+   # 俯仰角行程（deg）。SYS-10 §3.2 冻结为 -60° ~ +60°。
+   elevation_min: -60.0
+   elevation_max: 60.0
+   # 粗调速度（deg/s）：大角度快速指向（SYS-10 §6）。
+   # 取 5.0（两轴可行区间 1.2~30 的中低速段）——粗调过快会让
+   # ALIGN 末段依赖精调兜底，而重试预算只有 8 次。
+   coarse_speed: 5.0
+   # 精调速度（deg/s）：对准末段的小步修正。
+   # 取 1.2 = 两轴的最低速度（SYS-10 §3.3）。精调速度偏高会导致
+   # 越过目标后来回摆动（极限环），表现为对准永不进入 stable，
+   # 最终耗尽 ALIGN 重试。
+   fine_speed: 1.2
+   # 中心判据阈值（pixel），见文件头说明。
+   center_threshold: 50.0
+
+   # ---- Pelco-D/UDP 通信键（仅 protocol == "pelco_d_udp" 时读取）----
+   #
+   # ⚠ host 默认必须留空，且**出厂内网 IP 不得进入版本库**。
+   #   实机配置放在仓库外的本地目录（例如 验收证据/ 下，已 gitignore），
+   #   通过 `AircraftPoseSystem <配置目录>` 的 argv[1] 指定。
+   #
+   # 下列键在 "sdk" 下若被显式写出，ConfigManager 会告警"仅 pelco_d_udp
+   # 使用"，因此这里只作为示例放在注释里：
+   #
+   #   host: ""                    # IPv4 点分十进制单播地址；空 ⇒ 启动失败
+   #   port: 6666                  # 1..65535
+   #   pelco_address: 1            # 1..255；7 字节帧里的设备地址，不是 IP
+   #   reply_timeout_ms: 50        # 10..1000
+   #   poll_interval_ms: 50        # 20..1000
+   #   stable_read_count: 3        # 2..20
+   #   stable_threshold_deg: 0.02  # 0.001..1.0
+   #   arrival_tolerance_deg: 0.2  # 0.02..1.0（与 SYS-10 §3.3 对齐）
+   #   comm_failure_threshold: 5   # 1..20
+   #   use_speed_control: false    # false = 设备默认速度（本批取值）
+   #
+   # ---- 停止与样本新鲜度（C-23；仅 pelco_d_udp 读取）----
+   #
+   # ⚠ 没有 send_policy / motion_enabled 之类的键：只读发送门禁由代码固定为
+   #   TurntableSendPolicy::ReadOnly，**配置无法打开运动**。写成注释而不是
+   #   注释掉的键，正是为了不让人误以为"取消注释就能运动"。
+   #
+   #   sample_stale_ms: 500        # 50..5000；超时 ⇒ stale/ERROR，上层不得采集
+   #   stop_timeout_ms: 3000       # 100..30000；停止帧交付后等待"观测到静止"
+   #   stop_retry_count: 2         # 0..5；首次失败后的重发次数，总发送 ≤ 1+本值
+   #   stop_retry_window_ms: 2000  # 100..10000；全部停止尝试须在此窗口内完成
+   #   stop_backoff_ms: 200        # 0..1000；停止重发间隔

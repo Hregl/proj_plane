@@ -1,0 +1,133 @@
+{
+  "task_id": "measurement_2381030280754046",
+  "state": "COMPLETE",
+  "written_at": "2026-10-20 05:24:57.813",
+  "model_id": "synthetic_aircraft_6pt",
+  "model_type": "synthetic",
+  "feature_version": "1",
+  "calibration_id": "SYNTHETIC-NO-CALIBRATION",
+  "software_version": "2.1-v2.1-framework",
+  "run_mode": "simulation",
+  "component_realism": "camera=virtual;turntable=virtual;trigger=virtual;scene=synthetic_projection;detector=mock;scale=pinhole;features=sift;matcher=descriptor;pose=iterative_pnp",
+  "cameras": [
+    {"role": "CAM25", "backend": "virtual", "real_or_virtual": "virtual"},
+    {"role": "CAM50", "backend": "virtual", "real_or_virtual": "virtual"},
+    {"role": "CAM100", "backend": "virtual", "real_or_virtual": "virtual"}
+  ],
+  "calibration_parameters": [
+    "CAM25: id=SYNTHETIC-NO-CALIBRATION fx=1545.096679919 fy=1545.096679919 cx=640.000000000 cy=512.000000000 image=1280x1024 dist=[0.000000000,0.000000000,0.000000000,0.000000000,0.000000000] cameraToRig{R=[1.000000000,0.000000000,0.000000000,0.000000000,1.000000000,0.000000000,0.000000000,0.000000000,1.000000000]; t=[0.000000000,0.000000000,0.000000000]}",
+    "CAM50: id=SYNTHETIC-NO-CALIBRATION fx=1545.096679919 fy=1545.096679919 cx=640.000000000 cy=512.000000000 image=1280x1024 dist=[0.000000000,0.000000000,0.000000000,0.000000000,0.000000000] cameraToRig{R=[1.000000000,0.000000000,0.000000000,0.000000000,1.000000000,0.000000000,0.000000000,0.000000000,1.000000000]; t=[0.000000000,0.000000000,0.000000000]}",
+    "CAM100: id=SYNTHETIC-NO-CALIBRATION fx=1545.096679919 fy=1545.096679919 cx=640.000000000 cy=512.000000000 image=1280x1024 dist=[0.000000000,0.000000000,0.000000000,0.000000000,0.000000000] cameraToRig{R=[1.000000000,0.000000000,0.000000000,0.000000000,1.000000000,0.000000000,0.000000000,0.000000000,1.000000000]; t=[0.000000000,0.000000000,0.000000000]}",
+    "RIG: id=SYNTHETIC-NO-CALIBRATION rigToShip{R=[1.000000000,0.000000000,0.000000000,0.000000000,1.000000000,0.000000000,0.000000000,0.000000000,1.000000000]; t=[0.000000000,0.000000000,0.000000000]}"
+  ],
+  "metadata_conflicts": [],
+  "truth": {
+    "source": "synthetic_geometry",
+    "aircraftToShip": {
+      "rotation": [
+        [0.000000000, 0.000000000, 1.000000000],
+        [-0.066273900, 0.997801468, 0.000000000],
+        [-0.997801468, -0.066273900, 0.000000000]
+      ],
+      "translation": [0.000000, 0.000000, 40.000000]
+    },
+    "error": {
+      "rotation_deg": 0.321607,
+      "translation_m": 0.143426
+    }
+  },
+  "success": true,
+  "yaw": -94.784037,
+  "pitch": 86.161355,
+  "roll": -94.794644,
+  "reprojection_error": 0.324563,
+  "aircraftToShip": {
+    "rotation": [
+      [-0.005583385, -0.000371580, 0.999984344],
+      [-0.066713653, 0.997772163, -0.000001735],
+      [-0.997756541, -0.066712618, -0.005595735]
+    ],
+    "translation": [-0.018306, -0.008556, 39.858004]
+  },
+  "validation": {
+    "valid": true,
+    "reason": "OK",
+    "reprojection_error": 0.324563,
+    "inlier_ratio": 1.000000,
+    "confidence": 0.837718
+  },
+  "camera_used": "CAM100",
+  "selected_camera": "CAM100",
+  "score": 0.370077,
+  "degraded": false,
+  "cameras_available": 3,
+  "quality": {
+    "sharpness": 126.391852,
+    "exposure": 0.599135,
+    "contrast": 0.587322,
+    "feature_count": 0,
+    "match_count": 0,
+    "match_ratio": 0.000000
+  },
+  "statistics": {
+    "feature_count": 6,
+    "match_count": 6,
+    "match_ratio": 1.000000,
+    "dropped_by_conflict": 0,
+    "cad_count": 6,
+    "texture_count": 0,
+    "spread_px": 321.000000
+  },
+  "best_frame": {
+    "exposure_index": 21,
+    "trigger_timestamp_ns": 2381030428352162,
+    "frames": [
+      {"role": "CAM25", "frame_id": 20, "timestamp_ns": 2381030424606673, "frame_valid": true,
+       "display_image": {"width": 1280, "height": 1024, "type": 16},
+       "data_source": "image",
+       "pixel_format": "BGR8", "valid_bits": 8, "packing": "Unpacked",
+       "valid_bit_alignment": "LsbZeroPadded",
+       "declared_byte_order": "LittleEndian"},
+      {"role": "CAM50", "frame_id": 20, "timestamp_ns": 2381030426467281, "frame_valid": true,
+       "display_image": {"width": 1280, "height": 1024, "type": 16},
+       "data_source": "image",
+       "pixel_format": "BGR8", "valid_bits": 8, "packing": "Unpacked",
+       "valid_bit_alignment": "LsbZeroPadded",
+       "declared_byte_order": "LittleEndian"},
+      {"role": "CAM100", "frame_id": 20, "timestamp_ns": 2381030428352162, "frame_valid": true,
+       "display_image": {"width": 1280, "height": 1024, "type": 16},
+       "data_source": "image",
+       "pixel_format": "BGR8", "valid_bits": 8, "packing": "Unpacked",
+       "valid_bit_alignment": "LsbZeroPadded",
+       "declared_byte_order": "LittleEndian"}
+    ]
+  },
+  "turntable": {
+    "azimuth": 0.000000,
+    "elevation": 0.000000,
+    "motion": "IDLE",
+    "stop_requested": false,
+    "stop_frame_delivered": false,
+    "stop_observed_stationary": false,
+    "motion_uncertain": false,
+    "motion_inhibited": false
+  },
+  "failure": {
+    "first_failed_state": "IDLE",
+    "first_error": {
+      "code": 0,
+      "name": "OK",
+      "message": "",
+      "timestamp_ns": 0
+    },
+    "final_failed_state": "IDLE",
+    "final_error": {
+      "code": 0,
+      "name": "OK",
+      "message": "",
+      "timestamp_ns": 0
+    }
+  },
+  "missing_required_fields": [],
+  "non_finite_fields": []
+}

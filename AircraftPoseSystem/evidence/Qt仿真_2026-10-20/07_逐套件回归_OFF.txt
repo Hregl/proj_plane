@@ -1,0 +1,14 @@
+test_algorithm_pipeline: total=29
+test_algorithm_stages: total=23
+test_alignment_controller: total=21
+test_device_layer: total=83
+test_measurement_flow: total=46
+test_optical_layer: total=48
+test_pelco_d: total=87
+test_preview_layer: total=40
+test_qt_simulation_ui: total=1
+test_recorder_adapter: total=8
+test_recorder_package: total=29
+test_state_machine: total=27
+test_system_initializer: total=26
+TOTAL build-native-off = 468
