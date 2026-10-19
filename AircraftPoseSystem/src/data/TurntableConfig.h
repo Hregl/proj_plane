@@ -41,9 +41,14 @@ namespace data
 /// 转台配置（ENG-09 §6.3）。
 struct TurntableConfig
 {
-    /// 通信协议："sdk" | "pekod" | "rs485" | "network"。
-    /// 第一阶段仅 "sdk"（VirtualTurntable）与占位的 "pekod"
-    /// （PekoTurntableController，按 ENG-08 §11 不实现具体协议）可用。
+    /// 通信协议："sdk" | "pelco_d_udp" | "rs485" | "network"。
+    /// * "sdk"          ⇒ VirtualTurntable（默认；虚拟件）
+    /// * "pelco_d_udp"  ⇒ PelcoDTurntableController（真实 Pelco-D/UDP 后端）
+    /// * "rs485"/"network" ⇒ 已登记但**本批未实现**，装配时显式失败，
+    ///                      **不得**静默回落虚拟后端（C-22）
+    ///
+    /// 旧取值 "pekod" 已删除；ConfigManager 遇到时必须报迁移错误
+    /// （"已移除，请改为 pelco_d_udp"），不得当作 "sdk" 或默认值。
     ///
     /// 冻结为 std::string 而非枚举：协议集合随工程实施阶段扩展
     /// （SYS-10 的现场协议由供货方确定），字符串可在不改冻结表的前提下
@@ -81,6 +86,47 @@ struct TurntableConfig
     /// 恒为 0，判据恒真，转台永不移动，而对准会被报告为成功 ——
     /// 见 TargetOffset.h 的详细说明。
     double centerThreshold = 50.0;  // pixel
+
+    // ---- V2.7 新增（裁决 C-22）：Pelco-D/UDP 通信端点与到位判定 ----
+    //
+    // ⚠ 这些字段**只对 protocol == "pelco_d_udp" 生效**。其他协议下
+    //   ConfigManager 不读取它们（避免既有 sdk 配置每次启动多出
+    //   10 条"取默认值"记录）；若显式出现则给"仅 pelco_d_udp 使用"告警。
+    //
+    // ⚠ host 默认空是刻意的：出厂内网 IP 不得进入版本库。
+    //   实机配置放在仓库外的本地目录，通过 argv[1] 指定配置目录启动。
+
+    /// 转台 IPv4 点分十进制地址。空表示未配置。
+    std::string host;
+
+    /// UDP 端口（默认 6666）。
+    int port = 6666;
+
+    /// Pelco-D 设备地址，1..255。**不是 IP 地址** ——
+    /// 这是 7 字节帧里的"地址"字节，同一条 UDP 链路上可挂多台设备。
+    int pelcoAddress = 1;
+
+    /// 单次查询/回显等待时间，ms。
+    int replyTimeoutMs = 50;
+
+    /// 后台轮询周期，ms。
+    int pollIntervalMs = 50;
+
+    /// 判 STABLE 所需的连续一致读数次数。
+    int stableReadCount = 3;
+
+    /// 相邻两次读数被视为"没变"的阈值，deg。
+    double stableThresholdDeg = 0.02;
+
+    /// 与目标角的到位容差，deg（与 SYS-10 §3.3 的 ±0.2° 对齐）。
+    double arrivalToleranceDeg = 0.2;
+
+    /// 连续多少个轮询周期无有效回复即置 ERROR。
+    int commFailureThreshold = 5;
+
+    /// false = 表 3.5（设备默认速度，本批默认）；
+    /// true  = 表 3.65（指令携带转速，本批只做离线测试）。
+    bool useSpeedControl = false;
 };
 
 }  // namespace data

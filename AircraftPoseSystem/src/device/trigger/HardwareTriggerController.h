@@ -8,9 +8,10 @@
 //
 //  作用：真实硬触发源（同步脉冲发生器 / 相机的硬件触发输出）。
 //
-//  ⚠ 本阶段的实现状态：**诚实桩**（与 ImvCameraBackend、
-//  PekoTurntableController 同策略）。硬件不存在，故 initialize() 返回
-//  false，上层据此走 SYS-08 §7.5 的降级路径。
+//  ⚠ 本阶段的实现状态：**诚实桩**（与 ImvCameraBackend 同策略）。
+//  硬件不存在，故 initialize() 返回 false，上层据此走 SYS-08 §7.5
+//  的降级路径。注意：转台侧已不是桩 —— PelcoDTurntableController 是
+//  真实后端（C-22），两者状态不要混为一谈。
 //
 //  ⚠ 这里必须**区分两种失败**，且两者的上层动作完全不同：
 //    · initialize() 失败 → §7.5 的"触发故障"→ 降级为软触发（3001），

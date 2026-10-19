@@ -61,7 +61,8 @@
 #include "device/camera/ICameraBackend.h"
 #include "device/camera/MultiCameraManager.h"
 #include "device/trigger/VirtualTriggerController.h"
-#include "device/turntable/VirtualTurntable.h"
+#include "data/TurntableConfig.h"
+#include "device/turntable/ITurntableController.h"
 #include "infrastructure/config/ConfigManager.h"
 #include "infrastructure/logger/Logger.h"
 #include "infrastructure/persistence/FileMatchStatsStore.h"
@@ -237,9 +238,19 @@ public:
         const data::CameraConfig&, std::string& error)>
         backendFactory;
 
-    /// 5. 触发与转台（M1 阶段一律虚拟后端，见 11.md §六的 mock 清单）。
+    /// 转台装配槽（C-22）。为空 ⇒ 按 `TurntableConfig::protocol` 内置装配：
+    /// `sdk` → VirtualTurntable；`pelco_d_udp` → PelcoDTurntableController；
+    /// `rs485`/`network` → 启动失败（不得静默回落虚拟后端）。
+    ///
+    /// 与 `backendFactory` 同一约定：一旦设置，返回空即装配失败，
+    /// 不回落内置工厂。生产路径恒为空。
+    std::function<std::unique_ptr<device::ITurntableController>(
+        const data::TurntableConfig&, std::string& error)>
+        turntableFactory;
+
+    /// 5. 触发与转台。
     std::unique_ptr<device::VirtualTriggerController> trigger;
-    std::unique_ptr<device::VirtualTurntable>         turntable;
+    std::unique_ptr<device::ITurntableController>     turntable;
 
     /// 6. 预览（注入 rig 用于显示焦段与校验可用性）。
     std::unique_ptr<preview::PreviewManager> preview;

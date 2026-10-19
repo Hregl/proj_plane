@@ -18,8 +18,9 @@
 //
 //  ENG-08 §3 要求"虚拟/真实设备的切换点唯一"，ENG-10 §5.1 要求"配置注入
 //  集中在一处"。这两条落在这个文件里：把 `VirtualCameraBackend` 换成
-//  `ImvCameraBackend`、把 `VirtualTurntable` 换成 `PekoTurntableController`，
-//  只需改本文件的 createDevices() 一段，其他任何文件都不动。
+//  `ImvCameraBackend`、把 `VirtualTurntable` 换成
+//  `PelcoDTurntableController`，只需改本文件的 buildDevices() 一段，
+//  其他任何文件都不动。
 //  这也是 010 阶段"虚拟设备全通、真实设备未接"这件事不至于失控的原因。
 //
 //  ---- tick() 为什么要顺手抓一帧"预览用的图像" ----

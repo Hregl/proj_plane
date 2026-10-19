@@ -86,6 +86,9 @@
 #include "data/TurntableConfig.h"
 #include "device/camera/ICameraBackend.h"
 #include "device/camera/VirtualCameraBackend.h"
+#include "device/turntable/ITurntableController.h"
+#include "device/turntable/PelcoDTurntableController.h"
+#include "device/turntable/VirtualTurntable.h"
 #include "infrastructure/FileUtil.h"
 #include "infrastructure/config/ConfigManager.h"
 #include "preview/PreviewQueue.h"
@@ -98,6 +101,7 @@ using aircraft::app::ApplicationContext;
 using aircraft::app::SystemInitializer;
 using aircraft::data::MeasurementState;
 using aircraft::device::VirtualCameraBackend;
+using aircraft::device::VirtualTurntable;
 using S = aircraft::data::MeasurementState;
 
 namespace
@@ -532,7 +536,13 @@ TEST(SystemInitializerTest, 场景B_ALIGN越程当拍FAILED且当拍不补帧)
     ASSERT_GT(tcfg.azimuthMax, tcfg.azimuthMin) << "转台行程未配置，越程判据无法成立";
     const double offsetPx = tcfg.centerThreshold + 50.0;
 
-    h.ctx.turntable->setInitialAngles(tcfg.azimuthMax, 0.0);
+    // ApplicationContext::turntable 自 C-22 起是接口指针；
+    // 默认协议 "sdk" 仍装配 VirtualTurntable，这里校验这一前提。
+    auto* virtualTurntable =
+        dynamic_cast<VirtualTurntable*>(h.ctx.turntable.get());
+    ASSERT_NE(virtualTurntable, nullptr)
+        << "默认配置应装配 VirtualTurntable（protocol=sdk）";
+    virtualTurntable->setInitialAngles(tcfg.azimuthMax, 0.0);
     auto cam50 = std::static_pointer_cast<VirtualCameraBackend>(h.ctx.backend50);
     ASSERT_NE(cam50, nullptr);
     cam50->setTargetPixelOffset(offsetPx, 0.0);
@@ -648,7 +658,9 @@ std::string readFile(const std::string& path)
 ///    的临时工作目录（`prepareWorkspace`），故不必再 chdir 一次。
 std::string makeConfigVariantForFile(const std::string& overrideFile,
                                      const std::string& overrideText,
-                                     std::string&       err)
+                                     std::string&       err,
+                                     const std::string& secondFile = std::string(),
+                                     const std::string& secondText = std::string())
 {
     char        tmpl[] = "/tmp/aps_cfg_XXXXXX";
     char* const dir    = ::mkdtemp(tmpl);
@@ -669,6 +681,19 @@ std::string makeConfigVariantForFile(const std::string& overrideFile,
             if (!out.good())
             {
                 err = "写 " + overrideFile + " 失败：" + dst;
+                return std::string();
+            }
+            continue;
+        }
+        if (!secondFile.empty() && f == secondFile)
+        {
+            // 转台用例不能带上仓库 camera.yaml 里的现场接线（CAM25=imv）：
+            // 那会让启动在相机阶段就失败，永远走不到转台装配。
+            std::ofstream out(dst, std::ios::binary);
+            out << secondText;
+            if (!out.good())
+            {
+                err = "写 " + secondFile + " 失败：" + dst;
                 return std::string();
             }
             continue;
@@ -1477,6 +1502,200 @@ TEST(SystemInitializerTest, 场景D_注入工厂返回空但不给说明时文�
         << "空说明被如实写成了「没有」，而不是留一句空拼接：" << e;
     EXPECT_NE(e.find("cam25"), std::string::npos)
         << "至少要说清是哪一路：" << e;
+}
+
+// ===========================================================================
+//  场景 T：转台装配（C-22）
+// ===========================================================================
+
+TEST(SystemInitializerTest, 场景T_未实现协议显式失败不回落虚拟后端)
+{
+    std::string err;
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    for (const char* protocol : {"rs485", "network"})
+    {
+        std::string text = repoYaml("turntable.yaml");
+        text = replaceOnce(text, "protocol: \"sdk\"",
+                           std::string("protocol: \"") + protocol + "\"");
+        ASSERT_FALSE(text.empty()) << "未命中 turntable.yaml 的 protocol 行";
+
+        const std::string virtualCamera = allVirtualCameraYaml();
+        ASSERT_FALSE(virtualCamera.empty());
+        const std::string dir = makeConfigVariantForFile(
+            "turntable.yaml", text, err, "camera.yaml", virtualCamera);
+        ASSERT_FALSE(dir.empty()) << err;
+
+        ApplicationContext ctx;
+        SystemInitializer  init(ctx);
+
+        EXPECT_FALSE(init.initialize(dir)) << protocol << " 被静默接受了";
+        EXPECT_TRUE(ctx.turntable == nullptr)
+            << protocol << " 下造出了转台对象 —— 可能是回落虚拟后端";
+        EXPECT_NE(init.errorText().find("拒绝回落虚拟后端"), std::string::npos)
+            << init.errorText();
+        EXPECT_NE(init.errorText().find(protocol), std::string::npos)
+            << "失败原因未点名协议：" << init.errorText();
+    }
+}
+
+TEST(SystemInitializerTest, 场景T_pelco_d_udp装配真实后端并如实报告连不上)
+{
+    // 不需要真的有转台：127.0.0.1 上没有 Pelco-D 设备时，
+    // 真实后端会构造、打开 UDP、查询并失败。这里证明的是
+    // "protocol=pelco_d_udp 真的走到了真实类"，而不是回落虚拟件。
+    std::string err;
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    std::string text = repoYaml("turntable.yaml");
+    text = replaceOnce(text, "protocol: \"sdk\"", "protocol: \"pelco_d_udp\"");
+    ASSERT_FALSE(text.empty());
+    text = replaceOnce(text, "center_threshold: 50.0",
+                       "center_threshold: 50.0\n"
+                       "   host: \"127.0.0.1\"\n"
+                       "   port: 9\n"
+                       "   pelco_address: 1");
+    ASSERT_FALSE(text.empty()) << "未命中 center_threshold 行";
+
+    const std::string virtualCamera = allVirtualCameraYaml();
+    ASSERT_FALSE(virtualCamera.empty());
+    const std::string dir = makeConfigVariantForFile(
+        "turntable.yaml", text, err, "camera.yaml", virtualCamera);
+    ASSERT_FALSE(dir.empty()) << err;
+
+    ApplicationContext ctx;
+    SystemInitializer  init(ctx);
+
+    EXPECT_FALSE(init.initialize(dir)) << "本机没有转台，启动不应成功";
+    ASSERT_TRUE(ctx.turntable != nullptr) << "真实后端没有被构造出来";
+    EXPECT_TRUE(dynamic_cast<VirtualTurntable*>(ctx.turntable.get()) == nullptr)
+        << "protocol=pelco_d_udp 却装配了虚拟转台";
+    EXPECT_NE(dynamic_cast<aircraft::device::PelcoDTurntableController*>(
+                  ctx.turntable.get()),
+              nullptr)
+        << "protocol=pelco_d_udp 没有装配 PelcoDTurntableController";
+
+    const std::string e = init.errorText();
+    EXPECT_NE(e.find("转台初始化失败"), std::string::npos) << e;
+    // 本机无设备时，真实链路可能回 ICMP 端口不可达（"UDP 报文失败"），
+    // 也可能只是超时（"查询…超时"）。两者都证明查询真的发出去了。
+    EXPECT_TRUE(e.find("UDP") != std::string::npos ||
+                e.find("查询") != std::string::npos)
+        << "失败原因没有说明查询/UDP 阶段：" << e;
+}
+
+TEST(SystemInitializerTest, 场景T_pekod旧取值给出迁移提示)
+{
+    std::string err;
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    std::string text = repoYaml("turntable.yaml");
+    text = replaceOnce(text, "protocol: \"sdk\"", "protocol: \"pekod\"");
+    ASSERT_FALSE(text.empty()) << "未命中 turntable.yaml 的 protocol 行";
+
+    const std::string dir = makeConfigVariantForFile("turntable.yaml", text, err);
+    ASSERT_FALSE(dir.empty()) << err;
+
+    ApplicationContext ctx;
+    SystemInitializer  init(ctx);
+    EXPECT_FALSE(init.initialize(dir)) << "旧协议值居然被接受了";
+
+    const std::string e = init.errorText();
+    EXPECT_NE(e.find("已移除"), std::string::npos) << e;
+    EXPECT_NE(e.find("pelco_d_udp"), std::string::npos)
+        << "迁移提示没给出新取值：" << e;
+}
+
+TEST(SystemInitializerTest, 场景T_广播地址被配置层拒绝)
+{
+    std::string err;
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    std::string text = repoYaml("turntable.yaml");
+    text = replaceOnce(text, "protocol: \"sdk\"", "protocol: \"pelco_d_udp\"");
+    ASSERT_FALSE(text.empty());
+    text = replaceOnce(text, "center_threshold: 50.0",
+                       "center_threshold: 50.0\n"
+                       "   host: \"255.255.255.255\"\n"
+                       "   port: 6666\n"
+                       "   pelco_address: 1");
+    ASSERT_FALSE(text.empty());
+
+    const std::string dir = makeConfigVariantForFile("turntable.yaml", text, err);
+    ASSERT_FALSE(dir.empty()) << err;
+
+    ApplicationContext ctx;
+    SystemInitializer  init(ctx);
+    EXPECT_FALSE(init.initialize(dir)) << "广播地址被当成了合法转台地址";
+
+    const std::string e = init.errorText();
+    EXPECT_NE(e.find("单播"), std::string::npos) << e;
+    EXPECT_TRUE(ctx.turntable == nullptr) << "配置层已拒绝，却仍进入了转台装配";
+}
+
+TEST(SystemInitializerTest, 场景T_注入转台工厂返回空即失败且不回落)
+{
+    std::string err;
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    ApplicationContext ctx;
+    SystemInitializer  init(ctx);
+
+    ctx.turntableFactory =
+        [](const aircraft::data::TurntableConfig&, std::string& error) {
+            error = "注入槽按用例要求返回空（本次不得回落内置工厂）";
+            return std::unique_ptr<aircraft::device::ITurntableController>{};
+        };
+
+    EXPECT_FALSE(init.initialize("config"));
+    EXPECT_TRUE(ctx.turntable == nullptr) << "回落了内置工厂";
+    const std::string e = init.errorText();
+    EXPECT_NE(e.find("注入槽按用例要求返回空"), std::string::npos) << e;
+}
+
+namespace
+{
+struct CountingTurntable : aircraft::device::ITurntableController
+{
+    bool initialize() override { return true; }
+    bool move(const aircraft::data::TurntableCommand&) override { return true; }
+    aircraft::data::TurntableState state() override { return {}; }
+    void stop() override { ++stopCalls; }
+    int stopCalls = 0;
+};
+
+}  // namespace
+
+TEST(SystemInitializerTest, 场景T_注入工厂优先于协议且对象被实际装配)
+{
+    std::string err;
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    std::string text = repoYaml("turntable.yaml");
+    // 即使协议是"本批未实现"的 rs485，显式工厂也应优先生效 ——
+    // 这是装配槽的既有语义，不在协议分支里被悄悄绕过。
+    text = replaceOnce(text, "protocol: \"sdk\"", "protocol: \"rs485\"");
+    ASSERT_FALSE(text.empty());
+
+    const std::string virtualCamera = allVirtualCameraYaml();
+    ASSERT_FALSE(virtualCamera.empty());
+    const std::string dir = makeConfigVariantForFile(
+        "turntable.yaml", text, err, "camera.yaml", virtualCamera);
+    ASSERT_FALSE(dir.empty()) << err;
+
+    ApplicationContext ctx;
+    SystemInitializer  init(ctx);
+
+    ctx.turntableFactory =
+        [](const aircraft::data::TurntableConfig&, std::string&) {
+            return std::unique_ptr<aircraft::device::ITurntableController>(
+                new CountingTurntable());
+        };
+
+    EXPECT_TRUE(init.initialize(dir)) << init.errorText();
+    ASSERT_TRUE(ctx.turntable != nullptr);
+    EXPECT_NE(dynamic_cast<CountingTurntable*>(ctx.turntable.get()), nullptr)
+        << "装配的不是注入工厂造出的对象";
 }
 
 }  // namespace

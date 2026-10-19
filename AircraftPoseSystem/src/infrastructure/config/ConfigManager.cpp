@@ -31,6 +31,8 @@
 #include <string>
 #include <vector>
 
+#include <arpa/inet.h>
+
 #include <opencv2/core.hpp>
 
 #include "infrastructure/logger/Logger.h"
@@ -324,6 +326,29 @@ std::string joinDir(const std::string& dir, const char* file)
 bool insideRange(double v, double lo, double hi)
 {
     return v >= lo && v <= hi;
+}
+
+/// 转台地址必须是 IPv4 点分十进制单播地址。
+/// 拒绝 0.0.0.0、255.255.255.255 与 224.0.0.0/4（组播）：
+/// 把定位指令发到广播/组播等于向未知数量的设备下发运动指令。
+/// 允许 127.0.0.1 —— 测试与本地回环替身需要它。
+bool isUnicastIPv4Literal(const std::string& host)
+{
+    in_addr addr{};
+    if (::inet_pton(AF_INET, host.c_str(), &addr) != 1)
+    {
+        return false;
+    }
+    const std::uint32_t hostOrder = ntohl(addr.s_addr);
+    if (hostOrder == 0U || hostOrder == 0xFFFFFFFFU)
+    {
+        return false;
+    }
+    if ((hostOrder & 0xF0000000U) == 0xE0000000U)
+    {
+        return false;
+    }
+    return true;
 }
 
 bool strictlyIncreasing(const double* v, int n)
@@ -770,13 +795,23 @@ bool ConfigManager::load(const std::string& configDir)
         // 协议白名单（TurntableConfig.h 注释冻结的取值集合）。
         // 用白名单而不是"非空即可"：字符串协议名的拼写错误
         // （"sdk " / "SDK"）在别处只会表现为"转台没反应"。
-        static const char* const kProtocols[] = {"sdk", "pekod", "rs485", "network"};
-        if (std::find_if(std::begin(kProtocols), std::end(kProtocols),
-                         [&](const char* p) { return turntable_.protocol == p; }) ==
-            std::end(kProtocols))
+        static const char* const kProtocols[] = {"sdk", "pelco_d_udp", "rs485",
+                                                 "network"};
+        if (turntable_.protocol == "pekod")
         {
-            errors_.push_back("turntable.protocol 非法：" + turntable_.protocol +
-                              "（允许 sdk / pekod / rs485 / network）");
+            // 旧取值不能当作 "sdk" 或默认值处理：那会把一台真实转台
+            // 静默换成一个不存在的虚拟件（C-22）。
+            errors_.push_back("turntable.protocol 取值 \"pekod\" 已移除，"
+                              "请改为 \"pelco_d_udp\"（C-22）");
+        }
+        else if (std::find_if(std::begin(kProtocols), std::end(kProtocols),
+                              [&](const char* p) {
+                                  return turntable_.protocol == p;
+                              }) == std::end(kProtocols))
+        {
+            errors_.push_back(
+                "turntable.protocol 非法：" + turntable_.protocol +
+                "（允许 sdk / pelco_d_udp / rs485 / network）");
         }
         if (!(turntable_.azimuthMin < turntable_.azimuthMax))
         {
@@ -815,6 +850,112 @@ bool ConfigManager::load(const std::string& configDir)
         {
             // 阈值 <=0 会让对准判据恒真（ENG-09 §6.3）
             errors_.push_back("turntable.center_threshold 必须为正");
+        }
+
+        // ---- Pelco-D/UDP 通信键（C-22 / SYS-17 V1.5 §8）----
+        //
+        // 只在 protocol == "pelco_d_udp" 时读取：既有 sdk 配置不应每次
+        // 启动都多出 10 条"取了默认值"的记录。
+        if (turntable_.protocol == "pelco_d_udp")
+        {
+            turntable_.host = r.text(g["host"], "host", "");
+            turntable_.port = r.integer(g["port"], "port", 6666);
+            turntable_.pelcoAddress =
+                r.integer(g["pelco_address"], "pelco_address", 1);
+            turntable_.replyTimeoutMs =
+                r.integer(g["reply_timeout_ms"], "reply_timeout_ms", 50);
+            turntable_.pollIntervalMs =
+                r.integer(g["poll_interval_ms"], "poll_interval_ms", 50);
+            turntable_.stableReadCount =
+                r.integer(g["stable_read_count"], "stable_read_count", 3);
+            turntable_.stableThresholdDeg = r.real(
+                g["stable_threshold_deg"], "stable_threshold_deg", 0.02);
+            turntable_.arrivalToleranceDeg = r.real(
+                g["arrival_tolerance_deg"], "arrival_tolerance_deg", 0.2);
+            turntable_.commFailureThreshold = r.integer(
+                g["comm_failure_threshold"], "comm_failure_threshold", 5);
+            turntable_.useSpeedControl = r.boolean(
+                g["use_speed_control"], "use_speed_control", false);
+
+            if (turntable_.host.empty())
+            {
+                errors_.push_back(
+                    "turntable.host 未配置：pelco_d_udp 必须给出转台 IPv4 地址"
+                    "（出厂地址不入库，实机配置放仓库外）");
+            }
+            else if (!isUnicastIPv4Literal(turntable_.host))
+            {
+                errors_.push_back(
+                    "turntable.host 必须是 IPv4 点分十进制**单播**地址："
+                    "\"" + turntable_.host + "\"");
+            }
+            if (!insideRange(turntable_.port, 1, 65535))
+            {
+                errors_.push_back("turntable.port 必须在 1..65535（实际 " +
+                                  std::to_string(turntable_.port) + "）");
+            }
+            if (!insideRange(turntable_.pelcoAddress, 1, 255))
+            {
+                errors_.push_back(
+                    "turntable.pelco_address 必须在 1..255（实际 " +
+                    std::to_string(turntable_.pelcoAddress) +
+                    "）；这是 7 字节帧里的设备地址，不是 IP 地址");
+            }
+            if (!insideRange(turntable_.replyTimeoutMs, 10, 1000))
+            {
+                errors_.push_back("turntable.reply_timeout_ms 越界：" +
+                                  std::to_string(turntable_.replyTimeoutMs) +
+                                  "（允许 10..1000）");
+            }
+            if (!insideRange(turntable_.pollIntervalMs, 20, 1000))
+            {
+                errors_.push_back("turntable.poll_interval_ms 越界：" +
+                                  std::to_string(turntable_.pollIntervalMs) +
+                                  "（允许 20..1000）");
+            }
+            if (!insideRange(turntable_.stableReadCount, 2, 20))
+            {
+                errors_.push_back("turntable.stable_read_count 越界：" +
+                                  std::to_string(turntable_.stableReadCount) +
+                                  "（允许 2..20）");
+            }
+            if (!insideRange(turntable_.stableThresholdDeg, 0.001, 1.0))
+            {
+                errors_.push_back("turntable.stable_threshold_deg 越界（允许 "
+                                  "0.001..1.0 deg）");
+            }
+            if (!insideRange(turntable_.arrivalToleranceDeg, 0.02, 1.0))
+            {
+                errors_.push_back("turntable.arrival_tolerance_deg 越界（允许 "
+                                  "0.02..1.0 deg）");
+            }
+            if (!insideRange(turntable_.commFailureThreshold, 1, 20))
+            {
+                errors_.push_back("turntable.comm_failure_threshold 越界：" +
+                                  std::to_string(
+                                      turntable_.commFailureThreshold) +
+                                  "（允许 1..20）");
+            }
+        }
+        else
+        {
+            // 其他协议下显式写出这些键，多半是配置抄错了位置；
+            // 静默忽略会让"我明明配了地址"变成一个查不出的问题。
+            static const char* const kPelcoOnlyKeys[] = {
+                "host",           "port",           "pelco_address",
+                "reply_timeout_ms", "poll_interval_ms", "stable_read_count",
+                "stable_threshold_deg", "arrival_tolerance_deg",
+                "comm_failure_threshold", "use_speed_control"};
+            for (const char* key : kPelcoOnlyKeys)
+            {
+                const cv::FileNode node = g[key];
+                if (!node.empty() && !node.isNone())
+                {
+                    warnings_.push_back(
+                        std::string("turntable.") + key +
+                        "：仅 pelco_d_udp 使用，当前协议已忽略");
+                }
+            }
         }
     }
 

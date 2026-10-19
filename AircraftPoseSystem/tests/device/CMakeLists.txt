@@ -21,3 +21,15 @@ aps_add_test(test_device_layer
         data
         device
 )
+
+# Pelco-D 编解码/传输/会话/后端（C-22）。源文件逐步加入，显式列举。
+aps_add_test(test_pelco_d
+    SOURCES
+        PelcoDCodecTest.cpp
+        PelcoDTransportTest.cpp
+        PelcoDSessionTest.cpp
+        PelcoDTurntableControllerTest.cpp
+    DEPENDS
+        data
+        device
+)

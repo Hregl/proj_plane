@@ -56,6 +56,8 @@
 #include "device/camera/ICameraBackend.h"
 #include "device/camera/ImvCameraBackend.h"
 #include "device/camera/VirtualCameraBackend.h"
+#include "device/turntable/PelcoDTurntableController.h"
+#include "device/turntable/VirtualTurntable.h"
 #include "infrastructure/FileUtil.h"
 
 namespace aircraft
@@ -638,12 +640,69 @@ bool SystemInitializer::buildDevices()
         warn("触发：" + ctx_.trigger->lastErrorText());
     }
 
-    // ---- 转台 ----
-    ctx_.turntable =
-        std::make_unique<device::VirtualTurntable>(ctx_.config->turntable());
+    // ---- 转台（C-22）----
+    //
+    // ⚠ 未知/未实现协议必须**显式失败**。静默回落 VirtualTurntable 会让
+    //   操作者以为在控制真实转台，实际整个测量跑在一台不存在的设备上。
+    if (ctx_.turntableFactory)
+    {
+        std::string factoryError;
+        ctx_.turntable =
+            ctx_.turntableFactory(ctx_.config->turntable(), factoryError);
+        if (!ctx_.turntable)
+        {
+            errorText_ = "转台装配失败：" +
+                         (factoryError.empty() ? "工厂返回空" : factoryError);
+            return false;
+        }
+    }
+    else
+    {
+        const data::TurntableConfig& tcfg = ctx_.config->turntable();
+        if (tcfg.protocol == "sdk")
+        {
+            ctx_.turntable = std::make_unique<device::VirtualTurntable>(tcfg);
+        }
+        else if (tcfg.protocol == "pelco_d_udp")
+        {
+            auto pelco =
+                std::make_unique<device::PelcoDTurntableController>(tcfg);
+            if (ctx_.logger)
+            {
+                // ⚠ sink 由 worker 线程调用：只走 Logger（自身持锁），
+                //   不得调用 SystemInitializer::warn() —— 那会改
+                //   warnings_，与主线程竞争。
+                pelco->setDiagnosticSink([this](const std::string& message) {
+                    ctx_.logger->warn("device", message);
+                });
+            }
+            ctx_.turntable = std::move(pelco);
+        }
+        else if (tcfg.protocol == "rs485" || tcfg.protocol == "network")
+        {
+            errorText_ = "转台协议 \"" + tcfg.protocol +
+                         "\" 已登记但本批未实现；拒绝回落虚拟后端（C-22）";
+            return false;
+        }
+        else
+        {
+            errorText_ = "转台协议未知：" + tcfg.protocol;
+            return false;
+        }
+    }
+
     if (!ctx_.turntable->initialize())
     {
         errorText_ = "转台初始化失败（检查 turntable.yaml 的行程限位与速度）";
+        if (auto* pelco = dynamic_cast<device::PelcoDTurntableController*>(
+                ctx_.turntable.get()))
+        {
+            const std::string detail = pelco->lastErrorText();
+            if (!detail.empty())
+            {
+                errorText_ += "：" + detail;
+            }
+        }
         return false;
     }
 
@@ -690,6 +749,15 @@ void SystemInitializer::rollbackDevices()
     //
     // ⚠ 逆序不是形式：`close()` 关设备、销毁句柄，之后 `stop()` 已无处可停。
     //    反过来（先 close 再 stop）在真实后端上会向一个已销毁的句柄停流。
+    // 转台先停：只在有未完成动作/锁存错误时才会真正发停止帧；
+    // 只读启动（没有 move）不会产生任何控制指令。
+    if (ctx_.turntable)
+    {
+        ctx_.turntable->stop();
+        // stop() 返回后没有未完成动作；析构会 join worker 并关闭 socket。
+        ctx_.turntable.reset();
+    }
+
     const std::shared_ptr<device::ICameraBackend> order[] = {
         ctx_.backend100, ctx_.backend50, ctx_.backend25};
 

@@ -19,9 +19,12 @@
 
 ---
 turntable:
-   # 通信协议："sdk" | "pekod" | "rs485" | "network"
-   # 第一阶段只有 "sdk"（VirtualTurntable）可用；真实协议由供货方确定
-   # （SYS-10 现场接口），届时此处改值并实现对应后端。
+   # 通信协议："sdk" | "pelco_d_udp" | "rs485" | "network"（C-22）
+   #   "sdk"         → VirtualTurntable（仓库默认；虚拟件）
+   #   "pelco_d_udp" → PelcoDTurntableController（真实 Pelco-D over UDP）
+   #   "rs485"/"network" → 已登记但未实现，启动时**显式失败**，
+   #                      不会静默回落虚拟后端
+   # 旧取值 "pekod" 已删除；保留在配置里会导致启动失败并提示迁移。
    protocol: "sdk"
    # 方位角行程（deg）。360° 水平回转 → ±180°。
    azimuth_min: -180.0
@@ -40,3 +43,23 @@ turntable:
    fine_speed: 1.2
    # 中心判据阈值（pixel），见文件头说明。
    center_threshold: 50.0
+
+   # ---- Pelco-D/UDP 通信键（仅 protocol == "pelco_d_udp" 时读取）----
+   #
+   # ⚠ host 默认必须留空，且**出厂内网 IP 不得进入版本库**。
+   #   实机配置放在仓库外的本地目录（例如 验收证据/ 下，已 gitignore），
+   #   通过 `AircraftPoseSystem <配置目录>` 的 argv[1] 指定。
+   #
+   # 下列键在 "sdk" 下若被显式写出，ConfigManager 会告警"仅 pelco_d_udp
+   # 使用"，因此这里只作为示例放在注释里：
+   #
+   #   host: ""                    # IPv4 点分十进制单播地址；空 ⇒ 启动失败
+   #   port: 6666                  # 1..65535
+   #   pelco_address: 1            # 1..255；7 字节帧里的设备地址，不是 IP
+   #   reply_timeout_ms: 50        # 10..1000
+   #   poll_interval_ms: 50        # 20..1000
+   #   stable_read_count: 3        # 2..20
+   #   stable_threshold_deg: 0.02  # 0.001..1.0
+   #   arrival_tolerance_deg: 0.2  # 0.02..1.0（与 SYS-10 §3.3 对齐）
+   #   comm_failure_threshold: 5   # 1..20
+   #   use_speed_control: false    # false = 设备默认速度（本批取值）

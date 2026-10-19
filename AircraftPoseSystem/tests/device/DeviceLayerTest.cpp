@@ -49,7 +49,6 @@
 #include "device/camera/ImvCameraBackend.h"
 #include "device/camera/MultiCameraManager.h"
 #include "device/camera/VirtualCameraBackend.h"
-#include "device/turntable/PekoTurntableController.h"
 #include "device/turntable/VirtualTurntable.h"
 #include "device/trigger/HardwareTriggerController.h"
 #include "device/trigger/VirtualTriggerController.h"
@@ -3617,29 +3616,6 @@ TEST(ImvCameraBackendTest, CloseWithoutInitializeIsOkAndCallsNoSdk)
     ImvCameraBackend backend(cfg, api);
     EXPECT_TRUE(backend.close().ok());
     EXPECT_TRUE(api->callLog.empty());
-}
-
-TEST(PekoTurntableControllerTest, ReportsUnavailableAndDoesNotFakeMotion)
-{
-    // 转台无冗余（SYS-08 §7.5）。若桩假装成功，对准算法会在永远不动的
-    // 转台上反复下发命令，直到耗尽 8 次 ALIGN 重试报 code=2003 ——
-    // **错误码指向算法，根因却在设备桩**。
-    data::TurntableConfig cfg = makeTurntableConfig();
-    cfg.protocol = "pekod";
-
-    PekoTurntableController turntable(cfg);
-    EXPECT_FALSE(turntable.initialize());
-
-    data::TurntableCommand cmd;
-    cmd.azimuthCommand   = 5.0;
-    cmd.elevationCommand = 5.0;
-    EXPECT_FALSE(turntable.move(cmd));
-
-    // state() 绝不回放 lastCommand_：那会让对准判据看到"已在目标上"，
-    // 使一台没接的转台让整个流程继续走到给出错误结果。
-    const data::TurntableState s = turntable.state();
-    EXPECT_EQ(s.motion, data::TurntableMotionState::IDLE);
-    EXPECT_DOUBLE_EQ(s.azimuth, 0.0);
 }
 
 TEST(HardwareTriggerControllerTest, ReportsUnavailable)
