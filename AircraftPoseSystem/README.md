@@ -126,6 +126,13 @@
 > | `build` | 默认根（SDK 已解包）⇒ `APS_HAVE_IMVSDK=1` | 真实适配分支：`/tmp/gtshim/build_tests_havsdk.sh` ⇒ `sysinittest_havsdk`、`DeviceLayerTest_havsdk` |
 > | `build_nosdk` | `-DIMV_SDK_ROOT=/nonexistent` ⇒ `APS_HAVE_IMVSDK=0` | 无 SDK 的**诚实桩**分支，须同样构建通过 |
 > | `build-sdk` | `-DIMV_SDK_ROOT=$PWD/third_party/imvsdk` | 与 `build` 同分支，进程级与安装态证据取自它 |
+>
+> 2026-10-20 起 `APS_HAVE_IMVSDK` 是**查找结果的派生值**（`CACHE INTERNAL`），
+> 不再接受作为输入：旧写法 `-DAPS_HAVE_IMVSDK=0/1` 会被 `Dependencies.cmake`
+> 的查找结果覆盖，脚本曾因此“声称测了 SDK 变体、实际跑的是无 SDK 构建”。
+> 选择分支请用 `-DAPS_SDK_MODE=AUTO|ON|OFF`（默认 `AUTO`；`ON` 缺 SDK 直接
+> 配置失败，`OFF` 明确不查找）。旧变量只在旧构建目录首次配置时映射并告警。
+> `tests/run_tests.sh` 读取缓存中的实际检测值，模式与结果不一致时 `exit 1`。
 
 > 因此该数字证明的是"逻辑在当前夹具下自洽"，
 > **不等于**"在正式测试框架下通过"，也不等于"应用级全流程验收通过"——

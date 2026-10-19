@@ -672,6 +672,16 @@ private:
     /// 没有这个标记就无法区分"该发指令"与"该等它走完"。
     bool moveIssued_ = false;
 
+    /// 本任务是否**曾经成功受理过**转台运动指令。
+    ///
+    /// STABILIZE 的可采集判据需要它：`IDLE` 只在“从未指令过运动”时
+    /// 才是可信的静置事实（转台本来就停在初始位置）；一旦本任务发出过
+    /// 指令，`IDLE` 就可能来自后端**撤销 STABLE**（到位后读数偏离），
+    /// 此时不得仅凭图像居中继续累计稳定帧。
+    /// 与 `moveIssued_` 的区别：后者在进入 STABILIZE 时被复位，本字段
+    /// 随任务存续。
+    bool turntableCommanded_ = false;
+
     /// STABILIZE：连续稳定帧计数（SYS-08 §5.5 的 N ≥ 3）。
     int stableFrames_ = 0;
 

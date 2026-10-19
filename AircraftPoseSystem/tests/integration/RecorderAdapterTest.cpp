@@ -680,6 +680,45 @@ TEST(RecorderAdapter, MetadataMergeRulesAreExplicitAndNeverStitchIdentities)
         EXPECT_TRUE(anyContains(missing, "model_type"))
             << "拒绝拼接后必须按必填缺失如实登记";
     }
+
+    // ---- 反向：model_id 是合成资产，model_type 却声称 production ----
+    //
+    // 上一段只覆盖了“synthetic 类型 + 非合成 id”。反向同样是把两个
+    // 不同资产的字段拼成一条身份：守卫必须双向生效，不能只挡一个方向。
+    {
+        aircraft::data::MeasurementRecord r = recordWithSentinels();
+        r.task.taskId     = "measurement_merge_stitch_reverse";
+        r.calibrationId   = "";
+        r.modelId         = "";
+        r.softwareVersion = "";
+        r.runMode         = "";
+        r.truthSource     = "";
+        r.modelType       = "";
+
+        RunMetadata meta;
+        meta.runMode   = "simulation";
+        meta.modelType = "production";
+        const std::string dir =
+            saveWith(r, meta, aircraft::data::synthetic::modelId());
+        ASSERT_FALSE(dir.empty());
+        cv::FileStorage fs(joinPath(dir, "result.json"),
+                           cv::FileStorage::READ);
+        ASSERT_TRUE(fs.isOpened());
+        std::string v;
+        fs["model_id"] >> v;
+        EXPECT_EQ(v, aircraft::data::synthetic::modelId());
+        fs["model_type"] >> v;
+        EXPECT_TRUE(v.empty())
+            << "合成 model_id 与 production 类型被拼成了一条身份：" << v;
+        const std::vector<std::string> conflicts =
+            readStrings(fs["metadata_conflicts"]);
+        EXPECT_TRUE(anyContains(conflicts, "拒绝拼装身份"))
+            << "反向拼接没有留下诊断";
+        const std::vector<std::string> missing =
+            readStrings(fs["missing_required_fields"]);
+        EXPECT_TRUE(anyContains(missing, "model_type"))
+            << "反向拼接后必须按必填缺失如实登记";
+    }
 }
 
 /// 适配器**不得**动测量事实。

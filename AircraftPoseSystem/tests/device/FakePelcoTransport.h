@@ -44,6 +44,16 @@ public:
     /// atomic：控制器测试会在 worker 运行时从主线程修改它。
     std::atomic<int> receiveBlockMs{0};
 
+    /// true = 像真实 UDP socket 一样，按调用方给的 `timeoutMs` 等待
+    /// （上限 500 ms），而不是立即返回 Timeout。
+    /// 用于验证轮询期间的停止请求能在一个接收切片内被处理；
+    /// 默认 false，保持既有用例的毫秒级运行。
+    std::atomic<bool> honorReceiveTimeout{false};
+
+    /// 抑制定位帧回显：0 = 正常；1 = 水平轴；2 = 垂直轴。
+    /// 用于制造“第一轴已交付、第二轴仍在等回显”的部分发送窗口。
+    std::atomic<int> dropMoveEchoAxis{0};
+
     /// 接下来 N 次**停止帧**发送失败（模拟停止未交付）。
     /// 按帧内容识别，不影响查询与定位帧。
     std::atomic<int> failStopSends{0};
@@ -135,6 +145,14 @@ public:
         if (blockMs > 0)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(blockMs));
+        }
+        else if (honorReceiveTimeout.load() && timeoutMs > 0)
+        {
+            // 模拟真实 UDP：在调用方给的切片内等待。会话层的切片是
+            // ≤10 ms，故这里的事件粒度就是“一个接收切片”。
+            const int slice =
+                std::min(timeoutMs, 500);
+            std::this_thread::sleep_for(std::chrono::milliseconds(slice));
         }
 
         TransportResult result;
@@ -359,6 +377,14 @@ private:
         {
             --positioningChecksumErrors;
             transport->inbox.push_back(marker(0xFF));
+            return;
+        }
+
+        // 可抑制某一轴的回显：制造“部分发送后取消”的窗口。
+        // 此时设备不改变角度（等同于未受理/未回复）。
+        const int dropAxis = transport->dropMoveEchoAxis.load();
+        if ((dropAxis == 1 && horizontal) || (dropAxis == 2 && !horizontal))
+        {
             return;
         }
 

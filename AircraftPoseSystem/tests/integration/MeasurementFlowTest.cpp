@@ -127,6 +127,11 @@ public:
     /// 是否上报 ERROR 运动状态（§7.5：转台故障 → 直接 FAILED，不重试）。
     bool errorState = false;
 
+    /// 模拟真实后端**撤销 STABLE 后落到 IDLE**（评审 2026-10-20 第 4 项：
+    /// 到位后读数偏离/样本失效时，C2 要求撤销稳定状态）。
+    /// 置位后 state() 在无待执行指令时返回 IDLE 而不是 STABLE。
+    bool revokedToIdle = false;
+
     /// 每次 move() 后返回 MOVING 的次数。
     int movingTicks = 1;
 
@@ -202,7 +207,9 @@ public:
         elevation = targetEl_;
         s.azimuth = azimuth;
         s.elevation = elevation;
-        s.motion = aircraft::data::TurntableMotionState::STABLE;
+        s.motion = revokedToIdle
+                       ? aircraft::data::TurntableMotionState::IDLE
+                       : aircraft::data::TurntableMotionState::STABLE;
         return s;
     }
 
@@ -1201,6 +1208,43 @@ TEST(MeasurementFlowTest, 正常路径应走完12状态并成功终止)
     EXPECT_EQ(h.recorder_.lastRecord.task.state, S::COMPLETE);
     EXPECT_TRUE(h.recorder_.lastRecord.task.result.success);
     EXPECT_NEAR(h.recorder_.lastRecord.task.result.yaw, 12.34, 1e-9);
+}
+
+/// 评审 2026-10-20 第 4 项：后端撤销 STABLE 后落到 IDLE，上层不得
+/// 仅凭“图像仍然居中”继续累计稳定帧。旧实现只拦 ERROR/MOVING，
+/// 三次 tick 后就会进入 MEASURE_SELECT。
+TEST(MeasurementFlowTest, 撤销STABLE后STABILIZE不得仅凭图像居中继续)
+{
+    Harness h;
+    h.turntableConfig_ = configuredTurntable();
+    h.build();
+
+    h.controller_->startMeasurement(0);
+    uint64_t now = 0;
+    for (int i = 0; i < 40 && h.controller_->state() != S::STABILIZE; ++i)
+    {
+        now += kStepNs;
+        h.tickAt(now);
+    }
+    ASSERT_EQ(h.controller_->state(), S::STABILIZE)
+        << "前提不成立：未进入 STABILIZE";
+    ASSERT_GT(h.turntable_.moveCount, 0)
+        << "前提不成立：本任务从未指令过转台";
+
+    // 后端撤销 STABLE：转台侧不再给出可采集的稳定结论。
+    h.turntable_.revokedToIdle = true;
+
+    for (int i = 0; i < 5; ++i)
+    {
+        now += kStepNs;
+        h.tickAt(now);
+        const S s = h.controller_->state();
+        EXPECT_NE(s, S::MEASURE_SELECT)
+            << "撤销 STABLE 后第 " << (i + 1)
+            << " 个 tick 仍进入了 MEASURE_SELECT";
+        EXPECT_NE(s, S::CAPTURE);
+        EXPECT_NE(s, S::COMPLETE);
+    }
 }
 
 TEST(MeasurementFlowTest, 正常路径的每个尝试都不超过其状态超时)

@@ -23,6 +23,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
+#include <string>
 
 #include <opencv2/core.hpp>
 
@@ -324,6 +326,10 @@ bool CalibrationManager::load(const std::string& calibrationDir)
         return false;
     };
 
+    // R10：文件解析异常（畸形 YAML、错误节点类型）必须落到“拒绝装载、
+    // 不保留半装载状态”的同一收口，而不是把 cv::Exception 抛给启动路径。
+    try
+    {
     // ---- 1 内参 ----
     for (int i = 0; i < 3; ++i)
     {
@@ -411,6 +417,18 @@ bool CalibrationManager::load(const std::string& calibrationDir)
         {
             calibrationId_ = id;
         }
+    }
+
+    }
+    catch (const cv::Exception& e)
+    {
+        return fail("标定文件解析异常（R10，拒绝装载）：" +
+                    std::string(e.what()));
+    }
+    catch (const std::exception& e)
+    {
+        return fail("标定文件解析异常（R10，拒绝装载）：" +
+                    std::string(e.what()));
     }
 
     loaded_ = true;

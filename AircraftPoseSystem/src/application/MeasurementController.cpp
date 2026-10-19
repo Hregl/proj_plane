@@ -293,6 +293,10 @@ void MeasurementController::startMeasurement(uint64_t nowNs)
     statistics_         = data::MeasurementStatistics{};
     statisticsReceived_ = false;
 
+    // 新的测量任务尚未指令过转台：STABILIZE 中“从未指令 ⇒ IDLE 可信”
+    // 的判据只能对**本任务**成立，不得继承上一次任务。
+    turntableCommanded_ = false;
+
     degraded_ = false;
     degradationNotice_ = data::ErrorInfo{};
     availableCameras_ = 0;
@@ -636,7 +640,8 @@ void MeasurementController::stepAlign(uint64_t nowNs)
         return;
     }
 
-    moveIssued_ = true;
+    moveIssued_         = true;
+    turntableCommanded_ = true;
 }
 
 void MeasurementController::stepStabilize(uint64_t nowNs)
@@ -685,6 +690,55 @@ void MeasurementController::stepStabilize(uint64_t nowNs)
         // "等待转台停止"本身就是这个状态的功能。
         stableFrames_ = 0;
         return;
+    }
+
+    // ---- 转台侧的“可采集”判据（C2 / 评审 2026-10-20 第 4 项）----------
+    //
+    // 图像居中**不能单独**证明可以采集：后端会在“到位后读数偏离/
+    // 样本失效/过期”时撤销 STABLE，而撤销后的 resting state 是 IDLE。
+    // 若这里把 IDLE 一律当作静止，图像一居中就会继续累计稳定帧 ——
+    // 上层等于忽略了转台的撤销结论。
+    //
+    // 判据：
+    //  · STABLE：后端本轮样本满足到位+连续不变，接受；
+    //  · IDLE  ：只有**本任务从未指令过运动**时才可信（转台本来就停在
+    //            初始位置，没有“撤销”这回事）；
+    //  · 其余（IDLE+本任务已指令过、或未知值）：不累计，等待后端重新
+    //            给出 STABLE；窗口到期后按既有 §7.3 回退 ALIGN。
+    const bool deviceStable = ts.motion == data::TurntableMotionState::STABLE;
+    const bool restWithoutCommand =
+        ts.motion == data::TurntableMotionState::IDLE && !turntableCommanded_;
+    if (!deviceStable && !restWithoutCommand)
+    {
+        stableFrames_ = 0;
+        return;
+    }
+
+    // 真实后端还实现并列的 ITurntableDiagnostics：有效性/新鲜度必须
+    // 真正被消费，而不是只在结果包里存一份。虚拟后端/测试桩不实现它，
+    // 此时退回 TurntableState 的判据（行为与改动前一致）。
+    if (const auto* diag =
+            dynamic_cast<const device::ITurntableDiagnostics*>(&turntable_))
+    {
+        const data::TurntableDiagnostics d = diag->diagnostics();
+        if (d.motionUncertain || d.errorLatched)
+        {
+            stableFrames_ = 0;
+            handleFailure(FailureKind::HARDWARE,
+                          data::ErrorInfo{data::kErrTurntableComm,
+                                          d.motionUncertain
+                                              ? "转台运动状态不确定（STABILIZE）"
+                                              : "转台错误已锁存（STABILIZE）",
+                                          nowNs},
+                          nowNs);
+            return;
+        }
+        if (!d.sampleFresh || !d.sample.valid)
+        {
+            // 没有本轮可信读数：既不是稳定帧，也不是失败。
+            stableFrames_ = 0;
+            return;
+        }
     }
 
     const data::CameraRole camera =

@@ -13,11 +13,15 @@
 #include "device/turntable/PelcoDSession.h"
 #include "gtest/gtest.h"
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 
 namespace aircraft
 {
@@ -886,6 +890,139 @@ TEST(PelcoDSessionTest, FirstFaultIsPreservedAcrossStopEscalation)
     f.session->stop();
     EXPECT_EQ(f.diag().firstFault.code,
               data::kErrTurntableStopNotDelivered);
+}
+
+// ---------------------------------------------------------------------------
+//  评审 2026-10-20：跨轮拼接 / 部分发送取消 / 停止故障码被覆盖
+// ---------------------------------------------------------------------------
+
+/// 两轴快照不得跨两次发布拼接。
+///
+/// 用 `setSamplePublishHookForTest` 把读端**确定性地**放进
+/// “方位角已写、俯仰角未写”的窗口：旧实现会读出 (30,20) 且 valid=true；
+/// seqlock 下读端必须等到整轮发布完成，只能读到 (10,20) 或 (30,40)。
+TEST(PelcoDSessionTest, TwoAxisSnapshotNeverMixesRounds)
+{
+    Fixture f(makeConfig(true), true);
+    ASSERT_TRUE(f.init());
+
+    f.dev.azimuth   = 10.0;
+    f.dev.elevation = 20.0;
+    f.session->pollOnce();
+    ASSERT_TRUE(f.diag().sample.valid);
+    EXPECT_DOUBLE_EQ(f.diag().sample.azimuth, 10.0);
+    EXPECT_DOUBLE_EQ(f.diag().sample.elevation, 20.0);
+
+    f.dev.azimuth   = 30.0;
+    f.dev.elevation = 40.0;
+
+    std::atomic<bool> inPublish{false};
+    f.session->setSamplePublishHookForTest([&inPublish] {
+        inPublish.store(true);
+        // 给读端足够时间进入读取路径；seqlock 让它等待，旧实现让它读撕裂值。
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    });
+
+    std::atomic<int>  mixed{0};
+    std::atomic<bool> readerDone{false};
+    double seenAz = 0.0;
+    double seenEl = 0.0;
+
+    std::thread reader([&] {
+        while (!inPublish.load())
+        {
+            std::this_thread::yield();
+        }
+        const data::TurntableState s = f.session->snapshot();
+        const data::TurntableDiagnostics d = f.session->diagnostics();
+        // 任何一侧出现 “新方位 + 旧俯仰” 都是跨轮拼接。
+        if ((s.azimuth == 30.0 && s.elevation == 20.0) ||
+            (d.sample.azimuth == 30.0 && d.sample.elevation == 20.0))
+        {
+            mixed.fetch_add(1);
+        }
+        seenAz = s.azimuth;
+        seenEl = s.elevation;
+        readerDone.store(true);
+    });
+
+    f.session->pollOnce();
+    reader.join();
+    f.session->setSamplePublishHookForTest({});
+
+    ASSERT_TRUE(readerDone.load());
+    EXPECT_EQ(mixed.load(), 0)
+        << "读端得到跨轮拼接的样本：(" << seenAz << ", " << seenEl << ")";
+    EXPECT_TRUE((seenAz == 10.0 && seenEl == 20.0) ||
+                (seenAz == 30.0 && seenEl == 40.0))
+        << "快照必须完整属于某一轮，实际 (" << seenAz << ", " << seenEl
+        << ")";
+}
+
+/// 首轴已发送后取消：停止帧必须真的发出去。
+TEST(PelcoDSessionTest, CancelledPartialMoveStillSendsStopFrame)
+{
+    Fixture f(makeConfig(true), true);
+    ASSERT_TRUE(f.init());
+    f.fake->sent.clear();
+
+    // ⚠ 必须制造“第一轴已发出、仍在等回显”的窗口（评审反例 1）。
+    // 若改成第二轴，走的是另一条取消分支，测不到水平轴的漏停止路径。
+    f.fake->dropMoveEchoAxis.store(1);
+
+    data::TurntableCommand command;
+    command.azimuthCommand   = 1.0;
+    command.elevationCommand = 0.0;
+
+    const std::function<bool()> abort = [&f] {
+        // 第一帧定位已发出 ⇒ 设备可能已经开始运动。
+        return f.fake->countSent(isPositioning) >= 1;
+    };
+
+    std::string error;
+    EXPECT_FALSE(f.session->move(command, error, abort));
+
+    EXPECT_EQ(f.dev.stopFrames, 1)
+        << "部分发送后取消必须补发停止帧，不能留下单轴运动";
+    const auto d = f.diag();
+    EXPECT_TRUE(d.stopFrameDelivered);
+    EXPECT_FALSE(d.motionUncertain);
+    EXPECT_NE(f.snap().motion, data::TurntableMotionState::IDLE)
+        << "停止帧刚交付、尚未观测到静止，不得谎报 IDLE";
+}
+
+/// 看门狗触发停止、但停止帧未交付：当前错误必须是 2005，
+/// 首因仍是 2008。旧实现随后用 2008 覆盖了 2005。
+TEST(PelcoDSessionTest, WatchdogStopNotDeliveredKeeps2005AsCurrentError)
+{
+    Fixture f(makeConfig(true), true);
+    std::uint64_t now = 1000000000ULL;
+    f.session->setClock([&now] { return now; });
+    ASSERT_TRUE(f.init());
+
+    f.dev.snapToTarget = false;
+    data::TurntableCommand command;
+    command.azimuthCommand   = 10.0;
+    command.elevationCommand = 0.0;
+    std::string error;
+    ASSERT_TRUE(f.session->move(command, error));
+
+    // 三次停止发送全部失败：停止未交付。
+    f.fake->failStopSends.store(100);
+
+    now += 7000000000ULL;   // 越过看门狗期限
+    f.session->pollOnce();
+
+    EXPECT_EQ(f.session->lastError().code,
+              data::kErrTurntableStopNotDelivered)
+        << "停止未交付的 2005 被原始故障码覆盖了";
+    EXPECT_EQ(f.diag().firstFault.code,
+              data::kErrTurntableMotionWatchdog)
+        << "首因必须仍是看门狗 2008";
+    const auto d = f.diag();
+    EXPECT_TRUE(d.motionUncertain);
+    EXPECT_FALSE(d.stopFrameDelivered);
+    EXPECT_EQ(f.snap().motion, data::TurntableMotionState::ERROR);
 }
 
 }  // namespace

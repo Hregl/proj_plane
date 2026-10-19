@@ -60,3 +60,53 @@ flowtest_san: 运行 45 个用例 | 失败断言数：0，异常用例数：0 | 
 sysinittest_san: 运行 21 个用例 | 失败断言数：0，异常用例数：0 | 无 AddressSanitizer/UBSan 报告
 
 ⚠ 全部为软件验证，不含任何实机运动/停止帧；生产只读会话控制帧仍须为 0。
+
+# ============================================================================
+# 独立复核整改批复测（2026-10-20）
+# 代码状态：HEAD 618856f + 未提交整改改动；已确认无 MUTATION 残留
+# ============================================================================
+
+## 构建
+$ cmake --build build -j8          PASS（AircraftPoseSystem）
+$ cmake --build build_nosdk -j8    PASS（AircraftPoseSystem）
+构建树自查：
+  build/CMakeCache.txt         APS_SDK_MODE:STRING=AUTO / APS_HAVE_IMVSDK:INTERNAL=TRUE
+  build_nosdk/CMakeCache.txt   APS_SDK_MODE:STRING=AUTO / APS_HAVE_IMVSDK:INTERNAL=FALSE
+
+## 垫片套件（逐个运行，未通配汇总）
+LD_LIBRARY_PATH=$PWD/build/imvsdk_runtime /tmp/gtshim/<suite>
+PelcoDTest:              运行 82 个用例 | 失败断言数：0，异常用例数：0
+flowtest:                运行 46 个用例 | 失败断言数：0，异常用例数：0
+OpticalLayerTest:        运行 48 个用例 | 失败断言数：0，异常用例数：0
+RecorderAdapterTest:     运行  8 个用例 | 失败断言数：0，异常用例数：0
+AlgorithmStageTest:      运行 23 个用例 | 失败断言数：0，异常用例数：0
+AlignmentControllerTest: 运行 21 个用例 | 失败断言数：0，异常用例数：0
+DeviceLayerTest:         运行 83 个用例 | 失败断言数：0，异常用例数：0
+PipelineTest:            运行 29 个用例 | 失败断言数：0，异常用例数：0
+PreviewLayerTest:        运行 40 个用例 | 失败断言数：0，异常用例数：0
+RecorderPackageTest:     运行 29 个用例 | 失败断言数：0，异常用例数：0
+StateMachineTest:        运行 27 个用例 | 失败断言数：0，异常用例数：0
+sysinittest:             运行 26 个用例 | 失败断言数：0，异常用例数：0
+
+合计：12 个垫片目标，462 个用例，0 失败断言，0 异常用例。
+新增/变更：PelcoDTest 76→82（R1/R2/R5/R6）、OpticalLayerTest 47→48（R10）、
+flowtest 45→46（R4）、RecorderAdapterTest 8→8（B1 反向断言并入既有用例）。
+
+## SDK 模式配置级验证（不构建、不运行）
+$ cmake -S . -B <off> -DAPS_SDK_MODE=OFF -DBUILD_TESTING=OFF
+  → exit 0；日志“APS_SDK_MODE=OFF：跳过 ImvSdk 查找”；
+    CMakeCache: APS_HAVE_IMVSDK:INTERNAL=FALSE
+$ cmake -S . -B <on> -DAPS_SDK_MODE=ON -DIMV_SDK_ROOT=/nonexistent -DBUILD_TESTING=OFF
+  → exit 1；“APS_SDK_MODE=ON ... 但未找到 ImvSdk”
+$ cmake -S . -B <legacy> -DAPS_HAVE_IMVSDK=0 -DBUILD_TESTING=OFF
+  → exit 0；告警“APS_HAVE_IMVSDK 已改为派生值”，APS_SDK_MODE 映射为 OFF，
+    APS_HAVE_IMVSDK:INTERNAL=FALSE
+
+## 原生入口
+$ bash tests/run_tests.sh
+结果：仍未执行（本机无 GoogleTest）。TEST_PREFIX 只做源码/配置级核对，
+不得据此声称 CTest 路径已通过。
+
+## ASan/UBSan
+本整改批未重跑。上一批 76/45/21 例的结果不代表新增用例。
+

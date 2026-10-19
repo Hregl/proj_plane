@@ -122,10 +122,24 @@ function(aps_add_test name)
         set(_wd_arg WORKING_DIRECTORY "${ARG_WORKING_DIRECTORY}")
     endif()
 
-    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
-        gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST ${_wd_arg})
+    # TEST_PREFIX（CMake 3.20+）：gtest_discover_tests 默认注册
+    # `Suite.Test`，而 tests/run_tests.sh 用 `ctest -R "^test_"` 只跑
+    # aps_add_test 注册的套件。没有前缀时**一条都匹配不到**，配上
+    # `--no-tests=error` 才不会被误读成“全部通过”。加前缀后名称为
+    # `test_pelcod.PelcoDSessionTest.xxx`，过滤恢复有效。
+    set(_prefix_arg "")
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.20)
+        set(_prefix_arg TEST_PREFIX "${name}.")
     else()
-        gtest_discover_tests(${name} ${_wd_arg})
+        message(STATUS
+            "[APS] CMake ${CMAKE_VERSION} < 3.20：gtest_discover_tests 不支持 "
+            "TEST_PREFIX，CTest 名称为 Suite.Test，run_tests.sh 的前缀过滤不适用")
+    endif()
+
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
+        gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST ${_prefix_arg} ${_wd_arg})
+    else()
+        gtest_discover_tests(${name} ${_prefix_arg} ${_wd_arg})
     endif()
 endfunction()
 

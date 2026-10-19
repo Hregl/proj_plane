@@ -17,21 +17,68 @@
 #  用法：
 #      bash tests/run_tests.sh              # build_tests/ 下配置并全量运行
 #      BUILD_DIR=/tmp/aps-build bash tests/run_tests.sh
-#      APS_HAVE_IMVSDK=1 bash tests/run_tests.sh   # 需要 SDK 变体时
+#      APS_SDK_MODE=ON bash tests/run_tests.sh    # 必须有 SDK（缺则失败）
+#      APS_SDK_MODE=OFF bash tests/run_tests.sh   # 明确无 SDK 构建树
+#
+#  APS_SDK_MODE 默认 AUTO（探测，找不到则降级）。旧变量 APS_HAVE_IMVSDK
+#  仅作兼容映射 —— 它曾经是**输入**，但会被 Dependencies.cmake 的查找结果
+#  覆盖，导致“传了 1 却仍是无 SDK 构建”。现在脚本只信 CMakeCache 里的
+#  实际检测值，并在模式与结果不一致时失败。
 # ============================================================================
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build_tests}"
-SDK="${APS_HAVE_IMVSDK:-0}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
+SDK_MODE="${APS_SDK_MODE:-}"
+if [[ -z "$SDK_MODE" && -n "${APS_HAVE_IMVSDK:-}" ]]; then
+    case "$APS_HAVE_IMVSDK" in
+        1|ON|on|TRUE|true)   SDK_MODE=ON ;;
+        0|OFF|off|FALSE|false) SDK_MODE=OFF ;;
+        *)
+            echo "[run_tests] 错误：APS_HAVE_IMVSDK=${APS_HAVE_IMVSDK} 无法识别。" >&2
+            exit 2
+            ;;
+    esac
+    echo "[run_tests] 警告：APS_HAVE_IMVSDK 已废弃，按 APS_SDK_MODE=$SDK_MODE 处理" >&2
+fi
+SDK_MODE="${SDK_MODE:-AUTO}"
+case "${SDK_MODE^^}" in
+    AUTO|ON|OFF) ;;
+    *)
+        echo "[run_tests] 错误：APS_SDK_MODE=$SDK_MODE 非法，只接受 AUTO / ON / OFF。" >&2
+        exit 2
+        ;;
+esac
+SDK_MODE="${SDK_MODE^^}"
+
 echo "[run_tests] 源码目录：$ROOT"
-echo "[run_tests] 构建目录：$BUILD_DIR（APS_HAVE_IMVSDK=$SDK）"
+echo "[run_tests] 构建目录：$BUILD_DIR（APS_SDK_MODE=$SDK_MODE）"
 
 cmake -S "$ROOT" -B "$BUILD_DIR" \
     -DBUILD_TESTING=ON \
-    -DAPS_HAVE_IMVSDK="$SDK"
+    -DAPS_SDK_MODE="$SDK_MODE"
+
+# ---- SDK 分支核对 ----------------------------------------------------------
+# 不能只看“传进去的模式”：Dependencies.cmake 里 APS_HAVE_IMVSDK 由
+# find_package 结果派生。这里读**实际缓存值**，避免再次出现“声称测了
+# SDK 变体、实际跑的是无 SDK 构建”。
+ACTUAL_SDK="$(grep -E '^APS_HAVE_IMVSDK:[A-Z]+=' "$BUILD_DIR/CMakeCache.txt" \
+    | tail -n 1 | cut -d= -f2)"
+if [[ -z "$ACTUAL_SDK" ]]; then
+    echo "[run_tests] 错误：CMakeCache.txt 中没有 APS_HAVE_IMVSDK（Dependencies.cmake 版本不匹配？）" >&2
+    exit 1
+fi
+echo "[run_tests] 实际检测：APS_HAVE_IMVSDK=$ACTUAL_SDK（APS_SDK_MODE=$SDK_MODE）"
+if [[ "$SDK_MODE" == "ON" && "$ACTUAL_SDK" != "TRUE" ]]; then
+    echo "[run_tests] 错误：要求 SDK，但实际未检测到 ImvSdk。" >&2
+    exit 1
+fi
+if [[ "$SDK_MODE" == "OFF" && "$ACTUAL_SDK" == "TRUE" ]]; then
+    echo "[run_tests] 错误：APS_SDK_MODE=OFF，但缓存中 APS_HAVE_IMVSDK=TRUE。" >&2
+    exit 1
+fi
 
 # ---- GoogleTest 检测 -------------------------------------------------------
 # tests/CMakeLists.txt 在缺 GTest 时直接 return()，**不会** add_subdirectory

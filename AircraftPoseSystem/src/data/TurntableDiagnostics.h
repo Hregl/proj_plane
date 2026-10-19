@@ -76,6 +76,15 @@ struct TurntableDiagnostics
     /// 样本是否未超过 `sample_stale_ms`（由读取时刻计算）。
     bool sampleFresh = false;
 
+    /// 运动事务编号：每开始一条新的运动命令即递增（0 = 尚无运动命令）。
+    /// 旧命令被覆盖/取消后，其停止事实仍属于旧事务，不能挂到新事务上。
+    std::uint64_t motionTransactionId = 0;
+
+    /// `stopFrameDelivered` / `stopObservedStationary` 所属的运动事务编号。
+    /// **与 `motionTransactionId` 不同 ⇒ 这两个肯定事实属于更早的事务。**
+    /// 新运动开始时二者也会被清零；本字段是并发读取时的第二道归属依据。
+    std::uint64_t stopFactsTransactionId = 0;
+
     /// 停止帧是否已交给传输层。**不等于**设备已收到或已停止。
     bool stopFrameDelivered = false;
 

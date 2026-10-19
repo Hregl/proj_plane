@@ -160,9 +160,78 @@ endif()
 # 查找细节在 FindImvSdk.cmake（模块化，遵循 CMake 的 Find<Package>.cmake
 # 约定，使 IDE 与 cmake --help-module 可用）。
 # ----------------------------------------------------------------------------
-set(APS_HAVE_IMVSDK FALSE)
+# ----------------------------------------------------------------------------
+# 4.1 查找模式：APS_SDK_MODE = AUTO / ON / OFF
+#
+# 旧版把 APS_HAVE_IMVSDK 当**输入**（-DAPS_HAVE_IMVSDK=1），但下面一行
+# `set(APS_HAVE_IMVSDK FALSE)` 会无条件覆盖命令行缓存值：调用者传 1 也
+# 选不到 SDK 分支，测试“证明 SDK 变体通过”时实际跑的是无 SDK 构建。
+#
+# 现在 APS_HAVE_IMVSDK 只作**派生结果**（CACHE INTERNAL），由查找结果决定：
+#   AUTO  探测；找不到则降级（默认）
+#   ON    必须有；找不到 FATAL_ERROR
+#   OFF   明确不查找（离线/无 SDK 构建树）
+# ----------------------------------------------------------------------------
+set(_aps_sdk_mode_given FALSE)
+if(DEFINED APS_SDK_MODE)
+    set(_aps_sdk_mode_given TRUE)
+endif()
 
-find_package(ImvSdk QUIET)
+set(APS_SDK_MODE "AUTO" CACHE STRING "ImvSdk 查找模式：AUTO / ON / OFF")
+set_property(CACHE APS_SDK_MODE PROPERTY STRINGS AUTO ON OFF)
+
+# 旧变量迁移：仅在本次是旧构建目录第一次配置（APS_SDK_MODE 尚未显式给出）
+# 时，把 -DAPS_HAVE_IMVSDK=0/1 映射成 OFF/ON 并告警；之后忽略它。
+if(DEFINED APS_HAVE_IMVSDK)
+    get_property(_aps_have_sdk_cache_type CACHE APS_HAVE_IMVSDK PROPERTY TYPE)
+    if(NOT _aps_have_sdk_cache_type STREQUAL "INTERNAL")
+        if(NOT _aps_sdk_mode_given)
+            if(APS_HAVE_IMVSDK)
+                set(APS_SDK_MODE "ON" CACHE STRING "ImvSdk 查找模式：AUTO / ON / OFF" FORCE)
+            else()
+                set(APS_SDK_MODE "OFF" CACHE STRING "ImvSdk 查找模式：AUTO / ON / OFF" FORCE)
+            endif()
+            message(WARNING
+                "[APS] APS_HAVE_IMVSDK 已改为派生值，不再接受作为输入。\n"
+                "      本次按旧值映射为 APS_SDK_MODE=${APS_SDK_MODE}；\n"
+                "      以后请直接使用 -DAPS_SDK_MODE=ON/OFF。")
+        else()
+            message(WARNING
+                "[APS] 忽略 -DAPS_HAVE_IMVSDK=${APS_HAVE_IMVSDK}："
+                "该值由查找结果派生，请改用 -DAPS_SDK_MODE。")
+        endif()
+        unset(_aps_have_sdk_cache_type)
+    endif()
+endif()
+
+string(TOUPPER "${APS_SDK_MODE}" _aps_sdk_mode_upper)
+if(NOT _aps_sdk_mode_upper MATCHES "^(AUTO|ON|OFF)$")
+    message(FATAL_ERROR
+        "[APS] APS_SDK_MODE=${APS_SDK_MODE} 非法，只接受 AUTO / ON / OFF")
+endif()
+
+set(APS_HAVE_IMVSDK FALSE)
+set(_aps_sdk_find FALSE)
+set(_aps_sdk_required FALSE)
+
+if(_aps_sdk_mode_upper STREQUAL "OFF")
+    set(ImvSdk_FOUND FALSE)
+    if(APS_REQUIRE_DEVICE_SDK)
+        message(FATAL_ERROR
+            "[APS] APS_SDK_MODE=OFF 与 APS_REQUIRE_DEVICE_SDK=ON 矛盾。\n"
+            "      要强制使用 SDK，请改为 -DAPS_SDK_MODE=ON。")
+    endif()
+    message(STATUS "[APS] APS_SDK_MODE=OFF：跳过 ImvSdk 查找（无 SDK 构建树）")
+else()
+    set(_aps_sdk_find TRUE)
+    if(_aps_sdk_mode_upper STREQUAL "ON")
+        set(_aps_sdk_required TRUE)
+    endif()
+endif()
+
+if(_aps_sdk_find)
+    find_package(ImvSdk QUIET)
+endif()
 
 if(ImvSdk_FOUND)
     set(APS_HAVE_IMVSDK TRUE)
@@ -208,16 +277,22 @@ if(ImvSdk_FOUND)
     endif()
 
     message(STATUS "[APS] 找到 ImvSdk：${ImvSdk_LIBRARIES}")
-elseif(APS_REQUIRE_DEVICE_SDK)
+elseif(_aps_sdk_required OR APS_REQUIRE_DEVICE_SDK)
     message(FATAL_ERROR
-        "[APS] APS_REQUIRE_DEVICE_SDK=ON 但未找到 ImvSdk。\n"
-        "      请指定 SDK 根目录：cmake .. -DIMV_SDK_ROOT=/path/to/ImvSdk")
+        "[APS] APS_SDK_MODE=ON 或 APS_REQUIRE_DEVICE_SDK=ON，但未找到 ImvSdk。\n"
+        "      请指定 SDK 根目录：cmake .. -DIMV_SDK_ROOT=/path/to/ImvSdk\n"
+        "      若本机本来就没有 SDK，请使用 -DAPS_SDK_MODE=OFF。")
 else()
     message(STATUS
         "[APS] 未找到 ImvSdk（非致命）：真实相机后端将在 Phase 2/Sprint 2 接入。\n"
         "      当前使用 VirtualCameraBackend 完成软件闭环（ENG-08 §3）。\n"
         "      拿到 SDK 后：cmake .. -DIMV_SDK_ROOT=/path/to/ImvSdk")
 endif()
+
+# 把查找结果写入缓存，供脚本/构建系统读取**实际**结果（而不是输入意图）。
+# INTERNAL 类型也让上面的旧变量迁移能区分“用户 -D 传入”与“本文件派生”。
+set(APS_HAVE_IMVSDK "${APS_HAVE_IMVSDK}" CACHE INTERNAL
+    "ImvSdk 是否可用（派生值，请用 APS_SDK_MODE 控制）" FORCE)
 
 # ----------------------------------------------------------------------------
 # 5 TurntableSdk（ENG-03 §11：Peko SDK / 网络协议库 / RS485 —— 可选依赖）

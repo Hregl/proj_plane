@@ -89,6 +89,14 @@ bool waitFor(Predicate predicate, int timeoutMs = 1500)
     return predicate();
 }
 
+bool isPositioningFrame(const PelcoDFrame& frame)
+{
+    return (frame.data1 == 0x00 &&
+            (frame.data2 == 0x4B || frame.data2 == 0x4D)) ||
+           ((frame.data1 == 0x4B || frame.data1 == 0x4D) &&
+            frame.data2 != 0x00);
+}
+
 bool isControlFrame(const PelcoDFrame& frame)
 {
     if (frame.data1 == 0x00 && frame.data2 == 0x00 &&
@@ -477,6 +485,144 @@ TEST(PelcoDTurntableControllerTest, QtEventLoopDispatchesStopWhileMoveInFlight)
     const auto d = controller.diagnostics();
     EXPECT_GT(d.stopRequestSeq, 0u);
     EXPECT_GE(d.stopCompletedSeq, d.stopRequestSeq);
+}
+
+// ---------------------------------------------------------------------------
+//  评审 2026-10-20：部分发送取消 / 轮询中停止 / 停止事实归属
+// ---------------------------------------------------------------------------
+
+/// 第一轴已发送、第二轴仍在等回显时取消：停止屏障必须真的发停止帧。
+/// 旧实现中 move() 取消后直接返回，worker 的 session->stop() 又因
+/// moving_ 仍为 false 而提前返回 —— 停止帧计数为 0。
+TEST(PelcoDTurntableControllerTest, PartialSendCancelStillSendsStopFrame)
+{
+    auto fake = std::make_shared<FakePelcoTransport>();
+    FakePelcoDevice dev;
+    dev.transport = fake.get();
+    dev.install();
+
+    PelcoDTurntableController controller(makeConfig(true), fake);
+    controller.setTestMotionGate(true);
+    ASSERT_TRUE(controller.initialize());
+
+    // 水平轴不回显：第一轴已交付，worker 停在**第一轴**的回显等待里。
+    // 这是评审反例 1 的窗口：停止必须补发，不能只覆盖第二轴的情形。
+    fake->dropMoveEchoAxis.store(1);
+
+    data::TurntableCommand command;
+    command.azimuthCommand   = 1.0;
+    command.elevationCommand = 0.0;
+    ASSERT_TRUE(controller.move(command));
+
+    ASSERT_TRUE(waitFor([&fake] {
+        return fake->countSent(isPositioningFrame) >= 1;
+    })) << "未能进入第一轴等待窗口";
+
+    controller.stop();
+
+    const auto d = controller.diagnostics();
+    EXPECT_GE(dev.stopFrames, 1)
+        << "部分发送后取消，停止帧计数仍为 0";
+    EXPECT_TRUE(d.stopFrameDelivered);
+    EXPECT_EQ(d.lastCommandOutcome, data::TurntableCommandOutcome::Cancelled);
+    EXPECT_GE(d.stopCompletedSeq, d.stopRequestSeq);
+}
+
+/// 轮询中的停止请求必须按接收切片处理，不能等满两轴各自的期限。
+/// 每轴 200 ms、切片 10 ms：旧实现 stop() 要等当前轮询结束（可达 ~400 ms）。
+TEST(PelcoDTurntableControllerTest, StopDuringPollingIsHandledWithinOneSlice)
+{
+    auto fake = std::make_shared<FakePelcoTransport>();
+    FakePelcoDevice dev;
+    dev.transport = fake.get();
+    dev.install();
+
+    // 必须是 MotionEnabled：ReadOnly 下 stop() 按只读门禁就是无帧 no-op，
+    // 测不到“停止被整轮轮询拖住”的路径。
+    data::TurntableConfig cfg = makeConfig(true);
+    cfg.replyTimeoutMs       = 200;   // 每轴期限
+    cfg.pollIntervalMs       = 5;
+    cfg.commFailureThreshold = 1000;  // 不因轮询中丢包锁存
+
+    PelcoDTurntableController controller(cfg, fake);
+    ASSERT_TRUE(controller.initialize());
+
+    // 初始化本身也要查询两轴，必须在 initialize() 成功之后再开始丢包，
+    // 否则失败的是初始化而不是轮询。
+    fake->honorReceiveTimeout.store(true);
+    dev.dropHorizontal = true;
+    dev.dropVertical   = true;
+
+    // 让 worker 进入轮询中的接收等待。
+    sleepMs(30);
+
+    const auto start = std::chrono::steady_clock::now();
+    controller.stop();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+
+    EXPECT_LT(elapsed.count(), 150)
+        << "stop() 被整轮轮询（2 × replyTimeoutMs）拖住了：" << elapsed.count()
+        << " ms";
+    const auto d = controller.diagnostics();
+    EXPECT_GE(d.stopCompletedSeq, d.stopRequestSeq);
+}
+
+/// 新运动不得携带上一次停止的“已交付/已观测静止”肯定事实。
+TEST(PelcoDTurntableControllerTest, NewMotionDoesNotCarryPreviousStopFacts)
+{
+    auto fake = std::make_shared<FakePelcoTransport>();
+    FakePelcoDevice dev;
+    dev.transport = fake.get();
+    dev.install();
+
+    PelcoDTurntableController controller(makeConfig(true), fake);
+    controller.setTestMotionGate(true);
+    ASSERT_TRUE(controller.initialize());
+
+    // 设备不回“已到位”：目标远离当前位置，会话保持 MOVING。
+    // 若先等 STABLE 再 stop()，会话已经静止，显式 stop() 按契约直接
+    // no-op（无停止帧、无停止事实），用例前提就不成立了。
+    dev.snapToTarget = false;
+
+    data::TurntableCommand command;
+    command.azimuthCommand   = 50.0;
+    command.elevationCommand = 0.0;
+    ASSERT_TRUE(controller.move(command));
+    ASSERT_TRUE(waitFor([&controller] {
+        return controller.state().motion == data::TurntableMotionState::MOVING;
+    }));
+
+    controller.stop();
+    ASSERT_TRUE(waitFor([&controller] {
+        return controller.diagnostics().stopObservedStationary;
+    })) << "停止后未观测到静止，用例前提不成立";
+
+    const auto afterStop = controller.diagnostics();
+    ASSERT_TRUE(afterStop.stopFrameDelivered);
+    ASSERT_TRUE(afterStop.stopObservedStationary);
+    const std::uint64_t stoppedTransaction = afterStop.stopFactsTransactionId;
+
+    // 新命令：诊断必须立即不再声称“已停止”。
+    command.azimuthCommand = 2.0;
+    ASSERT_TRUE(controller.move(command));
+    // 不能等 lastCommandOutcome == Delivered：上一条命令的结果就是
+    // Delivered，等待会立即返回，读到的仍是旧事务。事务号才是新命令
+    // 已被 worker 处理的判据。
+    ASSERT_TRUE(waitFor([&controller, stoppedTransaction] {
+        return controller.diagnostics().motionTransactionId >
+               stoppedTransaction;
+    })) << "新命令未被 worker 处理";
+
+    const auto afterMove = controller.diagnostics();
+    EXPECT_FALSE(afterMove.stopFrameDelivered)
+        << "新运动携带了上一次停止的 stopFrameDelivered";
+    EXPECT_FALSE(afterMove.stopObservedStationary)
+        << "新运动携带了上一次停止的 stopObservedStationary";
+    EXPECT_GT(afterMove.motionTransactionId, stoppedTransaction)
+        << "新运动必须开启新的运动事务";
+    EXPECT_LE(afterMove.stopFactsTransactionId, stoppedTransaction)
+        << "停止事实仍应归属于旧事务";
 }
 
 }  // namespace

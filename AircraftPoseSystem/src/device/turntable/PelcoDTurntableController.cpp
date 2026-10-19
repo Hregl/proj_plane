@@ -330,7 +330,12 @@ void PelcoDTurntableController::workerLoop()
         }
 
         // ---- 轮询 ----
-        session_->pollOnce();
+        // 停止请求/退出必须在**每个接收切片**后可见：一次双轴轮询
+        // 最坏等 2 × replyTimeoutMs，不能让它整段挡住停止屏障。
+        session_->pollOnce([this] {
+            return stopRequestSeq_.load() > stopCompletedSeq_.load() ||
+                   !running_.load();
+        });
 
         std::string errorText = session_->lastErrorText();
         std::function<void(const std::string&)> sink;

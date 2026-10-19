@@ -1,0 +1,1486 @@
+diff --git a/AircraftPoseSystem/README.md b/AircraftPoseSystem/README.md
+index fe1638c..2c874f3 100644
+--- a/AircraftPoseSystem/README.md
++++ b/AircraftPoseSystem/README.md
+@@ -126,6 +126,13 @@
+ > | `build` | 默认根（SDK 已解包）⇒ `APS_HAVE_IMVSDK=1` | 真实适配分支：`/tmp/gtshim/build_tests_havsdk.sh` ⇒ `sysinittest_havsdk`、`DeviceLayerTest_havsdk` |
+ > | `build_nosdk` | `-DIMV_SDK_ROOT=/nonexistent` ⇒ `APS_HAVE_IMVSDK=0` | 无 SDK 的**诚实桩**分支，须同样构建通过 |
+ > | `build-sdk` | `-DIMV_SDK_ROOT=$PWD/third_party/imvsdk` | 与 `build` 同分支，进程级与安装态证据取自它 |
++>
++> 2026-10-20 起 `APS_HAVE_IMVSDK` 是**查找结果的派生值**（`CACHE INTERNAL`），
++> 不再接受作为输入：旧写法 `-DAPS_HAVE_IMVSDK=0/1` 会被 `Dependencies.cmake`
++> 的查找结果覆盖，脚本曾因此“声称测了 SDK 变体、实际跑的是无 SDK 构建”。
++> 选择分支请用 `-DAPS_SDK_MODE=AUTO|ON|OFF`（默认 `AUTO`；`ON` 缺 SDK 直接
++> 配置失败，`OFF` 明确不查找）。旧变量只在旧构建目录首次配置时映射并告警。
++> `tests/run_tests.sh` 读取缓存中的实际检测值，模式与结果不一致时 `exit 1`。
+ 
+ > 因此该数字证明的是"逻辑在当前夹具下自洽"，
+ > **不等于**"在正式测试框架下通过"，也不等于"应用级全流程验收通过"——
+diff --git a/AircraftPoseSystem/cmake/Dependencies.cmake b/AircraftPoseSystem/cmake/Dependencies.cmake
+index 88aedc6..efb1fd6 100644
+--- a/AircraftPoseSystem/cmake/Dependencies.cmake
++++ b/AircraftPoseSystem/cmake/Dependencies.cmake
+@@ -160,9 +160,78 @@ endif()
+ # 查找细节在 FindImvSdk.cmake（模块化，遵循 CMake 的 Find<Package>.cmake
+ # 约定，使 IDE 与 cmake --help-module 可用）。
+ # ----------------------------------------------------------------------------
++# ----------------------------------------------------------------------------
++# 4.1 查找模式：APS_SDK_MODE = AUTO / ON / OFF
++#
++# 旧版把 APS_HAVE_IMVSDK 当**输入**（-DAPS_HAVE_IMVSDK=1），但下面一行
++# `set(APS_HAVE_IMVSDK FALSE)` 会无条件覆盖命令行缓存值：调用者传 1 也
++# 选不到 SDK 分支，测试“证明 SDK 变体通过”时实际跑的是无 SDK 构建。
++#
++# 现在 APS_HAVE_IMVSDK 只作**派生结果**（CACHE INTERNAL），由查找结果决定：
++#   AUTO  探测；找不到则降级（默认）
++#   ON    必须有；找不到 FATAL_ERROR
++#   OFF   明确不查找（离线/无 SDK 构建树）
++# ----------------------------------------------------------------------------
++set(_aps_sdk_mode_given FALSE)
++if(DEFINED APS_SDK_MODE)
++    set(_aps_sdk_mode_given TRUE)
++endif()
++
++set(APS_SDK_MODE "AUTO" CACHE STRING "ImvSdk 查找模式：AUTO / ON / OFF")
++set_property(CACHE APS_SDK_MODE PROPERTY STRINGS AUTO ON OFF)
++
++# 旧变量迁移：仅在本次是旧构建目录第一次配置（APS_SDK_MODE 尚未显式给出）
++# 时，把 -DAPS_HAVE_IMVSDK=0/1 映射成 OFF/ON 并告警；之后忽略它。
++if(DEFINED APS_HAVE_IMVSDK)
++    get_property(_aps_have_sdk_cache_type CACHE APS_HAVE_IMVSDK PROPERTY TYPE)
++    if(NOT _aps_have_sdk_cache_type STREQUAL "INTERNAL")
++        if(NOT _aps_sdk_mode_given)
++            if(APS_HAVE_IMVSDK)
++                set(APS_SDK_MODE "ON" CACHE STRING "ImvSdk 查找模式：AUTO / ON / OFF" FORCE)
++            else()
++                set(APS_SDK_MODE "OFF" CACHE STRING "ImvSdk 查找模式：AUTO / ON / OFF" FORCE)
++            endif()
++            message(WARNING
++                "[APS] APS_HAVE_IMVSDK 已改为派生值，不再接受作为输入。\n"
++                "      本次按旧值映射为 APS_SDK_MODE=${APS_SDK_MODE}；\n"
++                "      以后请直接使用 -DAPS_SDK_MODE=ON/OFF。")
++        else()
++            message(WARNING
++                "[APS] 忽略 -DAPS_HAVE_IMVSDK=${APS_HAVE_IMVSDK}："
++                "该值由查找结果派生，请改用 -DAPS_SDK_MODE。")
++        endif()
++        unset(_aps_have_sdk_cache_type)
++    endif()
++endif()
++
++string(TOUPPER "${APS_SDK_MODE}" _aps_sdk_mode_upper)
++if(NOT _aps_sdk_mode_upper MATCHES "^(AUTO|ON|OFF)$")
++    message(FATAL_ERROR
++        "[APS] APS_SDK_MODE=${APS_SDK_MODE} 非法，只接受 AUTO / ON / OFF")
++endif()
++
+ set(APS_HAVE_IMVSDK FALSE)
++set(_aps_sdk_find FALSE)
++set(_aps_sdk_required FALSE)
++
++if(_aps_sdk_mode_upper STREQUAL "OFF")
++    set(ImvSdk_FOUND FALSE)
++    if(APS_REQUIRE_DEVICE_SDK)
++        message(FATAL_ERROR
++            "[APS] APS_SDK_MODE=OFF 与 APS_REQUIRE_DEVICE_SDK=ON 矛盾。\n"
++            "      要强制使用 SDK，请改为 -DAPS_SDK_MODE=ON。")
++    endif()
++    message(STATUS "[APS] APS_SDK_MODE=OFF：跳过 ImvSdk 查找（无 SDK 构建树）")
++else()
++    set(_aps_sdk_find TRUE)
++    if(_aps_sdk_mode_upper STREQUAL "ON")
++        set(_aps_sdk_required TRUE)
++    endif()
++endif()
+ 
+-find_package(ImvSdk QUIET)
++if(_aps_sdk_find)
++    find_package(ImvSdk QUIET)
++endif()
+ 
+ if(ImvSdk_FOUND)
+     set(APS_HAVE_IMVSDK TRUE)
+@@ -208,10 +277,11 @@ if(ImvSdk_FOUND)
+     endif()
+ 
+     message(STATUS "[APS] 找到 ImvSdk：${ImvSdk_LIBRARIES}")
+-elseif(APS_REQUIRE_DEVICE_SDK)
++elseif(_aps_sdk_required OR APS_REQUIRE_DEVICE_SDK)
+     message(FATAL_ERROR
+-        "[APS] APS_REQUIRE_DEVICE_SDK=ON 但未找到 ImvSdk。\n"
+-        "      请指定 SDK 根目录：cmake .. -DIMV_SDK_ROOT=/path/to/ImvSdk")
++        "[APS] APS_SDK_MODE=ON 或 APS_REQUIRE_DEVICE_SDK=ON，但未找到 ImvSdk。\n"
++        "      请指定 SDK 根目录：cmake .. -DIMV_SDK_ROOT=/path/to/ImvSdk\n"
++        "      若本机本来就没有 SDK，请使用 -DAPS_SDK_MODE=OFF。")
+ else()
+     message(STATUS
+         "[APS] 未找到 ImvSdk（非致命）：真实相机后端将在 Phase 2/Sprint 2 接入。\n"
+@@ -219,6 +289,11 @@ else()
+         "      拿到 SDK 后：cmake .. -DIMV_SDK_ROOT=/path/to/ImvSdk")
+ endif()
+ 
++# 把查找结果写入缓存，供脚本/构建系统读取**实际**结果（而不是输入意图）。
++# INTERNAL 类型也让上面的旧变量迁移能区分“用户 -D 传入”与“本文件派生”。
++set(APS_HAVE_IMVSDK "${APS_HAVE_IMVSDK}" CACHE INTERNAL
++    "ImvSdk 是否可用（派生值，请用 APS_SDK_MODE 控制）" FORCE)
++
+ # ----------------------------------------------------------------------------
+ # 5 TurntableSdk（ENG-03 §11：Peko SDK / 网络协议库 / RS485 —— 可选依赖）
+ #
+diff --git a/AircraftPoseSystem/src/app/ApplicationContext.h b/AircraftPoseSystem/src/app/ApplicationContext.h
+index 862a549..f3601be 100644
+--- a/AircraftPoseSystem/src/app/ApplicationContext.h
++++ b/AircraftPoseSystem/src/app/ApplicationContext.h
+@@ -197,15 +197,24 @@ public:
+         // 之后才被填入。这里再核一次，防止未来出现“id 是合成、类型是
+         // production”这类拼接。不一致时**不猜**：清空 model_type，
+         // 让 `missing_required_fields` 如实报缺，并留下诊断。
+-        if (!filled.modelType.empty() && !filled.modelId.empty()
+-            && filled.modelType == data::synthetic::modelType()
+-            && filled.modelId != data::synthetic::modelId())
++        //
++        // ⚠ 判据必须**双向**：既要挡“类型=synthetic + 非合成 id”，
++        //   也要挡“合成 id + 类型=production”。只挡一个方向时，反向
++        //   拼接会静默写出一个从未存在过的身份（评审 2026-10-20）。
++        if (!filled.modelType.empty() && !filled.modelId.empty())
+         {
+-            conflicts.push_back(
+-                "model_type/model_id: 类型=synthetic 但 model_id=\"" +
+-                filled.modelId +
+-                "\"；拒绝拼装身份，model_type 置空（按必填缺失处理）");
+-            filled.modelType.clear();
++            const bool typeIsSynthetic =
++                filled.modelType == data::synthetic::modelType();
++            const bool idIsSynthetic =
++                filled.modelId == data::synthetic::modelId();
++            if (typeIsSynthetic != idIsSynthetic)
++            {
++                conflicts.push_back(
++                    "model_type/model_id: 类型=\"" + filled.modelType +
++                    "\" 但 model_id=\"" + filled.modelId +
++                    "\"；拒绝拼装身份，model_type 置空（按必填缺失处理）");
++                filled.modelType.clear();
++            }
+         }
+ 
+         // 真值比较只在**解算成功**时有意义。失败包仍写入真值本身
+diff --git a/AircraftPoseSystem/src/application/MeasurementController.cpp b/AircraftPoseSystem/src/application/MeasurementController.cpp
+index 9bc07d9..7035c78 100644
+--- a/AircraftPoseSystem/src/application/MeasurementController.cpp
++++ b/AircraftPoseSystem/src/application/MeasurementController.cpp
+@@ -293,6 +293,10 @@ void MeasurementController::startMeasurement(uint64_t nowNs)
+     statistics_         = data::MeasurementStatistics{};
+     statisticsReceived_ = false;
+ 
++    // 新的测量任务尚未指令过转台：STABILIZE 中“从未指令 ⇒ IDLE 可信”
++    // 的判据只能对**本任务**成立，不得继承上一次任务。
++    turntableCommanded_ = false;
++
+     degraded_ = false;
+     degradationNotice_ = data::ErrorInfo{};
+     availableCameras_ = 0;
+@@ -636,7 +640,8 @@ void MeasurementController::stepAlign(uint64_t nowNs)
+         return;
+     }
+ 
+-    moveIssued_ = true;
++    moveIssued_         = true;
++    turntableCommanded_ = true;
+ }
+ 
+ void MeasurementController::stepStabilize(uint64_t nowNs)
+@@ -687,6 +692,55 @@ void MeasurementController::stepStabilize(uint64_t nowNs)
+         return;
+     }
+ 
++    // ---- 转台侧的“可采集”判据（C2 / 评审 2026-10-20 第 4 项）----------
++    //
++    // 图像居中**不能单独**证明可以采集：后端会在“到位后读数偏离/
++    // 样本失效/过期”时撤销 STABLE，而撤销后的 resting state 是 IDLE。
++    // 若这里把 IDLE 一律当作静止，图像一居中就会继续累计稳定帧 ——
++    // 上层等于忽略了转台的撤销结论。
++    //
++    // 判据：
++    //  · STABLE：后端本轮样本满足到位+连续不变，接受；
++    //  · IDLE  ：只有**本任务从未指令过运动**时才可信（转台本来就停在
++    //            初始位置，没有“撤销”这回事）；
++    //  · 其余（IDLE+本任务已指令过、或未知值）：不累计，等待后端重新
++    //            给出 STABLE；窗口到期后按既有 §7.3 回退 ALIGN。
++    const bool deviceStable = ts.motion == data::TurntableMotionState::STABLE;
++    const bool restWithoutCommand =
++        ts.motion == data::TurntableMotionState::IDLE && !turntableCommanded_;
++    if (!deviceStable && !restWithoutCommand)
++    {
++        stableFrames_ = 0;
++        return;
++    }
++
++    // 真实后端还实现并列的 ITurntableDiagnostics：有效性/新鲜度必须
++    // 真正被消费，而不是只在结果包里存一份。虚拟后端/测试桩不实现它，
++    // 此时退回 TurntableState 的判据（行为与改动前一致）。
++    if (const auto* diag =
++            dynamic_cast<const device::ITurntableDiagnostics*>(&turntable_))
++    {
++        const data::TurntableDiagnostics d = diag->diagnostics();
++        if (d.motionUncertain || d.errorLatched)
++        {
++            stableFrames_ = 0;
++            handleFailure(FailureKind::HARDWARE,
++                          data::ErrorInfo{data::kErrTurntableComm,
++                                          d.motionUncertain
++                                              ? "转台运动状态不确定（STABILIZE）"
++                                              : "转台错误已锁存（STABILIZE）",
++                                          nowNs},
++                          nowNs);
++            return;
++        }
++        if (!d.sampleFresh || !d.sample.valid)
++        {
++            // 没有本轮可信读数：既不是稳定帧，也不是失败。
++            stableFrames_ = 0;
++            return;
++        }
++    }
++
+     const data::CameraRole camera =
+         displayCameraFor(MeasurementState::STABILIZE);
+ 
+diff --git a/AircraftPoseSystem/src/application/MeasurementController.h b/AircraftPoseSystem/src/application/MeasurementController.h
+index d267add..a598b06 100644
+--- a/AircraftPoseSystem/src/application/MeasurementController.h
++++ b/AircraftPoseSystem/src/application/MeasurementController.h
+@@ -672,6 +672,16 @@ private:
+     /// 没有这个标记就无法区分"该发指令"与"该等它走完"。
+     bool moveIssued_ = false;
+ 
++    /// 本任务是否**曾经成功受理过**转台运动指令。
++    ///
++    /// STABILIZE 的可采集判据需要它：`IDLE` 只在“从未指令过运动”时
++    /// 才是可信的静置事实（转台本来就停在初始位置）；一旦本任务发出过
++    /// 指令，`IDLE` 就可能来自后端**撤销 STABLE**（到位后读数偏离），
++    /// 此时不得仅凭图像居中继续累计稳定帧。
++    /// 与 `moveIssued_` 的区别：后者在进入 STABILIZE 时被复位，本字段
++    /// 随任务存续。
++    bool turntableCommanded_ = false;
++
+     /// STABILIZE：连续稳定帧计数（SYS-08 §5.5 的 N ≥ 3）。
+     int stableFrames_ = 0;
+ 
+diff --git a/AircraftPoseSystem/src/data/TurntableDiagnostics.h b/AircraftPoseSystem/src/data/TurntableDiagnostics.h
+index 6dea2b4..5165ca0 100644
+--- a/AircraftPoseSystem/src/data/TurntableDiagnostics.h
++++ b/AircraftPoseSystem/src/data/TurntableDiagnostics.h
+@@ -76,6 +76,15 @@ struct TurntableDiagnostics
+     /// 样本是否未超过 `sample_stale_ms`（由读取时刻计算）。
+     bool sampleFresh = false;
+ 
++    /// 运动事务编号：每开始一条新的运动命令即递增（0 = 尚无运动命令）。
++    /// 旧命令被覆盖/取消后，其停止事实仍属于旧事务，不能挂到新事务上。
++    std::uint64_t motionTransactionId = 0;
++
++    /// `stopFrameDelivered` / `stopObservedStationary` 所属的运动事务编号。
++    /// **与 `motionTransactionId` 不同 ⇒ 这两个肯定事实属于更早的事务。**
++    /// 新运动开始时二者也会被清零；本字段是并发读取时的第二道归属依据。
++    std::uint64_t stopFactsTransactionId = 0;
++
+     /// 停止帧是否已交给传输层。**不等于**设备已收到或已停止。
+     bool stopFrameDelivered = false;
+ 
+diff --git a/AircraftPoseSystem/src/device/turntable/PelcoDSession.cpp b/AircraftPoseSystem/src/device/turntable/PelcoDSession.cpp
+index e3cf421..aa48f7b 100644
+--- a/AircraftPoseSystem/src/device/turntable/PelcoDSession.cpp
++++ b/AircraftPoseSystem/src/device/turntable/PelcoDSession.cpp
+@@ -193,9 +193,10 @@ bool PelcoDSession::waitForEcho(const PelcoDFrame& sent, std::string& error,
+ 
+ bool PelcoDSession::sendAndAwaitEcho(
+     const PelcoDFrame& frame, std::string& error, bool& rejected,
+-    const std::function<bool()>& shouldAbort)
++    const std::function<bool()>& shouldAbort, bool& frameSent)
+ {
+-    rejected = false;
++    rejected  = false;
++    frameSent = false;
+     for (int attempt = 0; attempt <= kCommandRetries; ++attempt)
+     {
+         if (shouldAbort && shouldAbort())
+@@ -207,6 +208,8 @@ bool PelcoDSession::sendAndAwaitEcho(
+         {
+             return false;
+         }
++        // 从这一刻起设备**可能**已经接受指令：取消时必须补发停止帧。
++        frameSent = true;
+         if (waitForEcho(frame, error, rejected, shouldAbort))
+         {
+             return true;
+@@ -228,8 +231,14 @@ bool PelcoDSession::sendAndAwaitEcho(
+ }
+ 
+ bool PelcoDSession::queryAngle(bool horizontal, double& out,
+-                               std::string& error, int retries)
++                               std::string& error, int retries,
++                               const std::function<bool()>& shouldAbort,
++                               bool* aborted)
+ {
++    if (aborted != nullptr)
++    {
++        *aborted = false;
++    }
+     const std::uint8_t address =
+         static_cast<std::uint8_t>(config_.pelcoAddress);
+     const PelcoDFrame query =
+@@ -238,6 +247,17 @@ bool PelcoDSession::queryAngle(bool horizontal, double& out,
+ 
+     for (int attempt = 0; attempt <= retries; ++attempt)
+     {
++        // 停止屏障优先于整轮查询：每轴最多等 replyTimeoutMs，不能
++        // 让停止请求排在它后面（否则一次双轴轮询可拖住 ~400 ms）。
++        if (shouldAbort && shouldAbort())
++        {
++            if (aborted != nullptr)
++            {
++                *aborted = true;
++            }
++            error = "角度查询被停止屏障取消";
++            return false;
++        }
+         if (!sendFrame(query, error))
+         {
+             return false;
+@@ -248,6 +268,16 @@ bool PelcoDSession::queryAngle(bool horizontal, double& out,
+         bool retry = false;
+         while (!retry)
+         {
++            if (shouldAbort && shouldAbort())
++            {
++                if (aborted != nullptr)
++                {
++                    *aborted = true;
++                }
++                error = "角度查询被停止屏障取消";
++                return false;
++            }
++
+             const std::uint64_t now = nowNs();
+             if (now >= deadline)
+             {
+@@ -476,6 +506,8 @@ bool PelcoDSession::initialize(std::string& error)
+     stopHasLast_          = false;
+     stopObservationDeadlineNs_ = 0;
+     motionUncertain_      = false;
++    motionTransactionId_  = 0;
++    stopFactsTransactionId_ = 0;
+     stopFrameDelivered_   = false;
+     stopObservedStationary_ = false;
+     sampleValid_          = false;
+@@ -705,18 +737,40 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
+         return false;
+     }
+ 
+-    stopSent_       = false;
+-    stopRetryArmed_ = false;
++    // 新的运动事务从这里开始：上一停止事务的“已交付/已观测静止”
++    // 是**上一次**运动的事实，不能挂在新命令上。停止事实由
++    // stopFrameDelivered/stopObservedStationary 表达，二者必须随
++    // 新事务清零；否则上层会看到“正在 MOVING 且已观测到静止”。
++    stopSent_               = false;
++    stopRetryArmed_         = false;
++    stopPending_            = false;
++    stopStationaryCount_    = 0;
++    stopHasLast_            = false;
++    stopFrameDelivered_     = false;
++    stopObservedStationary_ = false;
++    // 事务归属：新运动开始即分配新编号。上一停止事务的编号保留在
++    // stopFactsTransactionId_ 中，读端可据此识别“事实属于旧事务”。
++    motionTransactionId_.fetch_add(1);
+ 
+-    bool rejected = false;
++    bool rejected         = false;
++    bool horizontalSent   = false;
++    bool verticalSent     = false;
+     std::string failure;
+ 
+-    if (!sendAndAwaitEcho(horizontalFrame, failure, rejected, shouldAbort))
++    if (!sendAndAwaitEcho(horizontalFrame, failure, rejected, shouldAbort,
++                          horizontalSent))
+     {
+         if (shouldAbort && shouldAbort())
+         {
+-            // 停止屏障已取消本次命令：不恢复、不再自行发停止帧
+-            //（停止帧由屏障路径发送一次）。
++            // 停止屏障已取消本次命令。⚠ 若第一轴已经发出，设备**可能
++            // 已经开始运动** —— 取消不等于“什么都没发生”。必须补发
++            // 停止帧；否则屏障里的 session_->stop() 会因 moving_ 仍为
++            // false 而直接返回，最终一条停止帧都没有。
++            if (horizontalSent)
++            {
++                performStop(0, "部分发送后被取消", "move/cancel_horizontal",
++                            false);
++            }
+             error = failure.empty() ? "指令被停止屏障取消" : failure;
+             return false;
+         }
+@@ -728,10 +782,14 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
+         return false;
+     }
+ 
+-    if (!sendAndAwaitEcho(verticalFrame, failure, rejected, shouldAbort))
++    if (!sendAndAwaitEcho(verticalFrame, failure, rejected, shouldAbort,
++                          verticalSent))
+     {
+         if (shouldAbort && shouldAbort())
+         {
++            // 水平轴已交付（或至少已发出）：必须请求停止，不能留下
++            // 单轴运动。这正是“部分发送取消”的反例路径。
++            performStop(0, "部分发送后被取消", "move/cancel_vertical", false);
+             error = failure.empty() ? "指令被停止屏障取消" : failure;
+             return false;
+         }
+@@ -748,13 +806,12 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
+     stableCount_ = 0;
+     hasLastRead_ = false;
+     consecutiveFailures_ = 0;
+-    stopPending_ = false;
+     motion_.store(data::TurntableMotionState::MOVING);
+     armWatchdog(azimuthTarget, elevationTarget);
+     return true;
+ }
+ 
+-void PelcoDSession::pollOnce()
++void PelcoDSession::pollOnce(const std::function<bool()>& shouldAbort)
+ {
+     if (!initialized_.load())
+     {
+@@ -784,10 +841,16 @@ void PelcoDSession::pollOnce()
+     {
+         moveDeadlineNs_ = 0;
+         // 2008 是“命令未在时限内完成”的事实，不是一次通信失败。
++        // stopForFault 按“停止是否交付”写当前错误：交付时是原始码，
++        // 未交付时是更严重的 2005。只有交付时才把 2008 置为锁存；
++        // 否则会用 2008 覆盖 2005，把“停止没发出去”伪装成单纯超时。
+         stopForFault(data::kErrTurntableMotionWatchdog,
+                      "移动看门狗超时", "watchdog");
+-        setError(data::kErrTurntableMotionWatchdog, "移动看门狗超时", true,
+-                 "watchdog");
++        if (stopFrameDelivered_.load())
++        {
++            setError(data::kErrTurntableMotionWatchdog,
++                     "移动看门狗超时", true, "watchdog");
++        }
+         motion_.store(data::TurntableMotionState::ERROR);
+         return;
+     }
+@@ -799,16 +862,28 @@ void PelcoDSession::pollOnce()
+ 
+     // 轮询周期内**不重试**：下一个周期就是重试。一次丢包不该把
+     // 50 ms 的周期拖成 150 ms。
+-    const bool gotAzimuth = queryAngle(true, azimuth, azError, 0);
+-    const bool gotElevation = queryAngle(false, elevation, elError, 0);
++    //
++    // 停止屏障在**每个接收切片**前检查：一次双轴轮询的最坏时长是
++    // 2 × replyTimeoutMs，不能让它把停止请求整段拖住。
++    bool aborted = false;
++    const bool gotAzimuth =
++        queryAngle(true, azimuth, azError, 0, shouldAbort, &aborted);
++    if (aborted)
++    {
++        return;   // 停止优先；本轮不发布、不计失败
++    }
++    const bool gotElevation =
++        queryAngle(false, elevation, elError, 0, shouldAbort, &aborted);
++    if (aborted)
++    {
++        return;
++    }
+ 
+     // C4：两轴必须同轮。任一轴缺失 ⇒ 整个样本无效，**不得**把
+     // 新方位角与旧俯仰角拼在一起发布。
+     if (!gotAzimuth || !gotElevation)
+     {
+-        sampleCycleId_.fetch_add(1);
+-        sampleTimestampNs_.store(now);
+-        sampleValid_.store(false);
++        publishSample(azimuth_.load(), elevation_.load(), now, false);
+         ++consecutiveFailures_;
+         stableCount_ = 0;
+         hasLastRead_ = false;
+@@ -826,8 +901,9 @@ void PelcoDSession::pollOnce()
+                 "连续 " + std::to_string(consecutiveFailures_) +
+                 " 个轮询周期无有效角度回复";
+             setFirstFault(data::kErrTurntableComm, text, "poll/lost_link");
++            // 同看门狗：stopForFault 已按“停止是否交付”写好当前错误；
++            // 停止未交付（2005）优先于本故障码，不能被它覆盖。
+             stopForFault(data::kErrTurntableComm, text, "poll/lost_link");
+-            setError(data::kErrTurntableComm, text, true, "poll/lost_link");
+             motion_.store(data::TurntableMotionState::ERROR);
+         }
+         return;
+@@ -864,6 +940,10 @@ bool PelcoDSession::performStop(int faultCode, const std::string& faultMessage,
+         stopSent_ = false;
+     }
+ 
++    // 这次停止处理属于当前运动事务。即使发送失败，归属也要如实记录，
++    // 读端才能区分“上个事务的已停止”与“本事务的停止结果”。
++    stopFactsTransactionId_.store(motionTransactionId_.load());
++
+     const std::uint8_t address =
+         static_cast<std::uint8_t>(config_.pelcoAddress);
+     const PelcoDFrame stopFrame = makeStop(address);
+@@ -995,13 +1075,51 @@ void PelcoDSession::stop()
+ void PelcoDSession::publishSample(double az, double el, std::uint64_t now,
+                                   bool valid)
+ {
+-    azimuth_.store(az);
+-    elevation_.store(el);
+-    sampleTimestampNs_.store(now);
+-    sampleValid_.store(valid);
+-    if (valid)
++    // seqlock：奇数为“写入中”。读端若在写入过程中取到奇序号，或前后
++    // 序号不同，就重读 —— 因此不可能读到 (新方位角, 旧俯仰角) 这种
++    // 跨轮拼接，即使每个字段本身都是原子的、数值也都合法。
++    const std::uint64_t seq = sampleSeq_.load(std::memory_order_relaxed);
++    sampleSeq_.store(seq + 1, std::memory_order_relaxed);
++    std::atomic_thread_fence(std::memory_order_release);
++
++    azimuth_.store(az, std::memory_order_relaxed);
++    if (samplePublishHook_)
++    {
++        // 仅测试：确定性地把读端放进“方位角已写、俯仰角未写”的窗口。
++        samplePublishHook_();
++    }
++    elevation_.store(el, std::memory_order_relaxed);
++    sampleTimestampNs_.store(now, std::memory_order_relaxed);
++    sampleValid_.store(valid, std::memory_order_relaxed);
++    sampleCycleId_.store(sampleCycleId_.load(std::memory_order_relaxed) + 1,
++                         std::memory_order_relaxed);
++
++    sampleSeq_.store(seq + 2, std::memory_order_release);
++}
++
++void PelcoDSession::loadSample(double& az, double& el, std::uint64_t& now,
++                               std::uint64_t& cycle, bool& valid) const
++{
++    for (;;)
+     {
+-        sampleCycleId_.fetch_add(1);
++        const std::uint64_t begin =
++            sampleSeq_.load(std::memory_order_acquire);
++        if ((begin & 1u) != 0u)
++        {
++            continue;   // 写入中
++        }
++
++        az    = azimuth_.load(std::memory_order_relaxed);
++        el    = elevation_.load(std::memory_order_relaxed);
++        now   = sampleTimestampNs_.load(std::memory_order_relaxed);
++        cycle = sampleCycleId_.load(std::memory_order_relaxed);
++        valid = sampleValid_.load(std::memory_order_relaxed);
++
++        std::atomic_thread_fence(std::memory_order_acquire);
++        if (sampleSeq_.load(std::memory_order_relaxed) == begin)
++        {
++            return;
++        }
+     }
+ }
+ 
+@@ -1115,16 +1233,18 @@ void PelcoDSession::updateMotion(double az, double el)
+ data::TurntableState PelcoDSession::snapshot() const
+ {
+     data::TurntableState state;
+-    state.azimuth   = azimuth_.load();
+-    state.elevation = elevation_.load();
+-    state.motion    = motion_.load();
++    std::uint64_t ts    = 0;
++    std::uint64_t cycle = 0;
++    bool valid = false;
++    // 一次读出**同一轮**的方位/俯仰/时刻/有效性：两轴不得跨发布拼接。
++    loadSample(state.azimuth, state.elevation, ts, cycle, valid);
++    state.motion = motion_.load();
+ 
+     if (initialized_.load())
+     {
+         const std::uint64_t now = nowNs();
+-        const std::uint64_t ts  = sampleTimestampNs_.load();
+         const bool stale =
+-            !sampleValid_.load() || ts == 0 || now < ts ||
++            !valid || ts == 0 || now < ts ||
+             (now - ts) > msToNs(config_.sampleStaleMs);
+         if (stale)
+         {
+@@ -1138,11 +1258,9 @@ data::TurntableState PelcoDSession::snapshot() const
+ data::TurntableDiagnostics PelcoDSession::diagnostics() const
+ {
+     data::TurntableDiagnostics d;
+-    d.sample.azimuth         = azimuth_.load();
+-    d.sample.elevation       = elevation_.load();
+-    d.sample.sampleTimestampNs = sampleTimestampNs_.load();
+-    d.sample.cycleId         = sampleCycleId_.load();
+-    d.sample.valid           = sampleValid_.load();
++    loadSample(d.sample.azimuth, d.sample.elevation,
++               d.sample.sampleTimestampNs, d.sample.cycleId,
++               d.sample.valid);
+     d.sample.source = d.sample.valid ? data::TurntableSampleSource::Poll
+                                      : data::TurntableSampleSource::None;
+ 
+@@ -1152,6 +1270,8 @@ data::TurntableDiagnostics PelcoDSession::diagnostics() const
+                     now >= ts &&
+                     (now - ts) <= msToNs(config_.sampleStaleMs);
+ 
++    d.motionTransactionId    = motionTransactionId_.load();
++    d.stopFactsTransactionId = stopFactsTransactionId_.load();
+     d.stopFrameDelivered     = stopFrameDelivered_.load();
+     d.stopObservedStationary = stopObservedStationary_.load();
+     d.motionUncertain        = motionUncertain_.load();
+diff --git a/AircraftPoseSystem/src/device/turntable/PelcoDSession.h b/AircraftPoseSystem/src/device/turntable/PelcoDSession.h
+index d915b47..ff53f57 100644
+--- a/AircraftPoseSystem/src/device/turntable/PelcoDSession.h
++++ b/AircraftPoseSystem/src/device/turntable/PelcoDSession.h
+@@ -32,6 +32,7 @@
+ #include <memory>
+ #include <mutex>
+ #include <string>
++#include <utility>
+ 
+ #include "data/ErrorInfo.h"
+ #include "data/TurntableCommand.h"
+@@ -74,7 +75,13 @@ public:
+ 
+     /// 执行一个轮询周期：查询两轴（**同一轮次**）、更新快照、推进
+     /// STABLE/看门狗与停止后静止观测。
+-    void pollOnce();
++    ///
++    /// @param shouldAbort 停止屏障回调。**每个接收切片前**都会检查；
++    ///        返回 true 时本周期立即放弃（不发布半轮样本、不计通信失败），
++    ///        使 worker 能在 ≤ 一个接收切片（kReceiveSliceMs）内处理停止，
++    ///        而不是等满两轴各自的 replyTimeoutMs。
++    void pollOnce(const std::function<bool()>& shouldAbort =
++                      std::function<bool()>());
+ 
+     /// 显式停止：允许重新武装停止重试。ReadOnly 下为无帧 no-op。
+     void stop();
+@@ -105,18 +112,32 @@ public:
+     /// 默认值三处都不可达。**不改变 WorkMode 可信度**。
+     void setTestMotionGate(bool allow) { testMotionGate_ = allow; }
+ 
++    /// ⚠ 单元测试专用：在样本临界区内、写完方位角之后调用一次。
++    /// 只用于**确定性地**暴露“读端跨两次发布拼接两轴”的撕裂窗口；
++    /// 生产装配从不设置（默认空函数）。不得在 worker 运行期间修改。
++    void setSamplePublishHookForTest(std::function<void()> hook)
++    {
++        samplePublishHook_ = std::move(hook);
++    }
++
+ private:
+     // ---- 单次收发的辅助 ----
+     std::uint64_t nowNs() const;
+     bool sendFrame(const PelcoDFrame& frame, std::string& error);
+     bool waitForEcho(const PelcoDFrame& sent, std::string& error, bool& rejected,
+                      const std::function<bool()>& shouldAbort);
++    /// @param frameSent 至少成功发出一帧时为 true（用于“部分发送后取消
++    ///        仍必须补发停止帧”的判定）。
+     bool sendAndAwaitEcho(const PelcoDFrame& frame, std::string& error,
+                           bool& rejected,
+-                          const std::function<bool()>& shouldAbort);
++                          const std::function<bool()>& shouldAbort,
++                          bool& frameSent);
+     /// 地址错误的回复按“没有有效回复”处理（C3）。
++    /// @param aborted 因停止屏障放弃（不是通信失败，不参与失败计数）。
+     bool queryAngle(bool horizontal, double& out, std::string& error,
+-                    int retries);
++                    int retries,
++                    const std::function<bool()>& shouldAbort = {},
++                    bool* aborted = nullptr);
+     /// @param echoOnly 收到的回复与查询帧逐字节相同（回显歧义）。
+     bool queryWorkMode(std::uint8_t& out, bool& echoOnly, std::string& error,
+                        int retries);
+@@ -127,6 +148,10 @@ private:
+     void setFirstFault(int code, const std::string& text,
+                        const std::string& context);
+     void publishSample(double az, double el, std::uint64_t now, bool valid);
++    /// 一次性读出**同一轮次**的样本（seqlock）。任何一轴/时刻/有效性/
++    /// 轮次都不会来自两次发布。
++    void loadSample(double& az, double& el, std::uint64_t& now,
++                    std::uint64_t& cycle, bool& valid) const;
+     void checkStaleLocked() const;
+     bool withinTolerance(double az, double el) const;
+     void updateMotion(double az, double el);
+@@ -170,7 +195,12 @@ private:
+     data::ErrorInfo    lastError_;
+     data::TurntableFault firstFault_;
+ 
+-    // ---- 快照（无锁原子量）----
++    // ---- 快照（无锁原子量 + seqlock）----
++    //
++    // sampleSeq_ 为偶数时样本稳定；写端先置奇数、写完各字段再置回偶数。
++    // 读端只有在前后的序号相同且为偶数时才接受这一组值 —— 这正是
++    // “两轴不得跨轮拼接”的运行时保证，而不只是注释约定。
++    std::atomic<std::uint64_t> sampleSeq_{0};
+     std::atomic<bool>     initialized_{false};
+     std::atomic<bool>     errorLatched_{false};
+     std::atomic<double>   azimuth_{0.0};
+@@ -178,10 +208,13 @@ private:
+     std::atomic<std::uint64_t> sampleTimestampNs_{0};
+     std::atomic<std::uint64_t> sampleCycleId_{0};
+     std::atomic<bool>     sampleValid_{false};
++    std::function<void()> samplePublishHook_;
+     std::atomic<data::TurntableMotionState> motion_{
+         data::TurntableMotionState::IDLE};
+     std::atomic<data::WorkModeTrust> workModeTrust_{
+         data::WorkModeTrust::Unknown};
++    std::atomic<std::uint64_t> motionTransactionId_{0};
++    std::atomic<std::uint64_t> stopFactsTransactionId_{0};
+     std::atomic<bool> stopFrameDelivered_{false};
+     std::atomic<bool> stopObservedStationary_{false};
+     std::atomic<bool> motionUncertain_{false};
+diff --git a/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp b/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp
+index cf5b7ea..7fc16f8 100644
+--- a/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp
++++ b/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp
+@@ -330,7 +330,12 @@ void PelcoDTurntableController::workerLoop()
+         }
+ 
+         // ---- 轮询 ----
+-        session_->pollOnce();
++        // 停止请求/退出必须在**每个接收切片**后可见：一次双轴轮询
++        // 最坏等 2 × replyTimeoutMs，不能让它整段挡住停止屏障。
++        session_->pollOnce([this] {
++            return stopRequestSeq_.load() > stopCompletedSeq_.load() ||
++                   !running_.load();
++        });
+ 
+         std::string errorText = session_->lastErrorText();
+         std::function<void(const std::string&)> sink;
+diff --git a/AircraftPoseSystem/src/optical/CalibrationManager.cpp b/AircraftPoseSystem/src/optical/CalibrationManager.cpp
+index 58c9028..6b467f4 100644
+--- a/AircraftPoseSystem/src/optical/CalibrationManager.cpp
++++ b/AircraftPoseSystem/src/optical/CalibrationManager.cpp
+@@ -23,6 +23,8 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <exception>
++#include <string>
+ 
+ #include <opencv2/core.hpp>
+ 
+@@ -324,6 +326,10 @@ bool CalibrationManager::load(const std::string& calibrationDir)
+         return false;
+     };
+ 
++    // R10：文件解析异常（畸形 YAML、错误节点类型）必须落到“拒绝装载、
++    // 不保留半装载状态”的同一收口，而不是把 cv::Exception 抛给启动路径。
++    try
++    {
+     // ---- 1 内参 ----
+     for (int i = 0; i < 3; ++i)
+     {
+@@ -413,6 +419,18 @@ bool CalibrationManager::load(const std::string& calibrationDir)
+         }
+     }
+ 
++    }
++    catch (const cv::Exception& e)
++    {
++        return fail("标定文件解析异常（R10，拒绝装载）：" +
++                    std::string(e.what()));
++    }
++    catch (const std::exception& e)
++    {
++        return fail("标定文件解析异常（R10，拒绝装载）：" +
++                    std::string(e.what()));
++    }
++
+     loaded_ = true;
+     return true;
+ }
+diff --git a/AircraftPoseSystem/tests/CMakeLists.txt b/AircraftPoseSystem/tests/CMakeLists.txt
+index 25cba5a..226e78d 100644
+--- a/AircraftPoseSystem/tests/CMakeLists.txt
++++ b/AircraftPoseSystem/tests/CMakeLists.txt
+@@ -122,10 +122,24 @@ function(aps_add_test name)
+         set(_wd_arg WORKING_DIRECTORY "${ARG_WORKING_DIRECTORY}")
+     endif()
+ 
++    # TEST_PREFIX（CMake 3.20+）：gtest_discover_tests 默认注册
++    # `Suite.Test`，而 tests/run_tests.sh 用 `ctest -R "^test_"` 只跑
++    # aps_add_test 注册的套件。没有前缀时**一条都匹配不到**，配上
++    # `--no-tests=error` 才不会被误读成“全部通过”。加前缀后名称为
++    # `test_pelcod.PelcoDSessionTest.xxx`，过滤恢复有效。
++    set(_prefix_arg "")
++    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.20)
++        set(_prefix_arg TEST_PREFIX "${name}.")
++    else()
++        message(STATUS
++            "[APS] CMake ${CMAKE_VERSION} < 3.20：gtest_discover_tests 不支持 "
++            "TEST_PREFIX，CTest 名称为 Suite.Test，run_tests.sh 的前缀过滤不适用")
++    endif()
++
+     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
+-        gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST ${_wd_arg})
++        gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST ${_prefix_arg} ${_wd_arg})
+     else()
+-        gtest_discover_tests(${name} ${_wd_arg})
++        gtest_discover_tests(${name} ${_prefix_arg} ${_wd_arg})
+     endif()
+ endfunction()
+ 
+diff --git a/AircraftPoseSystem/tests/device/FakePelcoTransport.h b/AircraftPoseSystem/tests/device/FakePelcoTransport.h
+index 8dcb485..9b2562f 100644
+--- a/AircraftPoseSystem/tests/device/FakePelcoTransport.h
++++ b/AircraftPoseSystem/tests/device/FakePelcoTransport.h
+@@ -44,6 +44,16 @@ public:
+     /// atomic：控制器测试会在 worker 运行时从主线程修改它。
+     std::atomic<int> receiveBlockMs{0};
+ 
++    /// true = 像真实 UDP socket 一样，按调用方给的 `timeoutMs` 等待
++    /// （上限 500 ms），而不是立即返回 Timeout。
++    /// 用于验证轮询期间的停止请求能在一个接收切片内被处理；
++    /// 默认 false，保持既有用例的毫秒级运行。
++    std::atomic<bool> honorReceiveTimeout{false};
++
++    /// 抑制定位帧回显：0 = 正常；1 = 水平轴；2 = 垂直轴。
++    /// 用于制造“第一轴已交付、第二轴仍在等回显”的部分发送窗口。
++    std::atomic<int> dropMoveEchoAxis{0};
++
+     /// 接下来 N 次**停止帧**发送失败（模拟停止未交付）。
+     /// 按帧内容识别，不影响查询与定位帧。
+     std::atomic<int> failStopSends{0};
+@@ -136,6 +146,14 @@ public:
+         {
+             std::this_thread::sleep_for(std::chrono::milliseconds(blockMs));
+         }
++        else if (honorReceiveTimeout.load() && timeoutMs > 0)
++        {
++            // 模拟真实 UDP：在调用方给的切片内等待。会话层的切片是
++            // ≤10 ms，故这里的事件粒度就是“一个接收切片”。
++            const int slice =
++                std::min(timeoutMs, 500);
++            std::this_thread::sleep_for(std::chrono::milliseconds(slice));
++        }
+ 
+         TransportResult result;
+         result.status = TransportStatus::Timeout;
+@@ -362,6 +380,14 @@ private:
+             return;
+         }
+ 
++        // 可抑制某一轴的回显：制造“部分发送后取消”的窗口。
++        // 此时设备不改变角度（等同于未受理/未回复）。
++        const int dropAxis = transport->dropMoveEchoAxis.load();
++        if ((dropAxis == 1 && horizontal) || (dropAxis == 2 && !horizontal))
++        {
++            return;
++        }
++
+         // 回显：会话要求收到与发出帧逐字节一致的 7 字节帧。
+         transport->inbox.push_back(bytes);
+ 
+diff --git a/AircraftPoseSystem/tests/device/PelcoDSessionTest.cpp b/AircraftPoseSystem/tests/device/PelcoDSessionTest.cpp
+index 33c4699..45a469b 100644
+--- a/AircraftPoseSystem/tests/device/PelcoDSessionTest.cpp
++++ b/AircraftPoseSystem/tests/device/PelcoDSessionTest.cpp
+@@ -13,11 +13,15 @@
+ #include "device/turntable/PelcoDSession.h"
+ #include "gtest/gtest.h"
+ 
++#include <atomic>
++#include <chrono>
+ #include <cmath>
+ #include <cstdint>
++#include <functional>
+ #include <limits>
+ #include <memory>
+ #include <string>
++#include <thread>
+ 
+ namespace aircraft
+ {
+@@ -888,6 +892,139 @@ TEST(PelcoDSessionTest, FirstFaultIsPreservedAcrossStopEscalation)
+               data::kErrTurntableStopNotDelivered);
+ }
+ 
++// ---------------------------------------------------------------------------
++//  评审 2026-10-20：跨轮拼接 / 部分发送取消 / 停止故障码被覆盖
++// ---------------------------------------------------------------------------
++
++/// 两轴快照不得跨两次发布拼接。
++///
++/// 用 `setSamplePublishHookForTest` 把读端**确定性地**放进
++/// “方位角已写、俯仰角未写”的窗口：旧实现会读出 (30,20) 且 valid=true；
++/// seqlock 下读端必须等到整轮发布完成，只能读到 (10,20) 或 (30,40)。
++TEST(PelcoDSessionTest, TwoAxisSnapshotNeverMixesRounds)
++{
++    Fixture f(makeConfig(true), true);
++    ASSERT_TRUE(f.init());
++
++    f.dev.azimuth   = 10.0;
++    f.dev.elevation = 20.0;
++    f.session->pollOnce();
++    ASSERT_TRUE(f.diag().sample.valid);
++    EXPECT_DOUBLE_EQ(f.diag().sample.azimuth, 10.0);
++    EXPECT_DOUBLE_EQ(f.diag().sample.elevation, 20.0);
++
++    f.dev.azimuth   = 30.0;
++    f.dev.elevation = 40.0;
++
++    std::atomic<bool> inPublish{false};
++    f.session->setSamplePublishHookForTest([&inPublish] {
++        inPublish.store(true);
++        // 给读端足够时间进入读取路径；seqlock 让它等待，旧实现让它读撕裂值。
++        std::this_thread::sleep_for(std::chrono::milliseconds(100));
++    });
++
++    std::atomic<int>  mixed{0};
++    std::atomic<bool> readerDone{false};
++    double seenAz = 0.0;
++    double seenEl = 0.0;
++
++    std::thread reader([&] {
++        while (!inPublish.load())
++        {
++            std::this_thread::yield();
++        }
++        const data::TurntableState s = f.session->snapshot();
++        const data::TurntableDiagnostics d = f.session->diagnostics();
++        // 任何一侧出现 “新方位 + 旧俯仰” 都是跨轮拼接。
++        if ((s.azimuth == 30.0 && s.elevation == 20.0) ||
++            (d.sample.azimuth == 30.0 && d.sample.elevation == 20.0))
++        {
++            mixed.fetch_add(1);
++        }
++        seenAz = s.azimuth;
++        seenEl = s.elevation;
++        readerDone.store(true);
++    });
++
++    f.session->pollOnce();
++    reader.join();
++    f.session->setSamplePublishHookForTest({});
++
++    ASSERT_TRUE(readerDone.load());
++    EXPECT_EQ(mixed.load(), 0)
++        << "读端得到跨轮拼接的样本：(" << seenAz << ", " << seenEl << ")";
++    EXPECT_TRUE((seenAz == 10.0 && seenEl == 20.0) ||
++                (seenAz == 30.0 && seenEl == 40.0))
++        << "快照必须完整属于某一轮，实际 (" << seenAz << ", " << seenEl
++        << ")";
++}
++
++/// 首轴已发送后取消：停止帧必须真的发出去。
++TEST(PelcoDSessionTest, CancelledPartialMoveStillSendsStopFrame)
++{
++    Fixture f(makeConfig(true), true);
++    ASSERT_TRUE(f.init());
++    f.fake->sent.clear();
++
++    // ⚠ 必须制造“第一轴已发出、仍在等回显”的窗口（评审反例 1）。
++    // 若改成第二轴，走的是另一条取消分支，测不到水平轴的漏停止路径。
++    f.fake->dropMoveEchoAxis.store(1);
++
++    data::TurntableCommand command;
++    command.azimuthCommand   = 1.0;
++    command.elevationCommand = 0.0;
++
++    const std::function<bool()> abort = [&f] {
++        // 第一帧定位已发出 ⇒ 设备可能已经开始运动。
++        return f.fake->countSent(isPositioning) >= 1;
++    };
++
++    std::string error;
++    EXPECT_FALSE(f.session->move(command, error, abort));
++
++    EXPECT_EQ(f.dev.stopFrames, 1)
++        << "部分发送后取消必须补发停止帧，不能留下单轴运动";
++    const auto d = f.diag();
++    EXPECT_TRUE(d.stopFrameDelivered);
++    EXPECT_FALSE(d.motionUncertain);
++    EXPECT_NE(f.snap().motion, data::TurntableMotionState::IDLE)
++        << "停止帧刚交付、尚未观测到静止，不得谎报 IDLE";
++}
++
++/// 看门狗触发停止、但停止帧未交付：当前错误必须是 2005，
++/// 首因仍是 2008。旧实现随后用 2008 覆盖了 2005。
++TEST(PelcoDSessionTest, WatchdogStopNotDeliveredKeeps2005AsCurrentError)
++{
++    Fixture f(makeConfig(true), true);
++    std::uint64_t now = 1000000000ULL;
++    f.session->setClock([&now] { return now; });
++    ASSERT_TRUE(f.init());
++
++    f.dev.snapToTarget = false;
++    data::TurntableCommand command;
++    command.azimuthCommand   = 10.0;
++    command.elevationCommand = 0.0;
++    std::string error;
++    ASSERT_TRUE(f.session->move(command, error));
++
++    // 三次停止发送全部失败：停止未交付。
++    f.fake->failStopSends.store(100);
++
++    now += 7000000000ULL;   // 越过看门狗期限
++    f.session->pollOnce();
++
++    EXPECT_EQ(f.session->lastError().code,
++              data::kErrTurntableStopNotDelivered)
++        << "停止未交付的 2005 被原始故障码覆盖了";
++    EXPECT_EQ(f.diag().firstFault.code,
++              data::kErrTurntableMotionWatchdog)
++        << "首因必须仍是看门狗 2008";
++    const auto d = f.diag();
++    EXPECT_TRUE(d.motionUncertain);
++    EXPECT_FALSE(d.stopFrameDelivered);
++    EXPECT_EQ(f.snap().motion, data::TurntableMotionState::ERROR);
++}
++
+ }  // namespace
+ }  // namespace device
+ }  // namespace aircraft
+diff --git a/AircraftPoseSystem/tests/device/PelcoDTurntableControllerTest.cpp b/AircraftPoseSystem/tests/device/PelcoDTurntableControllerTest.cpp
+index ef214ea..65ec380 100644
+--- a/AircraftPoseSystem/tests/device/PelcoDTurntableControllerTest.cpp
++++ b/AircraftPoseSystem/tests/device/PelcoDTurntableControllerTest.cpp
+@@ -89,6 +89,14 @@ bool waitFor(Predicate predicate, int timeoutMs = 1500)
+     return predicate();
+ }
+ 
++bool isPositioningFrame(const PelcoDFrame& frame)
++{
++    return (frame.data1 == 0x00 &&
++            (frame.data2 == 0x4B || frame.data2 == 0x4D)) ||
++           ((frame.data1 == 0x4B || frame.data1 == 0x4D) &&
++            frame.data2 != 0x00);
++}
++
+ bool isControlFrame(const PelcoDFrame& frame)
+ {
+     if (frame.data1 == 0x00 && frame.data2 == 0x00 &&
+@@ -479,6 +487,144 @@ TEST(PelcoDTurntableControllerTest, QtEventLoopDispatchesStopWhileMoveInFlight)
+     EXPECT_GE(d.stopCompletedSeq, d.stopRequestSeq);
+ }
+ 
++// ---------------------------------------------------------------------------
++//  评审 2026-10-20：部分发送取消 / 轮询中停止 / 停止事实归属
++// ---------------------------------------------------------------------------
++
++/// 第一轴已发送、第二轴仍在等回显时取消：停止屏障必须真的发停止帧。
++/// 旧实现中 move() 取消后直接返回，worker 的 session->stop() 又因
++/// moving_ 仍为 false 而提前返回 —— 停止帧计数为 0。
++TEST(PelcoDTurntableControllerTest, PartialSendCancelStillSendsStopFrame)
++{
++    auto fake = std::make_shared<FakePelcoTransport>();
++    FakePelcoDevice dev;
++    dev.transport = fake.get();
++    dev.install();
++
++    PelcoDTurntableController controller(makeConfig(true), fake);
++    controller.setTestMotionGate(true);
++    ASSERT_TRUE(controller.initialize());
++
++    // 水平轴不回显：第一轴已交付，worker 停在**第一轴**的回显等待里。
++    // 这是评审反例 1 的窗口：停止必须补发，不能只覆盖第二轴的情形。
++    fake->dropMoveEchoAxis.store(1);
++
++    data::TurntableCommand command;
++    command.azimuthCommand   = 1.0;
++    command.elevationCommand = 0.0;
++    ASSERT_TRUE(controller.move(command));
++
++    ASSERT_TRUE(waitFor([&fake] {
++        return fake->countSent(isPositioningFrame) >= 1;
++    })) << "未能进入第一轴等待窗口";
++
++    controller.stop();
++
++    const auto d = controller.diagnostics();
++    EXPECT_GE(dev.stopFrames, 1)
++        << "部分发送后取消，停止帧计数仍为 0";
++    EXPECT_TRUE(d.stopFrameDelivered);
++    EXPECT_EQ(d.lastCommandOutcome, data::TurntableCommandOutcome::Cancelled);
++    EXPECT_GE(d.stopCompletedSeq, d.stopRequestSeq);
++}
++
++/// 轮询中的停止请求必须按接收切片处理，不能等满两轴各自的期限。
++/// 每轴 200 ms、切片 10 ms：旧实现 stop() 要等当前轮询结束（可达 ~400 ms）。
++TEST(PelcoDTurntableControllerTest, StopDuringPollingIsHandledWithinOneSlice)
++{
++    auto fake = std::make_shared<FakePelcoTransport>();
++    FakePelcoDevice dev;
++    dev.transport = fake.get();
++    dev.install();
++
++    // 必须是 MotionEnabled：ReadOnly 下 stop() 按只读门禁就是无帧 no-op，
++    // 测不到“停止被整轮轮询拖住”的路径。
++    data::TurntableConfig cfg = makeConfig(true);
++    cfg.replyTimeoutMs       = 200;   // 每轴期限
++    cfg.pollIntervalMs       = 5;
++    cfg.commFailureThreshold = 1000;  // 不因轮询中丢包锁存
++
++    PelcoDTurntableController controller(cfg, fake);
++    ASSERT_TRUE(controller.initialize());
++
++    // 初始化本身也要查询两轴，必须在 initialize() 成功之后再开始丢包，
++    // 否则失败的是初始化而不是轮询。
++    fake->honorReceiveTimeout.store(true);
++    dev.dropHorizontal = true;
++    dev.dropVertical   = true;
++
++    // 让 worker 进入轮询中的接收等待。
++    sleepMs(30);
++
++    const auto start = std::chrono::steady_clock::now();
++    controller.stop();
++    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
++        std::chrono::steady_clock::now() - start);
++
++    EXPECT_LT(elapsed.count(), 150)
++        << "stop() 被整轮轮询（2 × replyTimeoutMs）拖住了：" << elapsed.count()
++        << " ms";
++    const auto d = controller.diagnostics();
++    EXPECT_GE(d.stopCompletedSeq, d.stopRequestSeq);
++}
++
++/// 新运动不得携带上一次停止的“已交付/已观测静止”肯定事实。
++TEST(PelcoDTurntableControllerTest, NewMotionDoesNotCarryPreviousStopFacts)
++{
++    auto fake = std::make_shared<FakePelcoTransport>();
++    FakePelcoDevice dev;
++    dev.transport = fake.get();
++    dev.install();
++
++    PelcoDTurntableController controller(makeConfig(true), fake);
++    controller.setTestMotionGate(true);
++    ASSERT_TRUE(controller.initialize());
++
++    // 设备不回“已到位”：目标远离当前位置，会话保持 MOVING。
++    // 若先等 STABLE 再 stop()，会话已经静止，显式 stop() 按契约直接
++    // no-op（无停止帧、无停止事实），用例前提就不成立了。
++    dev.snapToTarget = false;
++
++    data::TurntableCommand command;
++    command.azimuthCommand   = 50.0;
++    command.elevationCommand = 0.0;
++    ASSERT_TRUE(controller.move(command));
++    ASSERT_TRUE(waitFor([&controller] {
++        return controller.state().motion == data::TurntableMotionState::MOVING;
++    }));
++
++    controller.stop();
++    ASSERT_TRUE(waitFor([&controller] {
++        return controller.diagnostics().stopObservedStationary;
++    })) << "停止后未观测到静止，用例前提不成立";
++
++    const auto afterStop = controller.diagnostics();
++    ASSERT_TRUE(afterStop.stopFrameDelivered);
++    ASSERT_TRUE(afterStop.stopObservedStationary);
++    const std::uint64_t stoppedTransaction = afterStop.stopFactsTransactionId;
++
++    // 新命令：诊断必须立即不再声称“已停止”。
++    command.azimuthCommand = 2.0;
++    ASSERT_TRUE(controller.move(command));
++    // 不能等 lastCommandOutcome == Delivered：上一条命令的结果就是
++    // Delivered，等待会立即返回，读到的仍是旧事务。事务号才是新命令
++    // 已被 worker 处理的判据。
++    ASSERT_TRUE(waitFor([&controller, stoppedTransaction] {
++        return controller.diagnostics().motionTransactionId >
++               stoppedTransaction;
++    })) << "新命令未被 worker 处理";
++
++    const auto afterMove = controller.diagnostics();
++    EXPECT_FALSE(afterMove.stopFrameDelivered)
++        << "新运动携带了上一次停止的 stopFrameDelivered";
++    EXPECT_FALSE(afterMove.stopObservedStationary)
++        << "新运动携带了上一次停止的 stopObservedStationary";
++    EXPECT_GT(afterMove.motionTransactionId, stoppedTransaction)
++        << "新运动必须开启新的运动事务";
++    EXPECT_LE(afterMove.stopFactsTransactionId, stoppedTransaction)
++        << "停止事实仍应归属于旧事务";
++}
++
+ }  // namespace
+ }  // namespace device
+ }  // namespace aircraft
+diff --git a/AircraftPoseSystem/tests/integration/MeasurementFlowTest.cpp b/AircraftPoseSystem/tests/integration/MeasurementFlowTest.cpp
+index 7c2f449..5ecd50d 100644
+--- a/AircraftPoseSystem/tests/integration/MeasurementFlowTest.cpp
++++ b/AircraftPoseSystem/tests/integration/MeasurementFlowTest.cpp
+@@ -127,6 +127,11 @@ public:
+     /// 是否上报 ERROR 运动状态（§7.5：转台故障 → 直接 FAILED，不重试）。
+     bool errorState = false;
+ 
++    /// 模拟真实后端**撤销 STABLE 后落到 IDLE**（评审 2026-10-20 第 4 项：
++    /// 到位后读数偏离/样本失效时，C2 要求撤销稳定状态）。
++    /// 置位后 state() 在无待执行指令时返回 IDLE 而不是 STABLE。
++    bool revokedToIdle = false;
++
+     /// 每次 move() 后返回 MOVING 的次数。
+     int movingTicks = 1;
+ 
+@@ -202,7 +207,9 @@ public:
+         elevation = targetEl_;
+         s.azimuth = azimuth;
+         s.elevation = elevation;
+-        s.motion = aircraft::data::TurntableMotionState::STABLE;
++        s.motion = revokedToIdle
++                       ? aircraft::data::TurntableMotionState::IDLE
++                       : aircraft::data::TurntableMotionState::STABLE;
+         return s;
+     }
+ 
+@@ -1203,6 +1210,43 @@ TEST(MeasurementFlowTest, 正常路径应走完12状态并成功终止)
+     EXPECT_NEAR(h.recorder_.lastRecord.task.result.yaw, 12.34, 1e-9);
+ }
+ 
++/// 评审 2026-10-20 第 4 项：后端撤销 STABLE 后落到 IDLE，上层不得
++/// 仅凭“图像仍然居中”继续累计稳定帧。旧实现只拦 ERROR/MOVING，
++/// 三次 tick 后就会进入 MEASURE_SELECT。
++TEST(MeasurementFlowTest, 撤销STABLE后STABILIZE不得仅凭图像居中继续)
++{
++    Harness h;
++    h.turntableConfig_ = configuredTurntable();
++    h.build();
++
++    h.controller_->startMeasurement(0);
++    uint64_t now = 0;
++    for (int i = 0; i < 40 && h.controller_->state() != S::STABILIZE; ++i)
++    {
++        now += kStepNs;
++        h.tickAt(now);
++    }
++    ASSERT_EQ(h.controller_->state(), S::STABILIZE)
++        << "前提不成立：未进入 STABILIZE";
++    ASSERT_GT(h.turntable_.moveCount, 0)
++        << "前提不成立：本任务从未指令过转台";
++
++    // 后端撤销 STABLE：转台侧不再给出可采集的稳定结论。
++    h.turntable_.revokedToIdle = true;
++
++    for (int i = 0; i < 5; ++i)
++    {
++        now += kStepNs;
++        h.tickAt(now);
++        const S s = h.controller_->state();
++        EXPECT_NE(s, S::MEASURE_SELECT)
++            << "撤销 STABLE 后第 " << (i + 1)
++            << " 个 tick 仍进入了 MEASURE_SELECT";
++        EXPECT_NE(s, S::CAPTURE);
++        EXPECT_NE(s, S::COMPLETE);
++    }
++}
++
+ TEST(MeasurementFlowTest, 正常路径的每个尝试都不超过其状态超时)
+ {
+     // §7.3 的"该状态最大耗时"列只有在"单次尝试 ≤ T_state"成立时才有意义。
+diff --git a/AircraftPoseSystem/tests/integration/RecorderAdapterTest.cpp b/AircraftPoseSystem/tests/integration/RecorderAdapterTest.cpp
+index 9f7c746..8cf5a70 100644
+--- a/AircraftPoseSystem/tests/integration/RecorderAdapterTest.cpp
++++ b/AircraftPoseSystem/tests/integration/RecorderAdapterTest.cpp
+@@ -680,6 +680,45 @@ TEST(RecorderAdapter, MetadataMergeRulesAreExplicitAndNeverStitchIdentities)
+         EXPECT_TRUE(anyContains(missing, "model_type"))
+             << "拒绝拼接后必须按必填缺失如实登记";
+     }
++
++    // ---- 反向：model_id 是合成资产，model_type 却声称 production ----
++    //
++    // 上一段只覆盖了“synthetic 类型 + 非合成 id”。反向同样是把两个
++    // 不同资产的字段拼成一条身份：守卫必须双向生效，不能只挡一个方向。
++    {
++        aircraft::data::MeasurementRecord r = recordWithSentinels();
++        r.task.taskId     = "measurement_merge_stitch_reverse";
++        r.calibrationId   = "";
++        r.modelId         = "";
++        r.softwareVersion = "";
++        r.runMode         = "";
++        r.truthSource     = "";
++        r.modelType       = "";
++
++        RunMetadata meta;
++        meta.runMode   = "simulation";
++        meta.modelType = "production";
++        const std::string dir =
++            saveWith(r, meta, aircraft::data::synthetic::modelId());
++        ASSERT_FALSE(dir.empty());
++        cv::FileStorage fs(joinPath(dir, "result.json"),
++                           cv::FileStorage::READ);
++        ASSERT_TRUE(fs.isOpened());
++        std::string v;
++        fs["model_id"] >> v;
++        EXPECT_EQ(v, aircraft::data::synthetic::modelId());
++        fs["model_type"] >> v;
++        EXPECT_TRUE(v.empty())
++            << "合成 model_id 与 production 类型被拼成了一条身份：" << v;
++        const std::vector<std::string> conflicts =
++            readStrings(fs["metadata_conflicts"]);
++        EXPECT_TRUE(anyContains(conflicts, "拒绝拼装身份"))
++            << "反向拼接没有留下诊断";
++        const std::vector<std::string> missing =
++            readStrings(fs["missing_required_fields"]);
++        EXPECT_TRUE(anyContains(missing, "model_type"))
++            << "反向拼接后必须按必填缺失如实登记";
++    }
+ }
+ 
+ /// 适配器**不得**动测量事实。
+diff --git a/AircraftPoseSystem/tests/optical/OpticalLayerTest.cpp b/AircraftPoseSystem/tests/optical/OpticalLayerTest.cpp
+index 5db2a4e..4d08992 100644
+--- a/AircraftPoseSystem/tests/optical/OpticalLayerTest.cpp
++++ b/AircraftPoseSystem/tests/optical/OpticalLayerTest.cpp
+@@ -38,6 +38,7 @@
+ #include <cmath>
+ #include <cstdint>
+ #include <filesystem>
++#include <fstream>
+ #include <limits>
+ #include <string>
+ #include <type_traits>
+@@ -535,6 +536,27 @@ TEST_F(CalibrationDirFixture, RejectsWrongShapeCameraMatrix)
+     EXPECT_NE(cm.lastErrorText().find("3x3"), std::string::npos);
+ }
+ 
++TEST_F(CalibrationDirFixture, MalformedFileIsRejectedNotThrown)
++{
++    // R10 的文件解析异常边界：畸形 YAML 会让 OpenCV 的 FileStorage 抛
++    // cv::Exception。未捕获时异常直接穿透 load()，调用方拿不到
++    // “拒绝装载 + 原因”，还可能留下半解析状态。
++    {
++        std::ofstream out(path("cam25.yaml"), std::ios::trunc);
++        ASSERT_TRUE(out.is_open());
++        // 未闭合的流式序列 —— 解析器在读取阶段就会报错。
++        out << "image_width: [1280, 1024\n"
++               "camera_matrix: {";
++    }
++
++    CalibrationManager cm;
++    EXPECT_FALSE(cm.load(dir()));
++    EXPECT_FALSE(cm.loaded());
++    EXPECT_TRUE(cm.calibrationId().empty());
++    EXPECT_NE(cm.lastErrorText().find("解析异常"), std::string::npos)
++        << cm.lastErrorText();
++}
++
+ TEST_F(CalibrationDirFixture, MissingDistortionWarnsButStillLoads)
+ {
+     // 缺畸变系数是"显式的针孔假设"，不是非法值：允许装载但必须留痕。
+diff --git a/AircraftPoseSystem/tests/run_tests.sh b/AircraftPoseSystem/tests/run_tests.sh
+index dced43b..592bedd 100644
+--- a/AircraftPoseSystem/tests/run_tests.sh
++++ b/AircraftPoseSystem/tests/run_tests.sh
+@@ -17,21 +17,68 @@
+ #  用法：
+ #      bash tests/run_tests.sh              # build_tests/ 下配置并全量运行
+ #      BUILD_DIR=/tmp/aps-build bash tests/run_tests.sh
+-#      APS_HAVE_IMVSDK=1 bash tests/run_tests.sh   # 需要 SDK 变体时
++#      APS_SDK_MODE=ON bash tests/run_tests.sh    # 必须有 SDK（缺则失败）
++#      APS_SDK_MODE=OFF bash tests/run_tests.sh   # 明确无 SDK 构建树
++#
++#  APS_SDK_MODE 默认 AUTO（探测，找不到则降级）。旧变量 APS_HAVE_IMVSDK
++#  仅作兼容映射 —— 它曾经是**输入**，但会被 Dependencies.cmake 的查找结果
++#  覆盖，导致“传了 1 却仍是无 SDK 构建”。现在脚本只信 CMakeCache 里的
++#  实际检测值，并在模式与结果不一致时失败。
+ # ============================================================================
+ set -euo pipefail
+ 
+ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ BUILD_DIR="${BUILD_DIR:-$ROOT/build_tests}"
+-SDK="${APS_HAVE_IMVSDK:-0}"
+ JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
+ 
++SDK_MODE="${APS_SDK_MODE:-}"
++if [[ -z "$SDK_MODE" && -n "${APS_HAVE_IMVSDK:-}" ]]; then
++    case "$APS_HAVE_IMVSDK" in
++        1|ON|on|TRUE|true)   SDK_MODE=ON ;;
++        0|OFF|off|FALSE|false) SDK_MODE=OFF ;;
++        *)
++            echo "[run_tests] 错误：APS_HAVE_IMVSDK=${APS_HAVE_IMVSDK} 无法识别。" >&2
++            exit 2
++            ;;
++    esac
++    echo "[run_tests] 警告：APS_HAVE_IMVSDK 已废弃，按 APS_SDK_MODE=$SDK_MODE 处理" >&2
++fi
++SDK_MODE="${SDK_MODE:-AUTO}"
++case "${SDK_MODE^^}" in
++    AUTO|ON|OFF) ;;
++    *)
++        echo "[run_tests] 错误：APS_SDK_MODE=$SDK_MODE 非法，只接受 AUTO / ON / OFF。" >&2
++        exit 2
++        ;;
++esac
++SDK_MODE="${SDK_MODE^^}"
++
+ echo "[run_tests] 源码目录：$ROOT"
+-echo "[run_tests] 构建目录：$BUILD_DIR（APS_HAVE_IMVSDK=$SDK）"
++echo "[run_tests] 构建目录：$BUILD_DIR（APS_SDK_MODE=$SDK_MODE）"
+ 
+ cmake -S "$ROOT" -B "$BUILD_DIR" \
+     -DBUILD_TESTING=ON \
+-    -DAPS_HAVE_IMVSDK="$SDK"
++    -DAPS_SDK_MODE="$SDK_MODE"
++
++# ---- SDK 分支核对 ----------------------------------------------------------
++# 不能只看“传进去的模式”：Dependencies.cmake 里 APS_HAVE_IMVSDK 由
++# find_package 结果派生。这里读**实际缓存值**，避免再次出现“声称测了
++# SDK 变体、实际跑的是无 SDK 构建”。
++ACTUAL_SDK="$(grep -E '^APS_HAVE_IMVSDK:[A-Z]+=' "$BUILD_DIR/CMakeCache.txt" \
++    | tail -n 1 | cut -d= -f2)"
++if [[ -z "$ACTUAL_SDK" ]]; then
++    echo "[run_tests] 错误：CMakeCache.txt 中没有 APS_HAVE_IMVSDK（Dependencies.cmake 版本不匹配？）" >&2
++    exit 1
++fi
++echo "[run_tests] 实际检测：APS_HAVE_IMVSDK=$ACTUAL_SDK（APS_SDK_MODE=$SDK_MODE）"
++if [[ "$SDK_MODE" == "ON" && "$ACTUAL_SDK" != "TRUE" ]]; then
++    echo "[run_tests] 错误：要求 SDK，但实际未检测到 ImvSdk。" >&2
++    exit 1
++fi
++if [[ "$SDK_MODE" == "OFF" && "$ACTUAL_SDK" == "TRUE" ]]; then
++    echo "[run_tests] 错误：APS_SDK_MODE=OFF，但缓存中 APS_HAVE_IMVSDK=TRUE。" >&2
++    exit 1
++fi
+ 
+ # ---- GoogleTest 检测 -------------------------------------------------------
+ # tests/CMakeLists.txt 在缺 GTest 时直接 return()，**不会** add_subdirectory
+diff --git a/AircraftPoseSystem/待裁决问题汇总.md b/AircraftPoseSystem/待裁决问题汇总.md
+index 32dc96f..c9e7f8a 100644
+--- a/AircraftPoseSystem/待裁决问题汇总.md
++++ b/AircraftPoseSystem/待裁决问题汇总.md
+@@ -80,6 +80,42 @@
+ > 真实丢包、`0xDD` 交叉核对均未验证；只读复测的控制帧计数仍须保持 0。
+ > ⚠ 界面核对未执行（headless）；不声称“物理停止已确认”。
+ >
++> **C-23 独立复核整改记录（2026-10-20）**：独立复核结论为 **A 批不能关闭**
++> （B 批“指定合成场景最小成功流程”的结论可以保留）。复核列出 6 项 A 缺陷：
++> ① 第一轴已发出后取消，停止屏障补不出停止帧；② 两轴快照仍可跨轮拼接；
++> ③ 轮询期间停止要等完整两轴期限；④ 撤销 `STABLE` 后上层仍仅凭图像居中继续采集；
++> ⑤ 停止未交付的 2005 被后续 2008 覆盖；⑥ 新运动携带上一停止的
++> `stopFrameDelivered`/`stopObservedStationary` 肯定事实。另指出测试入口两处缺陷
++> （`ctest -R '^test_'` 匹配不到 `gtest_discover_tests` 注册的 `Suite.Test`；
++> `APS_HAVE_IMVSDK` 被 `Dependencies.cmake` 的 `set(... FALSE)` 覆盖，脚本无法选择
++> SDK 分支）与 B 批两项：身份拼接守卫只拦“合成类型 + 非合成 id”单向；
++> R10 文件解析异常边界未定向验证。
++>
++> 本批修复：`move()` 用 `frameSent` 区分“已发出”与“仅尝试”，水平/垂直两处取消分支
++> 都补发停止；样本发布改为 seqlock（奇偶序号 + `loadSample` 重试），新增
++> `motionTransactionId`/`stopFactsTransactionId`，新运动开始时清零停止事实；
++> `queryAngle`/`pollOnce` 在每个接收切片前响应停止屏障；`stepStabilize` 只接受
++> `STABLE`，或“本任务从未成功受理过运动命令的 `IDLE`”，并消费诊断的
++> `motionUncertain`/`errorLatched`/样本新鲜度；看门狗仅在停止已交付时锁存 2008，
++> 停止未交付时保留 2005；身份守卫改为双向；`CalibrationManager::load()` 把
++> `cv::Exception`/`std::exception` 转为“拒绝装载”。测试入口改为
++> `APS_SDK_MODE=AUTO/ON/OFF` + `APS_HAVE_IMVSDK` 派生 `CACHE INTERNAL`
++> （旧变量仅作一次性迁移映射）、`gtest_discover_tests` 增加
++> `TEST_PREFIX "<target>."`（CMake ≥3.20），`tests/run_tests.sh` 读取缓存中的
++> **实际检测值**，ON/OFF 与结果不一致时失败。
++>
++> 验证（2026-10-20）：`build` 与 `build_nosdk` 均编译通过；12 个垫片套件逐个运行
++> 共 **462 例**（PelcoD 82、flow 46、Optical 48、Device 83、Preview 40、
++> Pipeline 29、RecorderPackage 29、StateMachine 27、sysinittest 26、
++> Algorithm 23、Alignment 21、RecorderAdapter 8），0 失败断言、0 异常；
++> 8 项定向变异先红后绿，记录见
++> `AircraftPoseSystem/evidence/转台可信化_C-23/02_变异检查记录.md` 第 5 节。
++> `APS_SDK_MODE=OFF`、`ON+缺 SDK`、旧变量映射三组配置级验证通过。
++> ⚠ **原生 CMake/CTest 路径仍未执行**（本机无 GoogleTest）：`TEST_PREFIX`
++> 只做了源码与配置级核对，不得据此声称“原生入口已通过”。
++> ⚠ **状态仍为“已实施，待独立复核关闭”**；A 批不得关闭。实机运动/停止、
++> 真实丢包、`0xDD` 交叉核对仍未验证；生产只读会话控制帧必须保持 0。
++>
+ > 本文件继续作为缺口登记总表使用。**其余条目仍未处置**，其中 Q-B3 经复核
+ > **不属 C-002 范围**（其卡点是 `distanceBand` / `illumBand` 无生产者），需单独立项。
+ 

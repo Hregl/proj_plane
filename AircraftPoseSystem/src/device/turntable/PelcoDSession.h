@@ -32,6 +32,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 
 #include "data/ErrorInfo.h"
 #include "data/TurntableCommand.h"
@@ -74,7 +75,13 @@ public:
 
     /// 执行一个轮询周期：查询两轴（**同一轮次**）、更新快照、推进
     /// STABLE/看门狗与停止后静止观测。
-    void pollOnce();
+    ///
+    /// @param shouldAbort 停止屏障回调。**每个接收切片前**都会检查；
+    ///        返回 true 时本周期立即放弃（不发布半轮样本、不计通信失败），
+    ///        使 worker 能在 ≤ 一个接收切片（kReceiveSliceMs）内处理停止，
+    ///        而不是等满两轴各自的 replyTimeoutMs。
+    void pollOnce(const std::function<bool()>& shouldAbort =
+                      std::function<bool()>());
 
     /// 显式停止：允许重新武装停止重试。ReadOnly 下为无帧 no-op。
     void stop();
@@ -105,18 +112,32 @@ public:
     /// 默认值三处都不可达。**不改变 WorkMode 可信度**。
     void setTestMotionGate(bool allow) { testMotionGate_ = allow; }
 
+    /// ⚠ 单元测试专用：在样本临界区内、写完方位角之后调用一次。
+    /// 只用于**确定性地**暴露“读端跨两次发布拼接两轴”的撕裂窗口；
+    /// 生产装配从不设置（默认空函数）。不得在 worker 运行期间修改。
+    void setSamplePublishHookForTest(std::function<void()> hook)
+    {
+        samplePublishHook_ = std::move(hook);
+    }
+
 private:
     // ---- 单次收发的辅助 ----
     std::uint64_t nowNs() const;
     bool sendFrame(const PelcoDFrame& frame, std::string& error);
     bool waitForEcho(const PelcoDFrame& sent, std::string& error, bool& rejected,
                      const std::function<bool()>& shouldAbort);
+    /// @param frameSent 至少成功发出一帧时为 true（用于“部分发送后取消
+    ///        仍必须补发停止帧”的判定）。
     bool sendAndAwaitEcho(const PelcoDFrame& frame, std::string& error,
                           bool& rejected,
-                          const std::function<bool()>& shouldAbort);
+                          const std::function<bool()>& shouldAbort,
+                          bool& frameSent);
     /// 地址错误的回复按“没有有效回复”处理（C3）。
+    /// @param aborted 因停止屏障放弃（不是通信失败，不参与失败计数）。
     bool queryAngle(bool horizontal, double& out, std::string& error,
-                    int retries);
+                    int retries,
+                    const std::function<bool()>& shouldAbort = {},
+                    bool* aborted = nullptr);
     /// @param echoOnly 收到的回复与查询帧逐字节相同（回显歧义）。
     bool queryWorkMode(std::uint8_t& out, bool& echoOnly, std::string& error,
                        int retries);
@@ -127,6 +148,10 @@ private:
     void setFirstFault(int code, const std::string& text,
                        const std::string& context);
     void publishSample(double az, double el, std::uint64_t now, bool valid);
+    /// 一次性读出**同一轮次**的样本（seqlock）。任何一轴/时刻/有效性/
+    /// 轮次都不会来自两次发布。
+    void loadSample(double& az, double& el, std::uint64_t& now,
+                    std::uint64_t& cycle, bool& valid) const;
     void checkStaleLocked() const;
     bool withinTolerance(double az, double el) const;
     void updateMotion(double az, double el);
@@ -170,7 +195,12 @@ private:
     data::ErrorInfo    lastError_;
     data::TurntableFault firstFault_;
 
-    // ---- 快照（无锁原子量）----
+    // ---- 快照（无锁原子量 + seqlock）----
+    //
+    // sampleSeq_ 为偶数时样本稳定；写端先置奇数、写完各字段再置回偶数。
+    // 读端只有在前后的序号相同且为偶数时才接受这一组值 —— 这正是
+    // “两轴不得跨轮拼接”的运行时保证，而不只是注释约定。
+    std::atomic<std::uint64_t> sampleSeq_{0};
     std::atomic<bool>     initialized_{false};
     std::atomic<bool>     errorLatched_{false};
     std::atomic<double>   azimuth_{0.0};
@@ -178,10 +208,13 @@ private:
     std::atomic<std::uint64_t> sampleTimestampNs_{0};
     std::atomic<std::uint64_t> sampleCycleId_{0};
     std::atomic<bool>     sampleValid_{false};
+    std::function<void()> samplePublishHook_;
     std::atomic<data::TurntableMotionState> motion_{
         data::TurntableMotionState::IDLE};
     std::atomic<data::WorkModeTrust> workModeTrust_{
         data::WorkModeTrust::Unknown};
+    std::atomic<std::uint64_t> motionTransactionId_{0};
+    std::atomic<std::uint64_t> stopFactsTransactionId_{0};
     std::atomic<bool> stopFrameDelivered_{false};
     std::atomic<bool> stopObservedStationary_{false};
     std::atomic<bool> motionUncertain_{false};

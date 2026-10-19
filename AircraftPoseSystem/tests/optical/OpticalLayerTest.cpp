@@ -38,6 +38,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <string>
 #include <type_traits>
@@ -533,6 +534,27 @@ TEST_F(CalibrationDirFixture, RejectsWrongShapeCameraMatrix)
     CalibrationManager cm;
     EXPECT_FALSE(cm.load(dir()));
     EXPECT_NE(cm.lastErrorText().find("3x3"), std::string::npos);
+}
+
+TEST_F(CalibrationDirFixture, MalformedFileIsRejectedNotThrown)
+{
+    // R10 的文件解析异常边界：畸形 YAML 会让 OpenCV 的 FileStorage 抛
+    // cv::Exception。未捕获时异常直接穿透 load()，调用方拿不到
+    // “拒绝装载 + 原因”，还可能留下半解析状态。
+    {
+        std::ofstream out(path("cam25.yaml"), std::ios::trunc);
+        ASSERT_TRUE(out.is_open());
+        // 未闭合的流式序列 —— 解析器在读取阶段就会报错。
+        out << "image_width: [1280, 1024\n"
+               "camera_matrix: {";
+    }
+
+    CalibrationManager cm;
+    EXPECT_FALSE(cm.load(dir()));
+    EXPECT_FALSE(cm.loaded());
+    EXPECT_TRUE(cm.calibrationId().empty());
+    EXPECT_NE(cm.lastErrorText().find("解析异常"), std::string::npos)
+        << cm.lastErrorText();
 }
 
 TEST_F(CalibrationDirFixture, MissingDistortionWarnsButStillLoads)

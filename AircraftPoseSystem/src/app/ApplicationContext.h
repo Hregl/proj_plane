@@ -197,15 +197,24 @@ public:
         // 之后才被填入。这里再核一次，防止未来出现“id 是合成、类型是
         // production”这类拼接。不一致时**不猜**：清空 model_type，
         // 让 `missing_required_fields` 如实报缺，并留下诊断。
-        if (!filled.modelType.empty() && !filled.modelId.empty()
-            && filled.modelType == data::synthetic::modelType()
-            && filled.modelId != data::synthetic::modelId())
+        //
+        // ⚠ 判据必须**双向**：既要挡“类型=synthetic + 非合成 id”，
+        //   也要挡“合成 id + 类型=production”。只挡一个方向时，反向
+        //   拼接会静默写出一个从未存在过的身份（评审 2026-10-20）。
+        if (!filled.modelType.empty() && !filled.modelId.empty())
         {
-            conflicts.push_back(
-                "model_type/model_id: 类型=synthetic 但 model_id=\"" +
-                filled.modelId +
-                "\"；拒绝拼装身份，model_type 置空（按必填缺失处理）");
-            filled.modelType.clear();
+            const bool typeIsSynthetic =
+                filled.modelType == data::synthetic::modelType();
+            const bool idIsSynthetic =
+                filled.modelId == data::synthetic::modelId();
+            if (typeIsSynthetic != idIsSynthetic)
+            {
+                conflicts.push_back(
+                    "model_type/model_id: 类型=\"" + filled.modelType +
+                    "\" 但 model_id=\"" + filled.modelId +
+                    "\"；拒绝拼装身份，model_type 置空（按必填缺失处理）");
+                filled.modelType.clear();
+            }
         }
 
         // 真值比较只在**解算成功**时有意义。失败包仍写入真值本身

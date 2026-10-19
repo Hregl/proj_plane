@@ -193,9 +193,10 @@ bool PelcoDSession::waitForEcho(const PelcoDFrame& sent, std::string& error,
 
 bool PelcoDSession::sendAndAwaitEcho(
     const PelcoDFrame& frame, std::string& error, bool& rejected,
-    const std::function<bool()>& shouldAbort)
+    const std::function<bool()>& shouldAbort, bool& frameSent)
 {
-    rejected = false;
+    rejected  = false;
+    frameSent = false;
     for (int attempt = 0; attempt <= kCommandRetries; ++attempt)
     {
         if (shouldAbort && shouldAbort())
@@ -207,6 +208,8 @@ bool PelcoDSession::sendAndAwaitEcho(
         {
             return false;
         }
+        // 从这一刻起设备**可能**已经接受指令：取消时必须补发停止帧。
+        frameSent = true;
         if (waitForEcho(frame, error, rejected, shouldAbort))
         {
             return true;
@@ -228,8 +231,14 @@ bool PelcoDSession::sendAndAwaitEcho(
 }
 
 bool PelcoDSession::queryAngle(bool horizontal, double& out,
-                               std::string& error, int retries)
+                               std::string& error, int retries,
+                               const std::function<bool()>& shouldAbort,
+                               bool* aborted)
 {
+    if (aborted != nullptr)
+    {
+        *aborted = false;
+    }
     const std::uint8_t address =
         static_cast<std::uint8_t>(config_.pelcoAddress);
     const PelcoDFrame query =
@@ -238,6 +247,17 @@ bool PelcoDSession::queryAngle(bool horizontal, double& out,
 
     for (int attempt = 0; attempt <= retries; ++attempt)
     {
+        // 停止屏障优先于整轮查询：每轴最多等 replyTimeoutMs，不能
+        // 让停止请求排在它后面（否则一次双轴轮询可拖住 ~400 ms）。
+        if (shouldAbort && shouldAbort())
+        {
+            if (aborted != nullptr)
+            {
+                *aborted = true;
+            }
+            error = "角度查询被停止屏障取消";
+            return false;
+        }
         if (!sendFrame(query, error))
         {
             return false;
@@ -248,6 +268,16 @@ bool PelcoDSession::queryAngle(bool horizontal, double& out,
         bool retry = false;
         while (!retry)
         {
+            if (shouldAbort && shouldAbort())
+            {
+                if (aborted != nullptr)
+                {
+                    *aborted = true;
+                }
+                error = "角度查询被停止屏障取消";
+                return false;
+            }
+
             const std::uint64_t now = nowNs();
             if (now >= deadline)
             {
@@ -476,6 +506,8 @@ bool PelcoDSession::initialize(std::string& error)
     stopHasLast_          = false;
     stopObservationDeadlineNs_ = 0;
     motionUncertain_      = false;
+    motionTransactionId_  = 0;
+    stopFactsTransactionId_ = 0;
     stopFrameDelivered_   = false;
     stopObservedStationary_ = false;
     sampleValid_          = false;
@@ -705,18 +737,40 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
         return false;
     }
 
-    stopSent_       = false;
-    stopRetryArmed_ = false;
+    // 新的运动事务从这里开始：上一停止事务的“已交付/已观测静止”
+    // 是**上一次**运动的事实，不能挂在新命令上。停止事实由
+    // stopFrameDelivered/stopObservedStationary 表达，二者必须随
+    // 新事务清零；否则上层会看到“正在 MOVING 且已观测到静止”。
+    stopSent_               = false;
+    stopRetryArmed_         = false;
+    stopPending_            = false;
+    stopStationaryCount_    = 0;
+    stopHasLast_            = false;
+    stopFrameDelivered_     = false;
+    stopObservedStationary_ = false;
+    // 事务归属：新运动开始即分配新编号。上一停止事务的编号保留在
+    // stopFactsTransactionId_ 中，读端可据此识别“事实属于旧事务”。
+    motionTransactionId_.fetch_add(1);
 
-    bool rejected = false;
+    bool rejected         = false;
+    bool horizontalSent   = false;
+    bool verticalSent     = false;
     std::string failure;
 
-    if (!sendAndAwaitEcho(horizontalFrame, failure, rejected, shouldAbort))
+    if (!sendAndAwaitEcho(horizontalFrame, failure, rejected, shouldAbort,
+                          horizontalSent))
     {
         if (shouldAbort && shouldAbort())
         {
-            // 停止屏障已取消本次命令：不恢复、不再自行发停止帧
-            //（停止帧由屏障路径发送一次）。
+            // 停止屏障已取消本次命令。⚠ 若第一轴已经发出，设备**可能
+            // 已经开始运动** —— 取消不等于“什么都没发生”。必须补发
+            // 停止帧；否则屏障里的 session_->stop() 会因 moving_ 仍为
+            // false 而直接返回，最终一条停止帧都没有。
+            if (horizontalSent)
+            {
+                performStop(0, "部分发送后被取消", "move/cancel_horizontal",
+                            false);
+            }
             error = failure.empty() ? "指令被停止屏障取消" : failure;
             return false;
         }
@@ -728,10 +782,14 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
         return false;
     }
 
-    if (!sendAndAwaitEcho(verticalFrame, failure, rejected, shouldAbort))
+    if (!sendAndAwaitEcho(verticalFrame, failure, rejected, shouldAbort,
+                          verticalSent))
     {
         if (shouldAbort && shouldAbort())
         {
+            // 水平轴已交付（或至少已发出）：必须请求停止，不能留下
+            // 单轴运动。这正是“部分发送取消”的反例路径。
+            performStop(0, "部分发送后被取消", "move/cancel_vertical", false);
             error = failure.empty() ? "指令被停止屏障取消" : failure;
             return false;
         }
@@ -748,13 +806,12 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
     stableCount_ = 0;
     hasLastRead_ = false;
     consecutiveFailures_ = 0;
-    stopPending_ = false;
     motion_.store(data::TurntableMotionState::MOVING);
     armWatchdog(azimuthTarget, elevationTarget);
     return true;
 }
 
-void PelcoDSession::pollOnce()
+void PelcoDSession::pollOnce(const std::function<bool()>& shouldAbort)
 {
     if (!initialized_.load())
     {
@@ -784,10 +841,16 @@ void PelcoDSession::pollOnce()
     {
         moveDeadlineNs_ = 0;
         // 2008 是“命令未在时限内完成”的事实，不是一次通信失败。
+        // stopForFault 按“停止是否交付”写当前错误：交付时是原始码，
+        // 未交付时是更严重的 2005。只有交付时才把 2008 置为锁存；
+        // 否则会用 2008 覆盖 2005，把“停止没发出去”伪装成单纯超时。
         stopForFault(data::kErrTurntableMotionWatchdog,
                      "移动看门狗超时", "watchdog");
-        setError(data::kErrTurntableMotionWatchdog, "移动看门狗超时", true,
-                 "watchdog");
+        if (stopFrameDelivered_.load())
+        {
+            setError(data::kErrTurntableMotionWatchdog,
+                     "移动看门狗超时", true, "watchdog");
+        }
         motion_.store(data::TurntableMotionState::ERROR);
         return;
     }
@@ -799,16 +862,28 @@ void PelcoDSession::pollOnce()
 
     // 轮询周期内**不重试**：下一个周期就是重试。一次丢包不该把
     // 50 ms 的周期拖成 150 ms。
-    const bool gotAzimuth = queryAngle(true, azimuth, azError, 0);
-    const bool gotElevation = queryAngle(false, elevation, elError, 0);
+    //
+    // 停止屏障在**每个接收切片**前检查：一次双轴轮询的最坏时长是
+    // 2 × replyTimeoutMs，不能让它把停止请求整段拖住。
+    bool aborted = false;
+    const bool gotAzimuth =
+        queryAngle(true, azimuth, azError, 0, shouldAbort, &aborted);
+    if (aborted)
+    {
+        return;   // 停止优先；本轮不发布、不计失败
+    }
+    const bool gotElevation =
+        queryAngle(false, elevation, elError, 0, shouldAbort, &aborted);
+    if (aborted)
+    {
+        return;
+    }
 
     // C4：两轴必须同轮。任一轴缺失 ⇒ 整个样本无效，**不得**把
     // 新方位角与旧俯仰角拼在一起发布。
     if (!gotAzimuth || !gotElevation)
     {
-        sampleCycleId_.fetch_add(1);
-        sampleTimestampNs_.store(now);
-        sampleValid_.store(false);
+        publishSample(azimuth_.load(), elevation_.load(), now, false);
         ++consecutiveFailures_;
         stableCount_ = 0;
         hasLastRead_ = false;
@@ -826,8 +901,9 @@ void PelcoDSession::pollOnce()
                 "连续 " + std::to_string(consecutiveFailures_) +
                 " 个轮询周期无有效角度回复";
             setFirstFault(data::kErrTurntableComm, text, "poll/lost_link");
+            // 同看门狗：stopForFault 已按“停止是否交付”写好当前错误；
+            // 停止未交付（2005）优先于本故障码，不能被它覆盖。
             stopForFault(data::kErrTurntableComm, text, "poll/lost_link");
-            setError(data::kErrTurntableComm, text, true, "poll/lost_link");
             motion_.store(data::TurntableMotionState::ERROR);
         }
         return;
@@ -863,6 +939,10 @@ bool PelcoDSession::performStop(int faultCode, const std::string& faultMessage,
     {
         stopSent_ = false;
     }
+
+    // 这次停止处理属于当前运动事务。即使发送失败，归属也要如实记录，
+    // 读端才能区分“上个事务的已停止”与“本事务的停止结果”。
+    stopFactsTransactionId_.store(motionTransactionId_.load());
 
     const std::uint8_t address =
         static_cast<std::uint8_t>(config_.pelcoAddress);
@@ -995,13 +1075,51 @@ void PelcoDSession::stop()
 void PelcoDSession::publishSample(double az, double el, std::uint64_t now,
                                   bool valid)
 {
-    azimuth_.store(az);
-    elevation_.store(el);
-    sampleTimestampNs_.store(now);
-    sampleValid_.store(valid);
-    if (valid)
+    // seqlock：奇数为“写入中”。读端若在写入过程中取到奇序号，或前后
+    // 序号不同，就重读 —— 因此不可能读到 (新方位角, 旧俯仰角) 这种
+    // 跨轮拼接，即使每个字段本身都是原子的、数值也都合法。
+    const std::uint64_t seq = sampleSeq_.load(std::memory_order_relaxed);
+    sampleSeq_.store(seq + 1, std::memory_order_relaxed);
+    std::atomic_thread_fence(std::memory_order_release);
+
+    azimuth_.store(az, std::memory_order_relaxed);
+    if (samplePublishHook_)
     {
-        sampleCycleId_.fetch_add(1);
+        // 仅测试：确定性地把读端放进“方位角已写、俯仰角未写”的窗口。
+        samplePublishHook_();
+    }
+    elevation_.store(el, std::memory_order_relaxed);
+    sampleTimestampNs_.store(now, std::memory_order_relaxed);
+    sampleValid_.store(valid, std::memory_order_relaxed);
+    sampleCycleId_.store(sampleCycleId_.load(std::memory_order_relaxed) + 1,
+                         std::memory_order_relaxed);
+
+    sampleSeq_.store(seq + 2, std::memory_order_release);
+}
+
+void PelcoDSession::loadSample(double& az, double& el, std::uint64_t& now,
+                               std::uint64_t& cycle, bool& valid) const
+{
+    for (;;)
+    {
+        const std::uint64_t begin =
+            sampleSeq_.load(std::memory_order_acquire);
+        if ((begin & 1u) != 0u)
+        {
+            continue;   // 写入中
+        }
+
+        az    = azimuth_.load(std::memory_order_relaxed);
+        el    = elevation_.load(std::memory_order_relaxed);
+        now   = sampleTimestampNs_.load(std::memory_order_relaxed);
+        cycle = sampleCycleId_.load(std::memory_order_relaxed);
+        valid = sampleValid_.load(std::memory_order_relaxed);
+
+        std::atomic_thread_fence(std::memory_order_acquire);
+        if (sampleSeq_.load(std::memory_order_relaxed) == begin)
+        {
+            return;
+        }
     }
 }
 
@@ -1115,16 +1233,18 @@ void PelcoDSession::updateMotion(double az, double el)
 data::TurntableState PelcoDSession::snapshot() const
 {
     data::TurntableState state;
-    state.azimuth   = azimuth_.load();
-    state.elevation = elevation_.load();
-    state.motion    = motion_.load();
+    std::uint64_t ts    = 0;
+    std::uint64_t cycle = 0;
+    bool valid = false;
+    // 一次读出**同一轮**的方位/俯仰/时刻/有效性：两轴不得跨发布拼接。
+    loadSample(state.azimuth, state.elevation, ts, cycle, valid);
+    state.motion = motion_.load();
 
     if (initialized_.load())
     {
         const std::uint64_t now = nowNs();
-        const std::uint64_t ts  = sampleTimestampNs_.load();
         const bool stale =
-            !sampleValid_.load() || ts == 0 || now < ts ||
+            !valid || ts == 0 || now < ts ||
             (now - ts) > msToNs(config_.sampleStaleMs);
         if (stale)
         {
@@ -1138,11 +1258,9 @@ data::TurntableState PelcoDSession::snapshot() const
 data::TurntableDiagnostics PelcoDSession::diagnostics() const
 {
     data::TurntableDiagnostics d;
-    d.sample.azimuth         = azimuth_.load();
-    d.sample.elevation       = elevation_.load();
-    d.sample.sampleTimestampNs = sampleTimestampNs_.load();
-    d.sample.cycleId         = sampleCycleId_.load();
-    d.sample.valid           = sampleValid_.load();
+    loadSample(d.sample.azimuth, d.sample.elevation,
+               d.sample.sampleTimestampNs, d.sample.cycleId,
+               d.sample.valid);
     d.sample.source = d.sample.valid ? data::TurntableSampleSource::Poll
                                      : data::TurntableSampleSource::None;
 
@@ -1152,6 +1270,8 @@ data::TurntableDiagnostics PelcoDSession::diagnostics() const
                     now >= ts &&
                     (now - ts) <= msToNs(config_.sampleStaleMs);
 
+    d.motionTransactionId    = motionTransactionId_.load();
+    d.stopFactsTransactionId = stopFactsTransactionId_.load();
     d.stopFrameDelivered     = stopFrameDelivered_.load();
     d.stopObservedStationary = stopObservedStationary_.load();
     d.motionUncertain        = motionUncertain_.load();
