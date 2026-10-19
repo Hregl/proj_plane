@@ -137,6 +137,22 @@ public:
     /// 停止当前测量（转发给 controller）。
     void stopMeasurement();
 
+    /// **唯一关闭责任方**（公开、幂等）。`main.cpp` 在事件循环结束后、
+    /// `ctx` 析构之前显式调用；析构函数也会兜底调用一次。
+    ///
+    /// 顺序（C-23 / A3）：
+    ///   1. 关闭 tick 与命令入口（`ready_ = false`）；
+    ///   2. `controller->stopMeasurement()` —— 终止任务的唯一收口；
+    ///   3. 转台 stop → 销毁（join worker、关 socket）；
+    ///   4. 预览 worker stop → join；
+    ///   5. 触发器 disable → 销毁；
+    ///   6. 相机 stop → close；
+    ///   7. 回调失效（相机诊断 sink 置空）并置已关闭标志。
+    ///
+    /// ⚠ 不能把"设备"和"线程"混成一步：转台 worker 与预览 worker 都是
+    ///    独立线程，必须在它们访问的 manager / transport 死之前 join。
+    void shutdown();
+
     // ---- 诊断 ----
 
     /// 启动失败原因；成功时为空。
@@ -263,6 +279,7 @@ private:
     ApplicationContext& ctx_;
 
     bool                     ready_ = false;
+    bool                     shutdownDone_ = false;
     std::string              errorText_;
     data::ErrorInfo          startupError_;
     std::vector<std::string> warnings_;

@@ -1,0 +1,62 @@
+# C-23 构建与测试复核（变异恢复后终态）
+# 时间：2026-10-19 22:45 CST
+# 主机：Linux 6.6.0-amd64-desktop x86_64
+# 编译器：g++ (Uos 12.3.0-17deepin17) 12.3.0
+# 代码状态：工作树（HEAD 6776d94 + C-23 修改）；已确认无 MUTANT 残留
+
+## 执行路径声明（重要）
+本文件中的 12 个套件走 **GTest 垫片**（/tmp/gtshim/build_tests.sh），
+不是原生 CMake/CTest 目标。垫片验证的是编译与断言基本行为，不等价于
+GoogleTest 完整语义。
+**原生 CMake/CTest 路径：本机未安装 GoogleTest → 未执行 → 未验证。**
+tests/CMakeLists.txt 在 `APS_HAVE_GTEST=OFF` 时明确 return，不静默跳过；
+`tests/run_tests.sh` 在缺依赖时 exit 1。
+
+## 构建
+$ cmake --build build -j8
+结果：PASS（Built target AircraftPoseSystem）
+$ cmake --build build_nosdk -j8
+结果：PASS（Built target AircraftPoseSystem）
+
+## 垫片套件（逐个运行，未通配汇总）
+LD_LIBRARY_PATH=$PWD/build/imvsdk_runtime /tmp/gtshim/<suite>
+# 工作目录：<repo>/AircraftPoseSystem
+flowtest: 运行 45 个用例 | 失败断言数：0，异常用例数：0
+RecorderPackageTest: 运行 24 个用例 | 失败断言数：0，异常用例数：0
+RecorderAdapterTest: 运行 7 个用例 | 失败断言数：0，异常用例数：0
+StateMachineTest: 运行 27 个用例 | 失败断言数：0，异常用例数：0
+AlgorithmStageTest: 运行 23 个用例 | 失败断言数：0，异常用例数：0
+PipelineTest: 运行 28 个用例 | 失败断言数：0，异常用例数：0
+DeviceLayerTest: 运行 83 个用例 | 失败断言数：0，异常用例数：0
+PelcoDTest: 运行 76 个用例 | 失败断言数：0，异常用例数：0
+OpticalLayerTest: 运行 38 个用例 | 失败断言数：0，异常用例数：0
+PreviewLayerTest: 运行 40 个用例 | 失败断言数：0，异常用例数：0
+AlignmentControllerTest: 运行 21 个用例 | 失败断言数：0，异常用例数：0
+sysinittest: 运行 21 个用例 | 失败断言数：0，异常用例数：0
+
+合计：12 个垫片目标，433 个用例，0 失败断言，0 异常用例。
+
+PelcoDTest 本轮由 74 增至 76：
+  - MoveAfterLatchedErrorPreservesOriginalError（原报告第六条）
+  - QtEventLoopDispatchesStopWhileMoveInFlight（S2 生产调用路径）
+
+## RecorderAdapterTest 的工作目录
+用例已改为用编译期宏 `APS_SOURCE_DIR` 定位仓库 `config/`，不再依赖 cwd；
+CMake 侧同时为该目标登记了 `WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}`。
+本轮从仓库根运行通过；在 /tmp 下运行也通过（宏路径）。
+
+## 原生入口（无 GoogleTest 时的失败闭合）
+$ bash tests/run_tests.sh
+结果：exit 1，明确提示未找到 GoogleTest；未静默跳过
+⚠ 原生 CTest 目标的注册正确性（含 WORKING_DIRECTORY）只做了源码级核对，
+  未在本机执行。
+
+## 定向 ASan/UBSan 套件（按本轮恢复后的源码重新编译）
+命令：g++ -std=c++17 -O1 -g -fPIC -fsanitize=address,undefined
+      -fno-omit-frame-pointer ...（与 build_tests.sh 相同的包含/链接选项）
+ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1
+PelcoDTest_san: 运行 76 个用例 | 失败断言数：0，异常用例数：0 | 无 AddressSanitizer/UBSan 报告
+flowtest_san: 运行 45 个用例 | 失败断言数：0，异常用例数：0 | 无 AddressSanitizer/UBSan 报告
+sysinittest_san: 运行 21 个用例 | 失败断言数：0，异常用例数：0 | 无 AddressSanitizer/UBSan 报告
+
+⚠ 全部为软件验证，不含任何实机运动/停止帧；生产只读会话控制帧仍须为 0。

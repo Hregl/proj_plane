@@ -35,8 +35,12 @@
 //
 //  ---- 退出时的顺序是刻意的 ----
 //
-//  窗口关闭 → event loop 退出 → （栈回退）window 析构 → init 析构 →
-//  ctx 析构。ctx 的成员按声明的逆序销毁：controller → sink → recorder →
+//  窗口关闭 → event loop 退出 → **init.shutdown()**（任务收口 → 转台
+//  worker join → 预览 worker join → 触发器 → 相机）→ （栈回退）
+//  window 析构 → init 析构（幂等兜底）→ ctx 析构。
+//  显式 shutdown() 是 C-23 的关闭契约：只靠栈回退时，controller 会先于
+//  转台/相机销毁，进行中的任务没有得到终止收口，worker 也没有先 join。
+//  ctx 的成员按声明的逆序销毁：controller → sink → recorder →
 //  pipeline → stats → models → previewWorker → preview → … → config。
 //  每一对相邻的"持有者/被持有者"都满足"持有者先死"（见
 //  ApplicationContext.h 的说明）。若把 window 建成 main 的局部对象而 ctx
@@ -206,5 +210,18 @@ int main(int argc, char* argv[])
         std::fprintf(stderr, "（以上同样写入了日志文件）\n\n");
     }
 
-    return app.exec();
+    const int exitCode = app.exec();
+
+    // ---- 显式关闭 ----
+    // 事件循环退出后、window/init/ctx 析构之前调用。关闭顺序
+    // （任务收口 → 转台 worker join → 预览 worker join → 触发器 →
+    //  相机）由 SystemInitializer::shutdown() 唯一负责，且幂等；
+    // init 的析构会兜底再调用一次。
+    //
+    // ⚠ 不能只依赖 ctx 的成员析构：那会先销毁 controller（任务还在
+    //    进行中也不会有一次收口），再销毁转台/相机 —— 而没有线程
+    //    join 的保证，worker 可能访问已释放的 manager。
+    init.shutdown();
+
+    return exitCode;
 }

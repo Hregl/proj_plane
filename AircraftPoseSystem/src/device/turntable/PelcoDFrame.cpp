@@ -206,8 +206,14 @@ bool deviceAzimuthToSoftware(std::uint16_t raw, double& out)
     return true;
 }
 
-std::uint16_t softwareAzimuthToDevice(double deg)
+bool softwareAzimuthToDeviceChecked(double deg, std::uint16_t& out)
 {
+    // ⚠ std::lround(NaN) 是**实现定义值**（通常为 LONG_MIN），再强转成
+    // uint16_t 会静默变成一个“看起来正常”的角度。必须在取整之前拒绝。
+    if (!std::isfinite(deg))
+    {
+        return false;
+    }
     double d = std::fmod(deg, 360.0);
     if (d < 0.0)
     {
@@ -220,14 +226,29 @@ std::uint16_t softwareAzimuthToDevice(double deg)
     {
         raw -= 36000;
     }
-    return static_cast<std::uint16_t>(raw);
+    out = static_cast<std::uint16_t>(raw);
+    return true;
 }
 
-std::uint16_t encodeAngle100(double deg, bool signedAxis)
+std::uint16_t softwareAzimuthToDevice(double deg)
 {
+    std::uint16_t raw = 0;
+    if (!softwareAzimuthToDeviceChecked(deg, raw))
+    {
+        return 0xFFFF;  // 越界哨兵：调用方应改用 Checked 版本
+    }
+    return raw;
+}
+
+bool encodeAngle100Checked(double deg, bool signedAxis, std::uint16_t& out)
+{
+    if (!std::isfinite(deg))
+    {
+        return false;
+    }
     if (!signedAxis)
     {
-        return softwareAzimuthToDevice(deg);
+        return softwareAzimuthToDeviceChecked(deg, out);
     }
 
     const long raw = std::lround(deg * 100.0);
@@ -235,7 +256,18 @@ std::uint16_t encodeAngle100(double deg, bool signedAxis)
         std::max<long>(std::numeric_limits<std::int16_t>::min(),
                        std::min<long>(std::numeric_limits<std::int16_t>::max(),
                                       raw));
-    return static_cast<std::uint16_t>(static_cast<std::int16_t>(clamped));
+    out = static_cast<std::uint16_t>(static_cast<std::int16_t>(clamped));
+    return true;
+}
+
+std::uint16_t encodeAngle100(double deg, bool signedAxis)
+{
+    std::uint16_t raw = 0;
+    if (!encodeAngle100Checked(deg, signedAxis, raw))
+    {
+        return 0xFFFF;
+    }
+    return raw;
 }
 
 double deviceElevationToSoftware(std::uint16_t raw)
@@ -243,16 +275,33 @@ double deviceElevationToSoftware(std::uint16_t raw)
     return static_cast<double>(static_cast<std::int16_t>(raw)) / 100.0;
 }
 
-std::uint8_t speedDegPerSecToRpm10(double degPerSec)
+bool speedDegPerSecToRpm10Checked(double degPerSec, std::uint8_t& out)
 {
+    if (!std::isfinite(degPerSec))
+    {
+        return false;
+    }
     if (degPerSec <= 0.0)
     {
-        return 0;
+        out = 0;
+        return true;
     }
     // 1 r/min = 6 °/s；指令值 = r/min × 10 = degPerSec × 10 / 6。
     // 写成 ×6 会把 5 °/s 发成 30 r/min（180 °/s），是 36 倍的超速。
     const long rpm10 = std::lround(degPerSec * 10.0 / 6.0);
-    return static_cast<std::uint8_t>(std::max<long>(0, std::min<long>(255, rpm10)));
+    out = static_cast<std::uint8_t>(
+        std::max<long>(0, std::min<long>(255, rpm10)));
+    return true;
+}
+
+std::uint8_t speedDegPerSecToRpm10(double degPerSec)
+{
+    std::uint8_t rpm10 = 0;
+    if (!speedDegPerSecToRpm10Checked(degPerSec, rpm10))
+    {
+        return 0;  // 调用方应改用 Checked 版本
+    }
+    return rpm10;
 }
 
 // ---------------------------------------------------------------------------
@@ -291,28 +340,78 @@ PelcoDFrame makeStop(std::uint8_t address)
     return frame;
 }
 
+bool makeAbsolutePositionChecked(std::uint8_t address, bool horizontal,
+                                 double angleDeg, PelcoDFrame& out)
+{
+    std::uint16_t raw = 0;
+    if (!encodeAngle100Checked(angleDeg, !horizontal, raw))
+    {
+        return false;
+    }
+    PelcoDFrame frame;
+    frame.address = address;
+    frame.data2   = horizontal ? kOpPositionH : kOpPositionV;
+    frame.data3 = static_cast<std::uint8_t>(raw >> 8);
+    frame.data4 = static_cast<std::uint8_t>(raw & 0xFF);
+    out = frame;
+    return true;
+}
+
 PelcoDFrame makeAbsolutePosition(std::uint8_t address, bool horizontal,
                                  double angleDeg)
 {
     PelcoDFrame frame;
+    if (!makeAbsolutePositionChecked(address, horizontal, angleDeg, frame))
+    {
+        // 无效帧：水平角 0xFFFF 越界、垂直角同样是非法样本。
+        // 调用方不得发送；生产路径使用 Checked 版本并走 2004。
+        frame = PelcoDFrame{};
+        frame.address = address;
+        frame.data2   = horizontal ? kOpPositionH : kOpPositionV;
+        frame.data3   = 0xFF;
+        frame.data4   = 0xFF;
+    }
+    return frame;
+}
+
+bool makeAbsolutePositionWithSpeedChecked(std::uint8_t address,
+                                          bool horizontal, double angleDeg,
+                                          double speedDegPerSec,
+                                          PelcoDFrame& out)
+{
+    std::uint8_t rpm10 = 0;
+    if (!speedDegPerSecToRpm10Checked(speedDegPerSec, rpm10))
+    {
+        return false;
+    }
+    std::uint16_t raw = 0;
+    if (!encodeAngle100Checked(angleDeg, !horizontal, raw))
+    {
+        return false;
+    }
+    PelcoDFrame frame;
     frame.address = address;
-    frame.data2   = horizontal ? kOpPositionH : kOpPositionV;
-    const std::uint16_t raw = encodeAngle100(angleDeg, !horizontal);
+    frame.data1   = horizontal ? kOpPositionH : kOpPositionV;  // 表 3.65
+    frame.data2   = rpm10;
     frame.data3 = static_cast<std::uint8_t>(raw >> 8);
     frame.data4 = static_cast<std::uint8_t>(raw & 0xFF);
-    return frame;
+    out = frame;
+    return true;
 }
 
 PelcoDFrame makeAbsolutePositionWithSpeed(std::uint8_t address, bool horizontal,
                                           double angleDeg, double speedDegPerSec)
 {
     PelcoDFrame frame;
-    frame.address = address;
-    frame.data1   = horizontal ? kOpPositionH : kOpPositionV;  // 表 3.65
-    frame.data2   = speedDegPerSecToRpm10(speedDegPerSec);
-    const std::uint16_t raw = encodeAngle100(angleDeg, !horizontal);
-    frame.data3 = static_cast<std::uint8_t>(raw >> 8);
-    frame.data4 = static_cast<std::uint8_t>(raw & 0xFF);
+    if (!makeAbsolutePositionWithSpeedChecked(address, horizontal, angleDeg,
+                                              speedDegPerSec, frame))
+    {
+        frame = PelcoDFrame{};
+        frame.address = address;
+        frame.data1   = horizontal ? kOpPositionH : kOpPositionV;
+        frame.data3   = 0xFF;
+        frame.data4   = 0xFF;
+    }
     return frame;
 }
 

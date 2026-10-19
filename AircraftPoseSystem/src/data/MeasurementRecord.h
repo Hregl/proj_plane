@@ -74,6 +74,24 @@ struct MeasurementRecord
     /// （转台角度是粗姿态来源，也是误差归因的起点）。
     TurntableState turntable;
 
+    /// 失败收口时请求转台停止的**已知结果**（裁决 C-23）。
+    ///
+    /// ⚠ 四个量描述的是四件不同的事，不得互相代替：
+    ///   · `stopRequested`          本任务的失败收口是否发起过停止处理；
+    ///   · `stopFrameDelivered`     停止帧已交给传输层（**不是**设备已停）；
+    ///   · `stopObservedStationary` 观测窗口内的连续新鲜样本满足静止判据；
+    ///   · `motionUncertain`        停止结果不确定（锁存，需显式恢复）。
+    /// 只读/运动禁用模式下不发送停止帧，故前两者为 false —— 这是
+    /// "没有发"而不是"发了没成功"。
+    bool stopRequested           = false;
+    bool stopFrameDelivered      = false;
+    bool stopObservedStationary  = false;
+    bool motionUncertain         = false;
+
+    /// 失败当时的转台运动门禁状态（只读/运动禁用时为 true）。
+    /// 没有它，`stopFrameDelivered=false` 会被误读成"停止帧发送失败"。
+    bool turntableMotionInhibited = false;
+
     /// 本次测量使用的焦段（MEASURE_SELECT 的结论）。
     CameraRole selectedCamera = CameraRole::CAM25;
 

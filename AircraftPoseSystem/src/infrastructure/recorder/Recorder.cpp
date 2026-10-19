@@ -977,10 +977,24 @@ bool Recorder::writeResultJson(const data::MeasurementRecord& record,
     os << "  },\n";
 
     // ---- 转台（turntable.json 另存一份，此处为内联摘要）----
+    //
+    // 停止事实四件分开写（C-23）：请求过停止 ≠ 停止帧已交付 ≠ 观察到静止
+    // ≠ 结果确定。`motion_inhibited` 标明"没发帧"是门禁所致，
+    // 避免把只读模式的 stop_frame_delivered=false 读成发送失败。
     os << "  \"turntable\": {\n";
     os << "    \"azimuth\": " << num(record.turntable.azimuth, 6) << ",\n";
     os << "    \"elevation\": " << num(record.turntable.elevation, 6) << ",\n";
-    os << "    \"motion\": \"" << motionName(record.turntable.motion) << "\"\n";
+    os << "    \"motion\": \"" << motionName(record.turntable.motion) << "\",\n";
+    os << "    \"stop_requested\": "
+       << jsonBool(record.stopRequested) << ",\n";
+    os << "    \"stop_frame_delivered\": "
+       << jsonBool(record.stopFrameDelivered) << ",\n";
+    os << "    \"stop_observed_stationary\": "
+       << jsonBool(record.stopObservedStationary) << ",\n";
+    os << "    \"motion_uncertain\": "
+       << jsonBool(record.motionUncertain) << ",\n";
+    os << "    \"motion_inhibited\": "
+       << jsonBool(record.turntableMotionInhibited) << "\n";
     os << "  },\n";
 
     // ---- 失败根因与终点（裁决 C-007）----

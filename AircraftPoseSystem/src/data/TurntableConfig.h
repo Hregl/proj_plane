@@ -38,6 +38,18 @@ namespace aircraft
 namespace data
 {
 
+/// 发送门禁（裁决 C-23）。
+///
+/// ⚠ `ReadOnly` 是**生产配置的唯一取值**：ConfigManager 不解析任何
+///   能把它改成 `MotionEnabled` 的键。后者只允许由单元测试在进程内
+///   构造配置时显式设置，用于在 fake transport 上验证故障停止逻辑 ——
+///   它不会、也不能让一条真实 UDP 链路获得运动授权。
+enum class TurntableSendPolicy
+{
+    ReadOnly = 0,      ///< 只查询，控制帧恒为 0
+    MotionEnabled = 1, ///< 单元测试专用；生产装配不可达
+};
+
 /// 转台配置（ENG-09 §6.3）。
 struct TurntableConfig
 {
@@ -127,6 +139,27 @@ struct TurntableConfig
     /// false = 表 3.5（设备默认速度，本批默认）；
     /// true  = 表 3.65（指令携带转速，本批只做离线测试）。
     bool useSpeedControl = false;
+
+    // ---- 可信化（裁决 C-23）----
+
+    /// 发送门禁。生产配置恒为 ReadOnly（ConfigManager 无对应键）。
+    TurntableSendPolicy sendPolicy = TurntableSendPolicy::ReadOnly;
+
+    /// 样本新鲜度上限，ms。超过即视为过期：诊断 stale、
+    /// `state().motion` 报 ERROR，上层不得采集。
+    int sampleStaleMs = 500;
+
+    /// 停止帧交付后等待“观测到静止”的窗口，ms。
+    int stopTimeoutMs = 3000;
+
+    /// 停止帧首次失败后的重发次数，[0,5]。总发送次数 ≤ 1 + 本值。
+    int stopRetryCount = 2;
+
+    /// 全部停止发送尝试必须在此时限内完成，ms。
+    int stopRetryWindowMs = 2000;
+
+    /// 停止重发间隔，ms。测试可置 0 以免拖慢用例。
+    int stopBackoffMs = 200;
 };
 
 }  // namespace data

@@ -44,6 +44,11 @@ public:
     /// atomic：控制器测试会在 worker 运行时从主线程修改它。
     std::atomic<int> receiveBlockMs{0};
 
+    /// 接下来 N 次**停止帧**发送失败（模拟停止未交付）。
+    /// 按帧内容识别，不影响查询与定位帧。
+    std::atomic<int> failStopSends{0};
+    std::atomic<int> stopSendAttempts{0};
+
     std::vector<std::vector<std::uint8_t>> sent;
     std::deque<std::vector<std::uint8_t>> inbox;
 
@@ -85,6 +90,21 @@ public:
             return false;
         }
         std::vector<std::uint8_t> bytes(data, data + size);
+        if (isStopFrame(bytes))
+        {
+            ++stopSendAttempts;
+            int remaining = failStopSends.load();
+            while (remaining > 0 &&
+                   !failStopSends.compare_exchange_weak(remaining,
+                                                        remaining - 1))
+            {
+            }
+            if (remaining > 0)
+            {
+                error = "模拟停止帧发送失败";
+                return false;
+            }
+        }
         sent.push_back(bytes);
         if (onSend)
         {
@@ -146,6 +166,17 @@ public:
         return count;
     }
 
+    /// 停止帧：标准指令 Data2=0x00，且 Data1/Data3/Data4 均为 0。
+    static bool isStopFrame(const std::vector<std::uint8_t>& bytes)
+    {
+        if (bytes.size() < 7)
+        {
+            return false;
+        }
+        return bytes[2] == 0x00 && bytes[3] == 0x00 && bytes[4] == 0x00 &&
+               bytes[5] == 0x00;
+    }
+
     static PelcoDFrame decode(const std::vector<std::uint8_t>& bytes)
     {
         PelcoDFrame frame;
@@ -173,6 +204,24 @@ struct FakePelcoDevice
     double elevation = 0.0;   // 软件角 deg
     std::uint8_t workMode = 0x00;
 
+    /// 三类回复各自使用的地址字节。与配置不一致时，会话必须把该回复
+    /// 当作“没有有效回复”（C3）。
+    std::uint8_t horizontalReplyAddress = 0x01;
+    std::uint8_t verticalReplyAddress   = 0x01;
+    std::uint8_t workModeReplyAddress   = 0x01;
+    std::uint8_t replyAddress           = 0x01;  ///< 兼容：同时改三类
+
+    /// true = 工作模式查询完全不回包（用于 NoReply 可信度）。
+    bool dropWorkMode = false;
+
+    /// 工作模式回复的 Data3。非 0 时回复与查询**字节不同**（Data2 仍可为 0），
+    /// 用于构造“独立回复但无法证明正常”的 Unknown 状态。
+    std::uint8_t workModeReplyData3 = 0x00;
+
+    /// 每次角度查询前两轴同时漂移的角度（deg）。用于模拟“停止没有
+    /// 效果”：停止帧已交付，但观测窗口内角度持续变化 ⇒ 2006。
+    double driftPerQueryDeg = 0.0;
+
     // atomic：控制器测试会在 worker 运行时从主线程置位，
     // 模拟"从某一刻起设备不再回复"。
     std::atomic<bool> dropHorizontal{false};
@@ -197,10 +246,11 @@ struct FakePelcoDevice
         };
     }
 
-    static std::vector<std::uint8_t> angleReply(bool horizontal, double deg)
+    std::vector<std::uint8_t> angleReply(bool horizontal, double deg) const
     {
         PelcoDFrame frame;
-        frame.address = 0x01;
+        frame.address = horizontal ? horizontalReplyAddress
+                                   : verticalReplyAddress;
         frame.data1   = 0x00;
         frame.data2   = horizontal ? 0x59 : 0x5B;
         const std::uint16_t raw =
@@ -211,12 +261,13 @@ struct FakePelcoDevice
         return std::vector<std::uint8_t>(encoded.begin(), encoded.end());
     }
 
-    static std::vector<std::uint8_t> workModeReply(std::uint8_t mode)
+    std::vector<std::uint8_t> workModeReply(std::uint8_t mode) const
     {
         PelcoDFrame frame;
-        frame.address = 0x01;
+        frame.address = workModeReplyAddress;
         frame.data1   = 0xE0;
         frame.data2   = mode;
+        frame.data3   = workModeReplyData3;
         const auto encoded = encodePelcoD(frame);
         return std::vector<std::uint8_t>(encoded.begin(), encoded.end());
     }
@@ -238,6 +289,13 @@ private:
         // 标准指令码在 Data2、Data1=0x00
         if (frame.data1 == 0x00 && frame.data2 == 0x51)
         {
+            // 每轮只在水平查询到达时推进一次，两轴同步漂移：
+            // 模拟“停止帧没有效果”时，两轴都在变化。
+            if (driftPerQueryDeg != 0.0)
+            {
+                azimuth += driftPerQueryDeg;
+                elevation += driftPerQueryDeg;
+            }
             if (!dropHorizontal)
             {
                 transport->inbox.push_back(angleReply(true, azimuth));
@@ -262,7 +320,10 @@ private:
         // 自定义指令码在 Data1
         if (frame.data1 == 0xE0)
         {
-            transport->inbox.push_back(workModeReply(workMode));
+            if (!dropWorkMode)
+            {
+                transport->inbox.push_back(workModeReply(workMode));
+            }
             return;
         }
 

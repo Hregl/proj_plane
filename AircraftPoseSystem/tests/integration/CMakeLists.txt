@@ -70,6 +70,33 @@ aps_add_test(test_recorder_package
 )
 
 # ----------------------------------------------------------------------------
+#  app 层落盘适配器（C-009 / H-002）
+#
+#  ⚠ 覆盖缺口修正：此前这里写着"`RecorderSinkAdapter` 测不到"，理由是
+#    "src/app 只有可执行目标，adapter 链不进测试"。该理由**不成立** ——
+#    `RecorderSinkAdapter` 是 `app/ApplicationContext.h` 里的**内联类**，
+#    包含头即可编译，不需要 libapp。本目标即为它补上判据（7 个用例）。
+#
+#  ⚠ 依赖只需 data + infrastructure：适配器内联调用 `Recorder::save()`，
+#    其余头文件仅用于类型声明。Qt 亦不需要（ApplicationContext.h 不含 Qt 头）。
+# ----------------------------------------------------------------------------
+aps_add_test(test_recorder_adapter
+    SOURCES
+        RecorderAdapterTest.cpp
+    DEPENDS
+        data
+        infrastructure
+    WORKING_DIRECTORY
+        "${PROJECT_SOURCE_DIR}"
+)
+
+# 该用例按绝对路径检查仓库 config/（见 RecorderAdapterTest.cpp 的说明）。
+# WORKING_DIRECTORY 之外再传入编译期宏：换 cwd 也不会退化成“找不到配置”。
+target_compile_definitions(test_recorder_adapter PRIVATE
+    APS_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+# ----------------------------------------------------------------------------
 #  app 层装配与空闲补帧（R04 收尾，2026-09-24 评审裁定）
 #
 #  依据：ENG-01 §14（app = 唯一装配点）、ENG-02 §15（冻结创建顺序）

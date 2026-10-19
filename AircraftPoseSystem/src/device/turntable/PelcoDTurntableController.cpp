@@ -1,12 +1,13 @@
 // ============================================================================
 //  src/device/turntable/PelcoDTurntableController.cpp
 //
-//  依据：SYS-10 V1.1 §6.3～§6.6、§17（线程）、§18（tick 影响）、C-22
+//  依据：SYS-10 V1.1 §6.3～§6.6、§17（线程）、§18（tick 影响）、C-22/C-23
 // ============================================================================
 
 #include "device/turntable/PelcoDTurntableController.h"
 
 #include <chrono>
+#include <cmath>
 #include <system_error>
 #include <utility>
 
@@ -23,46 +24,44 @@ PelcoDTurntableController::PelcoDTurntableController(
     : config_(config),
       transport_(transport ? std::move(transport) : makeUdpPelcoTransport())
 {
-    // session_ 在这里创建：其生命周期与传输一致，且构造只做值拷贝。
     session_ = std::make_unique<PelcoDSession>(config_, transport_);
 }
 
 PelcoDTurntableController::~PelcoDTurntableController()
 {
     running_.store(false);
-    waitCv_.notify_all();
+    commandCv_.notify_all();
     if (worker_.joinable())
     {
         worker_.join();
     }
 
-    {
-        std::lock_guard<std::mutex> lock(ioMutex_);
-        // 仅在 MOVING 或有锁存错误时才会真正发帧（见 PelcoDSession::stop）。
-        session_->stop();
-        transport_->close();
-    }
+    // worker 已退出：此后的 session 调用不再有并发方。
+    session_->stop();
+    transport_->close();
     initialized_.store(false);
 }
 
 void PelcoDTurntableController::setDiagnosticSink(
     std::function<void(const std::string&)> sink)
 {
-    std::lock_guard<std::mutex> lock(ioMutex_);
+    std::lock_guard<std::mutex> lock(diagMutex_);
     diagnosticSink_ = std::move(sink);
 }
 
 void PelcoDTurntableController::setClock(std::function<std::uint64_t()> clock)
 {
-    std::lock_guard<std::mutex> lock(ioMutex_);
     clock_ = std::move(clock);
     session_->setClock(clock_);
 }
 
+void PelcoDTurntableController::setTestMotionGate(bool allow)
+{
+    session_->setTestMotionGate(allow);
+}
+
 bool PelcoDTurntableController::initialize()
 {
-    std::lock_guard<std::mutex> lock(ioMutex_);
-
     if (initialized_.load())
     {
         return true;
@@ -76,7 +75,6 @@ bool PelcoDTurntableController::initialize()
 
     initialized_.store(true);
     running_.store(true);
-    lastReportedError_.clear();
 
     try
     {
@@ -95,16 +93,55 @@ bool PelcoDTurntableController::initialize()
     return true;
 }
 
-bool PelcoDTurntableController::move(const data::TurntableCommand& command)
+bool PelcoDTurntableController::move(
+    const data::TurntableCommand& command)
 {
     if (!initialized_.load())
     {
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(ioMutex_);
-    std::string error;
-    return session_->move(command, error);
+    // 只读模式：不产生任何控制帧，连命令槽都不写。
+    if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
+    {
+        return false;
+    }
+
+    const bool finite = std::isfinite(command.azimuthCommand) &&
+                        std::isfinite(command.elevationCommand);
+
+    std::uint64_t seq = 0;
+    std::optional<PendingMove> superseded;
+    {
+        std::lock_guard<std::mutex> lock(commandMutex_);
+        seq = ++nextCommandSeq_;
+        latestCommandSeq_ = seq;
+        if (finite)
+        {
+            if (pendingMove_)
+            {
+                superseded = pendingMove_;  // 旧命令必须得到终结结果
+            }
+            pendingMove_ = PendingMove{command, seq};
+        }
+    }
+
+    if (superseded)
+    {
+        setCommandOutcome(superseded->seq,
+                          data::TurntableCommandOutcome::Superseded,
+                          "命令被更新的运动命令覆盖");
+    }
+    if (!finite)
+    {
+        setCommandOutcome(seq, data::TurntableCommandOutcome::Failed,
+                          "命令含非有限角，未受理");
+        return false;
+    }
+
+    commandCv_.notify_all();
+    // ⚠ 这里**不**等待回显：true 仅表示已受理。
+    return true;
 }
 
 data::TurntableState PelcoDTurntableController::state()
@@ -115,20 +152,121 @@ data::TurntableState PelcoDTurntableController::state()
 
 void PelcoDTurntableController::stop()
 {
-    std::lock_guard<std::mutex> lock(ioMutex_);
-    session_->stop();
+    if (!initialized_.load())
+    {
+        return;
+    }
+    // 只读模式：stop() 是无帧 no-op（C1）。
+    if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
+    {
+        return;
+    }
+
+    std::optional<PendingMove> cancelled;
+    std::uint64_t seq = 0;
+    {
+        std::lock_guard<std::mutex> lock(commandMutex_);
+        seq = ++stopRequestSeq_;
+        if (pendingMove_)
+        {
+            // 屏障之前的旧命令一律作废，停止后不得恢复执行。
+            cancelled = pendingMove_;
+            pendingMove_.reset();
+        }
+    }
+    if (cancelled)
+    {
+        setCommandOutcome(cancelled->seq,
+                          data::TurntableCommandOutcome::Cancelled,
+                          "命令被停止屏障取消");
+    }
+
+    commandCv_.notify_all();
+
+    // 等 worker 处理到该停止。上限由重试窗口给出；不把“观测到静止”
+    // 的窗口算进来 —— 那是停止之后的事实，不是 stop() 返回的前提。
+    const auto waitMs = std::chrono::milliseconds(
+        config_.stopRetryWindowMs > 0 ? config_.stopRetryWindowMs + 1000
+                                      : 1000);
+    std::unique_lock<std::mutex> lock(stopWaitMutex_);
+    stopWaitCv_.wait_for(lock, waitMs, [this, seq] {
+        return stopCompletedSeq_.load() >= seq;
+    });
+}
+
+data::TurntableDiagnostics PelcoDTurntableController::diagnostics() const
+{
+    data::TurntableDiagnostics d = session_->diagnostics();
+    {
+        std::lock_guard<std::mutex> lock(diagMutex_);
+        d.lastCommandSeq     = lastCommandSeq_;
+        d.lastCommandOutcome = lastCommandOutcome_;
+        d.lastCommandMessage = lastCommandMessage_;
+    }
+    d.stopRequestSeq   = stopRequestSeq_.load();
+    d.stopCompletedSeq = stopCompletedSeq_.load();
+    return d;
 }
 
 std::string PelcoDTurntableController::lastErrorText() const
 {
-    std::lock_guard<std::mutex> lock(ioMutex_);
     return session_->lastErrorText();
 }
 
 data::ErrorInfo PelcoDTurntableController::lastError() const
 {
-    std::lock_guard<std::mutex> lock(ioMutex_);
     return session_->lastError();
+}
+
+bool PelcoDTurntableController::commandSuperseded(std::uint64_t seq) const
+{
+    std::lock_guard<std::mutex> lock(commandMutex_);
+    return latestCommandSeq_ > seq;
+}
+
+void PelcoDTurntableController::setCommandOutcome(
+    std::uint64_t seq, data::TurntableCommandOutcome outcome,
+    const std::string& message)
+{
+    std::lock_guard<std::mutex> lock(diagMutex_);
+    lastCommandSeq_     = seq;
+    lastCommandOutcome_ = outcome;
+    lastCommandMessage_ = message;
+}
+
+void PelcoDTurntableController::handleCommand(const PendingMove& move)
+{
+    std::string error;
+    const bool ok = session_->move(
+        move.command, error, [this, &move] {
+            return stopRequestSeq_.load() > stopCompletedSeq_.load() ||
+                   commandSuperseded(move.seq);
+        });
+
+    if (stopRequestSeq_.load() > stopCompletedSeq_.load())
+    {
+        setCommandOutcome(move.seq, data::TurntableCommandOutcome::Cancelled,
+                          "命令被停止屏障取消");
+        return;
+    }
+    if (commandSuperseded(move.seq))
+    {
+        setCommandOutcome(move.seq,
+                          data::TurntableCommandOutcome::Superseded,
+                          "命令被更新的运动命令覆盖");
+        return;
+    }
+    if (ok)
+    {
+        setCommandOutcome(move.seq, data::TurntableCommandOutcome::Delivered,
+                          "两轴指令已交付");
+    }
+    else
+    {
+        setCommandOutcome(move.seq, data::TurntableCommandOutcome::Failed,
+                          error.empty() ? std::string("转台指令失败")
+                                        : error);
+    }
 }
 
 void PelcoDTurntableController::workerLoop()
@@ -137,28 +275,88 @@ void PelcoDTurntableController::workerLoop()
 
     while (running_.load())
     {
-        std::string errorText;
-        std::function<void(const std::string&)> sink;
-
         {
-            std::lock_guard<std::mutex> lock(ioMutex_);
-            session_->pollOnce();
-            errorText = session_->lastErrorText();
-            sink      = diagnosticSink_;
+            std::unique_lock<std::mutex> lock(commandMutex_);
+            commandCv_.wait_for(lock, std::chrono::milliseconds(pollMs), [this] {
+                return !running_.load() || pendingMove_.has_value() ||
+                       stopRequestSeq_.load() > stopCompletedSeq_.load();
+            });
+            if (!running_.load())
+            {
+                break;
+            }
         }
 
-        // sink 在锁外调用：它可能写日志、拿 Logger 自己的锁，
-        // 不应因此把主线程的 move()/state() 挡在 ioMutex_ 外。
+        // ---- 停止屏障优先：清槽 → 停止 → 通告完成 ----
+        const std::uint64_t stopSeq = stopRequestSeq_.load();
+        if (stopSeq > stopCompletedSeq_.load())
+        {
+            std::optional<PendingMove> cancelled;
+            {
+                std::lock_guard<std::mutex> lock(commandMutex_);
+                if (pendingMove_)
+                {
+                    cancelled = pendingMove_;
+                    pendingMove_.reset();
+                }
+            }
+            if (cancelled)
+            {
+                setCommandOutcome(cancelled->seq,
+                                  data::TurntableCommandOutcome::Cancelled,
+                                  "命令被停止屏障取消");
+            }
+
+            session_->stop();
+            stopCompletedSeq_.store(stopSeq);
+            stopWaitCv_.notify_all();
+            continue;
+        }
+
+        // ---- 运动命令 ----
+        std::optional<PendingMove> move;
+        {
+            std::lock_guard<std::mutex> lock(commandMutex_);
+            if (pendingMove_)
+            {
+                move = pendingMove_;
+                pendingMove_.reset();
+            }
+        }
+        if (move)
+        {
+            handleCommand(*move);
+            continue;  // 接着轮询，让角度快照尽快反映设备
+        }
+
+        // ---- 轮询 ----
+        session_->pollOnce();
+
+        std::string errorText = session_->lastErrorText();
+        std::function<void(const std::string&)> sink;
+        {
+            std::lock_guard<std::mutex> lock(diagMutex_);
+            sink = diagnosticSink_;
+        }
+
+        // sink 在锁外调用：它可能写日志、拿 Logger 自己的锁。
         if (sink && !errorText.empty() && errorText != lastReportedError_)
         {
             lastReportedError_ = errorText;
-            sink(errorText);
+            try
+            {
+                sink(errorText);
+            }
+            catch (...)
+            {
+                // 诊断回调抛异常不得导致 std::terminate。
+            }
         }
-
-        std::unique_lock<std::mutex> wait(waitMutex_);
-        waitCv_.wait_for(wait, std::chrono::milliseconds(pollMs),
-                         [this] { return !running_.load(); });
     }
+
+    // ---- 退出路径 ----
+    session_->stop();
+    transport_->close();
 }
 
 }  // namespace device

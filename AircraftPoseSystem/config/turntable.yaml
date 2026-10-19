@@ -63,3 +63,15 @@ turntable:
    #   arrival_tolerance_deg: 0.2  # 0.02..1.0（与 SYS-10 §3.3 对齐）
    #   comm_failure_threshold: 5   # 1..20
    #   use_speed_control: false    # false = 设备默认速度（本批取值）
+   #
+   # ---- 停止与样本新鲜度（C-23；仅 pelco_d_udp 读取）----
+   #
+   # ⚠ 没有 send_policy / motion_enabled 之类的键：只读发送门禁由代码固定为
+   #   TurntableSendPolicy::ReadOnly，**配置无法打开运动**。写成注释而不是
+   #   注释掉的键，正是为了不让人误以为"取消注释就能运动"。
+   #
+   #   sample_stale_ms: 500        # 50..5000；超时 ⇒ stale/ERROR，上层不得采集
+   #   stop_timeout_ms: 3000       # 100..30000；停止帧交付后等待"观测到静止"
+   #   stop_retry_count: 2         # 0..5；首次失败后的重发次数，总发送 ≤ 1+本值
+   #   stop_retry_window_ms: 2000  # 100..10000；全部停止尝试须在此窗口内完成
+   #   stop_backoff_ms: 200        # 0..1000；停止重发间隔

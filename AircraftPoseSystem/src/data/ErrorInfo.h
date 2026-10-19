@@ -125,6 +125,28 @@ inline constexpr int kErrTurntableOverTravel = 2002;
 /// 对应 MeasurementConfig::maxAlignAttempts（默认 8，经裁决 C-20 为唯一数据源）。
 inline constexpr int kErrAlignRetryExhausted = 2003;
 
+// ---- 转台可信化（裁决 C-23，2026-10-19）----
+//
+// 判据全部在**发送任何字节之前**本地完成；拒绝路径不得产生控制帧。
+
+/// 2004 | 转台指令非法（非有限角/速度、目标不可解析） | C-23
+inline constexpr int kErrTurntableInvalidCommand = 2004;
+
+/// 2005 | 停止帧在重试窗口内未能交给传输层 | C-23
+/// ⚠ 语义只到"未交付"，不推断设备是否仍在运动；置 motionUncertain。
+inline constexpr int kErrTurntableStopNotDelivered = 2005;
+
+/// 2006 | 停止帧已交付，但观测窗口内未观察到静止 | C-23
+inline constexpr int kErrTurntableStopNotObserved = 2006;
+
+/// 2007 | 运动门禁拒绝（只读模式或 WorkMode 证据不足） | C-23
+inline constexpr int kErrTurntableMotionInhibited = 2007;
+
+/// 2008 | 运动看门狗到期 | C-23
+/// ⚠ 与 2001 分开：看门狗到期是"命令未在时限内完成"的事实，
+///    不是一次通信失败，重发同一指令不能解决问题。
+inline constexpr int kErrTurntableMotionWatchdog = 2008;
+
 /// 3001 | 触发失效，已降级为软触发 | SYS-08 §7.5
 /// 同 1002，是降级记录而非致命错误。
 inline constexpr int kErrTriggerDegraded = 3001;

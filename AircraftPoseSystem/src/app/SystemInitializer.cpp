@@ -184,7 +184,50 @@ SystemInitializer::SystemInitializer(ApplicationContext& ctx)
 {
 }
 
-SystemInitializer::~SystemInitializer() = default;
+SystemInitializer::~SystemInitializer()
+{
+    // 析构兜底：main.cpp 已在事件循环结束后显式调用 shutdown()，
+    // 这里只是保证"忘记调用"也不会留下未 join 的线程和未关闭的设备。
+    shutdown();
+}
+
+void SystemInitializer::shutdown()
+{
+    if (shutdownDone_)
+    {
+        return;
+    }
+    shutdownDone_ = true;
+
+    // 1. 先关入口：此后的 tick()/startMeasurement() 不再推进任何动作。
+    ready_ = false;
+
+    // 2. 任务收口：failWith() 内部请求一次转台停止（幂等）。
+    //    没有活动任务时 stopMeasurement() 直接返回。
+    if (ctx_.controller)
+    {
+        ctx_.controller->stopMeasurement();
+    }
+
+    // 3. 转台：stop()（只读下无帧 no-op）后销毁 —— 析构 join worker、
+    //    关闭 socket。必须早于相机吗？不，但必须早于它自己的 sink
+    //    所依赖的 Logger 与传输对象。
+    if (ctx_.turntable)
+    {
+        ctx_.turntable->stop();
+        ctx_.turntable.reset();
+    }
+
+    // 4. 预览 worker：stop() 内部 join。必须先于 preview / cameras
+    //    被销毁，否则线程可能访问已释放的 manager。
+    if (ctx_.previewWorker)
+    {
+        ctx_.previewWorker->stop();
+    }
+
+    // 5~7. 触发器 disable → 相机 stop/close → 诊断回调失效（幂等）。
+    ctx_.shutdownDevices();
+}
 
 // ---------------------------------------------------------------------------
 
@@ -672,8 +715,18 @@ bool SystemInitializer::buildDevices()
                 // ⚠ sink 由 worker 线程调用：只走 Logger（自身持锁），
                 //   不得调用 SystemInitializer::warn() —— 那会改
                 //   warnings_，与主线程竞争。
-                pelco->setDiagnosticSink([this](const std::string& message) {
-                    ctx_.logger->warn("device", message);
+                //
+                // ⚠ 只捕获 Logger 指针，**不捕获 this**：worker 的 join
+                //   只是必要条件，不是充分条件 —— reset() 之前若仍有
+                //   一次 sink 调用，捕获 this 会访问已析构的
+                //   SystemInitializer / ApplicationContext。Logger 的
+                //   生命周期长于转台（声明顺序见 ApplicationContext.h）。
+                infrastructure::Logger* logger = ctx_.logger.get();
+                pelco->setDiagnosticSink([logger](const std::string& message) {
+                    if (logger != nullptr)
+                    {
+                        logger->warn("device", message);
+                    }
                 });
             }
             ctx_.turntable = std::move(pelco);

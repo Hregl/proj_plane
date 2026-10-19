@@ -877,6 +877,22 @@ bool ConfigManager::load(const std::string& configDir)
             turntable_.useSpeedControl = r.boolean(
                 g["use_speed_control"], "use_speed_control", false);
 
+            // ---- 可信化键（裁决 C-23）----
+            //
+            // ⚠ 这里**没有** send_policy 键：生产配置不能打开运动门禁。
+            //    `TurntableSendPolicy::MotionEnabled` 只允许单元测试在
+            //    进程内构造配置时设置，不经过 ConfigManager。
+            turntable_.sampleStaleMs = r.integer(
+                g["sample_stale_ms"], "sample_stale_ms", 500);
+            turntable_.stopTimeoutMs = r.integer(
+                g["stop_timeout_ms"], "stop_timeout_ms", 3000);
+            turntable_.stopRetryCount = r.integer(
+                g["stop_retry_count"], "stop_retry_count", 2);
+            turntable_.stopRetryWindowMs = r.integer(
+                g["stop_retry_window_ms"], "stop_retry_window_ms", 2000);
+            turntable_.stopBackoffMs = r.integer(
+                g["stop_backoff_ms"], "stop_backoff_ms", 200);
+
             if (turntable_.host.empty())
             {
                 errors_.push_back(
@@ -936,6 +952,37 @@ bool ConfigManager::load(const std::string& configDir)
                                       turntable_.commFailureThreshold) +
                                   "（允许 1..20）");
             }
+            if (!insideRange(turntable_.sampleStaleMs, 50, 5000))
+            {
+                errors_.push_back("turntable.sample_stale_ms 越界：" +
+                                  std::to_string(turntable_.sampleStaleMs) +
+                                  "（允许 50..5000）");
+            }
+            if (!insideRange(turntable_.stopTimeoutMs, 100, 30000))
+            {
+                errors_.push_back("turntable.stop_timeout_ms 越界：" +
+                                  std::to_string(turntable_.stopTimeoutMs) +
+                                  "（允许 100..30000）");
+            }
+            if (!insideRange(turntable_.stopRetryCount, 0, 5))
+            {
+                errors_.push_back("turntable.stop_retry_count 越界：" +
+                                  std::to_string(turntable_.stopRetryCount) +
+                                  "（允许 0..5）");
+            }
+            if (!insideRange(turntable_.stopRetryWindowMs, 100, 10000))
+            {
+                errors_.push_back(
+                    "turntable.stop_retry_window_ms 越界：" +
+                    std::to_string(turntable_.stopRetryWindowMs) +
+                    "（允许 100..10000）");
+            }
+            if (!insideRange(turntable_.stopBackoffMs, 0, 1000))
+            {
+                errors_.push_back("turntable.stop_backoff_ms 越界：" +
+                                  std::to_string(turntable_.stopBackoffMs) +
+                                  "（允许 0..1000）");
+            }
         }
         else
         {
@@ -945,7 +992,9 @@ bool ConfigManager::load(const std::string& configDir)
                 "host",           "port",           "pelco_address",
                 "reply_timeout_ms", "poll_interval_ms", "stable_read_count",
                 "stable_threshold_deg", "arrival_tolerance_deg",
-                "comm_failure_threshold", "use_speed_control"};
+                "comm_failure_threshold", "use_speed_control",
+                "sample_stale_ms", "stop_timeout_ms", "stop_retry_count",
+                "stop_retry_window_ms", "stop_backoff_ms"};
             for (const char* key : kPelcoOnlyKeys)
             {
                 const cv::FileNode node = g[key];

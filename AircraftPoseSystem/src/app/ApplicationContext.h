@@ -168,11 +168,54 @@ public:
     ///    不因本析构而改变。
     ~ApplicationContext()
     {
-        closeBackends();
+        shutdownDevices();  // 析构兜底；主路径是 SystemInitializer::shutdown()
     }
 
     ApplicationContext(const ApplicationContext&)            = delete;
     ApplicationContext& operator=(const ApplicationContext&) = delete;
+
+    /// **公开、幂等**的设备关闭契约（C-23 / A3）。
+    ///
+    /// 顺序：转台（stop → 析构 join worker）→ 触发器（disable → 析构）
+    /// → 相机（stop → close）。与 `SystemInitializer::shutdown()` 的
+    /// 设备段一致；后者在"转台"与"触发器"之间还插入了预览 worker 的
+    /// stop/join，那是线程资源，不属于设备。
+    ///
+    /// ⚠ `closeBackends()` 是**私有且只管相机**的实现细节，不能当作
+    ///   关闭契约：它不碰转台、不碰触发器。本函数才是。
+    /// ⚠ 幂等：`stop()`/`disable()`/`close()` 的契约都允许未初始化时调用，
+    ///    `unique_ptr::reset()` 对空指针无副作用；另有标志避免重复执行。
+    void shutdownDevices()
+    {
+        if (devicesShutdown_)
+        {
+            return;
+        }
+        devicesShutdown_ = true;
+
+        // 转台：停止（只读下为无帧 no-op）后销毁 —— 析构 join worker、
+        // 关闭 socket。必须在相机之前：它持有独立的 worker 线程。
+        if (turntable)
+        {
+            turntable->stop();
+            turntable.reset();
+        }
+
+        // 触发器：先撤使能，再销毁。
+        if (trigger)
+        {
+            trigger->disable();
+            trigger.reset();
+        }
+
+        // 相机：先使诊断回调失效（防止关闭期间的回报访问已销毁的对象），
+        // 再停流 → 关设备（内部逐路逆序，见 closeBackends）。
+        if (cameras)
+        {
+            cameras->setDiagnosticSink({});
+        }
+        closeBackends();
+    }
 
     // ========================================================================
     //  以下顺序即 ENG-02 §15 的冻结创建顺序，序号写在注释里以便逐条对照。
@@ -317,6 +360,9 @@ public:
 
     /// 启动过程中的告警（不致命，但必须可见）。
     std::vector<std::string> warnings;
+
+    /// `shutdownDevices()` 是否已执行（幂等标志）。
+    bool devicesShutdown_ = false;
 
 private:
     /// 逐路停流并关设备（析构调用，见上文析构的说明）。

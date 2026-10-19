@@ -1,0 +1,4943 @@
+diff --git a/AircraftPoseSystem/README.md b/AircraftPoseSystem/README.md
+index 3b9da02..95f6686 100644
+--- a/AircraftPoseSystem/README.md
++++ b/AircraftPoseSystem/README.md
+@@ -666,14 +666,16 @@ dB 语义 `Gain` 节点的设备可用）与 `gain_raw`（**设备原生值**，
+ | **ENG-04** | 核心类设计；当前版本 **V2.2（PelcoD转台后端版）**，§8.2 转台类改为 `PelcoDTurntableController`；其 §10 有一处 `§7.x` 勘误标记 |
+ | **ENG-06** | 测试工程设计 |
+ | **ENG-08** | 第一阶段开发任务清单（Sprint 1~6） |
+-| **ENG-09** | 类型与命名冻结表（**类型/命名/单位的唯一权威**）；当前版本 **V2.7（PelcoD转台配置与命名版）** —— §4.3 类名 `PekoTurntableController` ⇒ **`PelcoDTurntableController`**、§6.3 `TurntableConfig` 追加 **10 个 `pelco_d_udp` 通信/到位判定字段**（仅该协议生效，键表见 SYS-17 V1.5 §8）、新增裁决 **C-22**；V2.6 的实机事实（`PixelFormat` 增 **`Mono10`**、`CameraConfig::gain` 改 **`std::optional`** 并新增 **`gainRaw`**、`ImageFrame::role` 的槽位权威）原样保留 |
++| **ENG-09** | 类型与命名冻结表（**类型/命名/单位的唯一权威**）；当前版本 **V2.8（转台样本与停止语义版）** —— 新增 §5.34（`TurntableSample`／`TurntableDiagnostics`／`WorkModeTrust`／`TurntableCommandOutcome`／`TurntableSendPolicy`）、错误码 **2004～2008**、§6.3 追加 **5 个停止/新鲜度键**（`sendPolicy` **不是配置键**）、新增裁决 **C-23**；V2.7 的转台命名与 10 个通信键、V2.6 的实机事实原样保留 |
+ | **ENG-10** | 算法链接口与配置注入设计 |
+ | ~~**SYS-08 §7**~~ | ⚠ **本行原写"重试 / 超时权威"，该依据 2026-09-26 核实为无效** —— SYS-08 V2.1 的 `# 7` 是 **TARGET_FOUND 状态**（§7.1 状态说明／§7.2 执行动作／§7.3 输出／§7.4 失败处理），`§7.5`／`§7.6`／`§7.7` **不存在**。重试／超时/降级的现行约定见下方**勘误块**与 [SYS-08-§7引用勘误.md](SYS-08-§7引用勘误.md) |
+ | **SYS-15 §4** | 误差预算合成规则权威 |
+-| **SYS-04** | 接口控制文件 ICD（接口权威）；当前版本 **V2.7（调用事实与清理范围修正版）** —— 与 **ENG-09 V2.6 同批发布**；ENG-09 现为 **V2.7**（只改转台命名与配置，未改 ICD 的接口签名），两者仍**须成对引用**；⚠ V2.7 在 V2.6 的调用责任之外新增**三条实机行为契约**（§6.2 第 12 条：请求格式／显示位移／增益写入由**设备能力**决定）与 **§15.3 通道角色的权威来源**（`save()` 的新增拒绝条件），并**收窄**清理承诺的统一范围（统一保证**只限 `grab()` 的帧释放结果**，`stop()`／`close()` 的字段规则单独写明） |
++| **SYS-04** | 接口控制文件 ICD（接口权威）；当前版本 **V2.8（转台诊断与错误码版）** —— 与 **ENG-09 V2.8 同批发布**；新增并列接口 **`ITurntableDiagnostics`**（§8.2）与错误码 2004～2008（§21.1），`ITurntableController` 四方法签名不变；新增 **§18 失败收口**（停止请求一次、停止事实不谎报）；V2.7 的三条实机行为契约与 §15.3 角色权威原样保留 |
+ | **SYS-05** | Data 数据结构设计（设计层叙述，**类型与字段的唯一权威是 ENG-09**）；当前版本 **V2.5（权威引用同步版）** —— 只把"以哪一版为准"改指 **ENG-09 V2.6**（实测 4 处），正文与既有字段语义一字未动；⚠ 已核对 `ImageFrame::gain` 是**帧内记录字段**，与 `CameraConfig::gain`／`gainRaw`（配置项）不是同一件事 |
+-| **SYS-06** | Device 设备抽象层设计（设计层叙述，**接口面的唯一权威是 SYS-04 §6.1**）；当前版本 **V2.7（PelcoD转台后端版）** —— §11.2 转台类改为 **`PelcoDTurntableController`**（Pelco-D over UDP；SDK/RS485 未实现）、§17 增转台后端阶段注记，现时声明改指 **SYS-04 V2.7 §6.1／§6.2**、**ENG-09 V2.7**、**SYS-17 V1.5 §5**；V2.6 的 `Mono10` 转换注与 `gain`/`gain_raw` 双键结论原样保留；接口面（11 方法）与责任边界一字未动 |
+-| **SYS-17** | 系统配置与参数管理设计（**键表的权威在本档 §5／§8**，键的类型／默认值／校验规则权威是 ENG-09 §6.1／§6.3／§6.5）；当前版本 **V1.5（转台通信键表版）** —— §8.1 旧示例（`interface: pekod`）改写、**新增 §8.2 `pelco_d_udp` 10 键合法键表与校验**、**新增 §8.3 `protocol` 取值与失败边界**、§13 增转台配置校验；V1.4 的 `gain`/`gain_raw` 双键与 §5.5 原样保留 |
++| **SYS-06** | Device 设备抽象层设计（设计层叙述，**接口面的唯一权威是 SYS-04 §6.1**）；当前版本 **V2.8（转台停止与生命周期版）** —— §11.2 增只读发送门禁、样本有效性、三类停止事实与诊断接口；§13 明确关闭顺序（任务收口 → 转台 stop/join → 预览 → 触发器 → 相机）与 `SystemInitializer::shutdown()` 责任；现时声明改指 **SYS-04 V2.8 §6.1／§6.2**、**ENG-09 V2.8**、**SYS-17 V1.6 §5**；V2.7 的类名与 V2.6 的实机结论原样保留；接口面（11 方法）签名未变 |
++| **SYS-10** | 转台控制与目标对准设计；当前版本 **V1.2（停止语义与样本有效性版）** —— §6.4 样本有效性与过期、§6.5 错误码 2004～2008 与统一重试策略、§12 三类停止事实（`stopFrameDelivered` ≠ `stopObservedStationary` ≠ ACK）、§13 WorkMode 四态且不作 MOVING/IDLE 判据、§17 单所有者 worker + 停止屏障；V1.1 的 Pelco-D 帧结构与角度映射原样保留 |
++| **SYS-09** | 多线程并发设计；当前版本 **V2.2（转台单所有者线程版）** —— §10 增单所有者 I/O（`move()` 仅受理、命令终结结果）、停止屏障与 ≤10 ms 接收切片、worker join 生命周期；§16 关闭顺序按 `SystemInitializer::shutdown()` 对齐；其余线程模型未动 |
++| **SYS-17** | 系统配置与参数管理设计（**键表的权威在本档 §5／§8**，键的类型／默认值／校验规则权威是 ENG-09 §6.1／§6.3／§6.5）；当前版本 **V1.6（转台停止与新鲜度键版）** —— §8.2 新增 **5 个停止/新鲜度键**（`sample_stale_ms`／`stop_timeout_ms`／`stop_retry_count`／`stop_retry_window_ms`／`stop_backoff_ms`）、明确**没有 `send_policy` 键**（只读门禁不可由配置打开）、§13 同步校验范围；V1.5 的 10 个通信键与 V1.4 的增益双键原样保留 |
+ | **SYS-01 §24** | **软件生命周期阶段**与逐阶段完成判据（阶段权威） |
+ | **SYS-02 §5** | **各阶段的需求范围**与虚拟 / 真实件构成（阶段范围权威） |
+ | **SYS-18 §3** | **各阶段部署形态及相应约束**（部署形态权威） |
+diff --git a/AircraftPoseSystem/config/turntable.yaml b/AircraftPoseSystem/config/turntable.yaml
+index 3fd72b4..55a3d3a 100644
+--- a/AircraftPoseSystem/config/turntable.yaml
++++ b/AircraftPoseSystem/config/turntable.yaml
+@@ -63,3 +63,15 @@ turntable:
+    #   arrival_tolerance_deg: 0.2  # 0.02..1.0（与 SYS-10 §3.3 对齐）
+    #   comm_failure_threshold: 5   # 1..20
+    #   use_speed_control: false    # false = 设备默认速度（本批取值）
++   #
++   # ---- 停止与样本新鲜度（C-23；仅 pelco_d_udp 读取）----
++   #
++   # ⚠ 没有 send_policy / motion_enabled 之类的键：只读发送门禁由代码固定为
++   #   TurntableSendPolicy::ReadOnly，**配置无法打开运动**。写成注释而不是
++   #   注释掉的键，正是为了不让人误以为"取消注释就能运动"。
++   #
++   #   sample_stale_ms: 500        # 50..5000；超时 ⇒ stale/ERROR，上层不得采集
++   #   stop_timeout_ms: 3000       # 100..30000；停止帧交付后等待"观测到静止"
++   #   stop_retry_count: 2         # 0..5；首次失败后的重发次数，总发送 ≤ 1+本值
++   #   stop_retry_window_ms: 2000  # 100..10000；全部停止尝试须在此窗口内完成
++   #   stop_backoff_ms: 200        # 0..1000；停止重发间隔
+diff --git a/AircraftPoseSystem/src/app/ApplicationContext.h b/AircraftPoseSystem/src/app/ApplicationContext.h
+index 75979df..0a1460e 100644
+--- a/AircraftPoseSystem/src/app/ApplicationContext.h
++++ b/AircraftPoseSystem/src/app/ApplicationContext.h
+@@ -168,12 +168,55 @@ public:
+     ///    不因本析构而改变。
+     ~ApplicationContext()
+     {
+-        closeBackends();
++        shutdownDevices();  // 析构兜底；主路径是 SystemInitializer::shutdown()
+     }
+ 
+     ApplicationContext(const ApplicationContext&)            = delete;
+     ApplicationContext& operator=(const ApplicationContext&) = delete;
+ 
++    /// **公开、幂等**的设备关闭契约（C-23 / A3）。
++    ///
++    /// 顺序：转台（stop → 析构 join worker）→ 触发器（disable → 析构）
++    /// → 相机（stop → close）。与 `SystemInitializer::shutdown()` 的
++    /// 设备段一致；后者在"转台"与"触发器"之间还插入了预览 worker 的
++    /// stop/join，那是线程资源，不属于设备。
++    ///
++    /// ⚠ `closeBackends()` 是**私有且只管相机**的实现细节，不能当作
++    ///   关闭契约：它不碰转台、不碰触发器。本函数才是。
++    /// ⚠ 幂等：`stop()`/`disable()`/`close()` 的契约都允许未初始化时调用，
++    ///    `unique_ptr::reset()` 对空指针无副作用；另有标志避免重复执行。
++    void shutdownDevices()
++    {
++        if (devicesShutdown_)
++        {
++            return;
++        }
++        devicesShutdown_ = true;
++
++        // 转台：停止（只读下为无帧 no-op）后销毁 —— 析构 join worker、
++        // 关闭 socket。必须在相机之前：它持有独立的 worker 线程。
++        if (turntable)
++        {
++            turntable->stop();
++            turntable.reset();
++        }
++
++        // 触发器：先撤使能，再销毁。
++        if (trigger)
++        {
++            trigger->disable();
++            trigger.reset();
++        }
++
++        // 相机：先使诊断回调失效（防止关闭期间的回报访问已销毁的对象），
++        // 再停流 → 关设备（内部逐路逆序，见 closeBackends）。
++        if (cameras)
++        {
++            cameras->setDiagnosticSink({});
++        }
++        closeBackends();
++    }
++
+     // ========================================================================
+     //  以下顺序即 ENG-02 §15 的冻结创建顺序，序号写在注释里以便逐条对照。
+     //
+@@ -318,6 +361,9 @@ public:
+     /// 启动过程中的告警（不致命，但必须可见）。
+     std::vector<std::string> warnings;
+ 
++    /// `shutdownDevices()` 是否已执行（幂等标志）。
++    bool devicesShutdown_ = false;
++
+ private:
+     /// 逐路停流并关设备（析构调用，见上文析构的说明）。
+     ///
+diff --git a/AircraftPoseSystem/src/app/SystemInitializer.cpp b/AircraftPoseSystem/src/app/SystemInitializer.cpp
+index 9951165..acb0085 100644
+--- a/AircraftPoseSystem/src/app/SystemInitializer.cpp
++++ b/AircraftPoseSystem/src/app/SystemInitializer.cpp
+@@ -184,7 +184,50 @@ SystemInitializer::SystemInitializer(ApplicationContext& ctx)
+ {
+ }
+ 
+-SystemInitializer::~SystemInitializer() = default;
++SystemInitializer::~SystemInitializer()
++{
++    // 析构兜底：main.cpp 已在事件循环结束后显式调用 shutdown()，
++    // 这里只是保证"忘记调用"也不会留下未 join 的线程和未关闭的设备。
++    shutdown();
++}
++
++void SystemInitializer::shutdown()
++{
++    if (shutdownDone_)
++    {
++        return;
++    }
++    shutdownDone_ = true;
++
++    // 1. 先关入口：此后的 tick()/startMeasurement() 不再推进任何动作。
++    ready_ = false;
++
++    // 2. 任务收口：failWith() 内部请求一次转台停止（幂等）。
++    //    没有活动任务时 stopMeasurement() 直接返回。
++    if (ctx_.controller)
++    {
++        ctx_.controller->stopMeasurement();
++    }
++
++    // 3. 转台：stop()（只读下无帧 no-op）后销毁 —— 析构 join worker、
++    //    关闭 socket。必须早于相机吗？不，但必须早于它自己的 sink
++    //    所依赖的 Logger 与传输对象。
++    if (ctx_.turntable)
++    {
++        ctx_.turntable->stop();
++        ctx_.turntable.reset();
++    }
++
++    // 4. 预览 worker：stop() 内部 join。必须先于 preview / cameras
++    //    被销毁，否则线程可能访问已释放的 manager。
++    if (ctx_.previewWorker)
++    {
++        ctx_.previewWorker->stop();
++    }
++
++    // 5~7. 触发器 disable → 相机 stop/close → 诊断回调失效（幂等）。
++    ctx_.shutdownDevices();
++}
+ 
+ // ---------------------------------------------------------------------------
+ 
+@@ -672,8 +715,18 @@ bool SystemInitializer::buildDevices()
+                 // ⚠ sink 由 worker 线程调用：只走 Logger（自身持锁），
+                 //   不得调用 SystemInitializer::warn() —— 那会改
+                 //   warnings_，与主线程竞争。
+-                pelco->setDiagnosticSink([this](const std::string& message) {
+-                    ctx_.logger->warn("device", message);
++                //
++                // ⚠ 只捕获 Logger 指针，**不捕获 this**：worker 的 join
++                //   只是必要条件，不是充分条件 —— reset() 之前若仍有
++                //   一次 sink 调用，捕获 this 会访问已析构的
++                //   SystemInitializer / ApplicationContext。Logger 的
++                //   生命周期长于转台（声明顺序见 ApplicationContext.h）。
++                infrastructure::Logger* logger = ctx_.logger.get();
++                pelco->setDiagnosticSink([logger](const std::string& message) {
++                    if (logger != nullptr)
++                    {
++                        logger->warn("device", message);
++                    }
+                 });
+             }
+             ctx_.turntable = std::move(pelco);
+diff --git a/AircraftPoseSystem/src/app/SystemInitializer.h b/AircraftPoseSystem/src/app/SystemInitializer.h
+index 9e773e0..8388a00 100644
+--- a/AircraftPoseSystem/src/app/SystemInitializer.h
++++ b/AircraftPoseSystem/src/app/SystemInitializer.h
+@@ -137,6 +137,22 @@ public:
+     /// 停止当前测量（转发给 controller）。
+     void stopMeasurement();
+ 
++    /// **唯一关闭责任方**（公开、幂等）。`main.cpp` 在事件循环结束后、
++    /// `ctx` 析构之前显式调用；析构函数也会兜底调用一次。
++    ///
++    /// 顺序（C-23 / A3）：
++    ///   1. 关闭 tick 与命令入口（`ready_ = false`）；
++    ///   2. `controller->stopMeasurement()` —— 终止任务的唯一收口；
++    ///   3. 转台 stop → 销毁（join worker、关 socket）；
++    ///   4. 预览 worker stop → join；
++    ///   5. 触发器 disable → 销毁；
++    ///   6. 相机 stop → close；
++    ///   7. 回调失效（相机诊断 sink 置空）并置已关闭标志。
++    ///
++    /// ⚠ 不能把"设备"和"线程"混成一步：转台 worker 与预览 worker 都是
++    ///    独立线程，必须在它们访问的 manager / transport 死之前 join。
++    void shutdown();
++
+     // ---- 诊断 ----
+ 
+     /// 启动失败原因；成功时为空。
+@@ -263,6 +279,7 @@ private:
+     ApplicationContext& ctx_;
+ 
+     bool                     ready_ = false;
++    bool                     shutdownDone_ = false;
+     std::string              errorText_;
+     data::ErrorInfo          startupError_;
+     std::vector<std::string> warnings_;
+diff --git a/AircraftPoseSystem/src/app/main.cpp b/AircraftPoseSystem/src/app/main.cpp
+index 534cd15..bce09c4 100644
+--- a/AircraftPoseSystem/src/app/main.cpp
++++ b/AircraftPoseSystem/src/app/main.cpp
+@@ -35,8 +35,12 @@
+ //
+ //  ---- 退出时的顺序是刻意的 ----
+ //
+-//  窗口关闭 → event loop 退出 → （栈回退）window 析构 → init 析构 →
+-//  ctx 析构。ctx 的成员按声明的逆序销毁：controller → sink → recorder →
++//  窗口关闭 → event loop 退出 → **init.shutdown()**（任务收口 → 转台
++//  worker join → 预览 worker join → 触发器 → 相机）→ （栈回退）
++//  window 析构 → init 析构（幂等兜底）→ ctx 析构。
++//  显式 shutdown() 是 C-23 的关闭契约：只靠栈回退时，controller 会先于
++//  转台/相机销毁，进行中的任务没有得到终止收口，worker 也没有先 join。
++//  ctx 的成员按声明的逆序销毁：controller → sink → recorder →
+ //  pipeline → stats → models → previewWorker → preview → … → config。
+ //  每一对相邻的"持有者/被持有者"都满足"持有者先死"（见
+ //  ApplicationContext.h 的说明）。若把 window 建成 main 的局部对象而 ctx
+@@ -206,5 +210,18 @@ int main(int argc, char* argv[])
+         std::fprintf(stderr, "（以上同样写入了日志文件）\n\n");
+     }
+ 
+-    return app.exec();
++    const int exitCode = app.exec();
++
++    // ---- 显式关闭 ----
++    // 事件循环退出后、window/init/ctx 析构之前调用。关闭顺序
++    // （任务收口 → 转台 worker join → 预览 worker join → 触发器 →
++    //  相机）由 SystemInitializer::shutdown() 唯一负责，且幂等；
++    // init 的析构会兜底再调用一次。
++    //
++    // ⚠ 不能只依赖 ctx 的成员析构：那会先销毁 controller（任务还在
++    //    进行中也不会有一次收口），再销毁转台/相机 —— 而没有线程
++    //    join 的保证，worker 可能访问已释放的 manager。
++    init.shutdown();
++
++    return exitCode;
+ }
+diff --git a/AircraftPoseSystem/src/application/MeasurementController.cpp b/AircraftPoseSystem/src/application/MeasurementController.cpp
+index fb962cc..9bc07d9 100644
+--- a/AircraftPoseSystem/src/application/MeasurementController.cpp
++++ b/AircraftPoseSystem/src/application/MeasurementController.cpp
+@@ -41,6 +41,7 @@
+ #include <string>
+ 
+ #include "data/MonotonicClock.h"
++#include "device/turntable/ITurntableDiagnostics.h"
+ 
+ namespace aircraft
+ {
+@@ -310,6 +311,10 @@ void MeasurementController::startMeasurement(uint64_t nowNs)
+     pendingCause_     = data::ErrorInfo{};
+     firstFailureSeen_ = false;
+ 
++    // 停止请求的幂等标志是**任务级**的：上一次任务的停止请求不得让
++    // 本次任务的失败收口跳过停止（C-23）。
++    stopRequestedForTask_ = false;
++
+     // ④ 任务期间启用硬件触发；任务结束时在 onEnteredState() 里关闭。
+     //    §7.5〔引用无效·依据待裁决·见 Q-D2〕 规定的"触发失效 → 降级为软触发（3001）"由设备层的
+     //    CameraSynchronizer 判定并上报（ENG-05 §10），本类不重复推断 ——
+@@ -339,17 +344,14 @@ void MeasurementController::stopMeasurement()
+ 
+     const uint64_t nowNs = data::monotonicNowNs();
+ 
+-    // 先让机构停下来，再改软件状态。
+-    //
+-    // 顺序不可颠倒：转台此刻可能正在运动，若先把状态置为 FAILED 而
+-    // 停止命令因任何原因未发出，操作者会看到一个"已停止"的界面与一个
+-    // 仍在转动的机构。先发停止命令使"界面显示停止"成为事实的**结果**
+-    // 而不是对事实的**声明**。
+-    turntable_.stop();
+-
+     // SYS-08 §7.3：9003 = 人工取消。§7.3 原文强调"SEARCH 状态可由人工终止"
+     //（因为 SEARCH 不设次数上限，没有人工出口就只能等 T_task）；
+     // 其余状态的人工终止未被禁止，且从安全角度必须允许。
++    //
++    // ⚠ 停止**不在这里**单独发：failWith() 是任务的唯一终止收口，
++    //    它在落失败包之前请求一次停止（幂等）。若在此处再停一次，
++    //    "tick 超时 / 恢复失败 / 人工取消"三条路径就会各插一遍停止，
++    //    失败包里的停止事实也会因插入点不同而分叉。
+     failWith(data::ErrorInfo{data::kErrManualCancel, "人工取消测量任务", nowNs},
+              nowNs);
+ }
+@@ -1144,6 +1146,23 @@ data::MeasurementRecord MeasurementController::buildRecord() const
+     record.bestFrame       = bestFrame_;
+     record.statistics      = statistics_;
+     record.turntable       = turntable_.state();
++
++    // 停止事实（C-23）：诊断接口是**可选**能力，虚拟转台没有它。
++    // 没有诊断时保持"未请求/未交付/未观测"的默认值，而不是猜一个。
++    record.stopRequested = stopRequestedForTask_;
++    if (stopRequestedForTask_)
++    {
++        if (const auto* diag =
++                dynamic_cast<const device::ITurntableDiagnostics*>(&turntable_))
++        {
++            const data::TurntableDiagnostics d = diag->diagnostics();
++            record.stopFrameDelivered      = d.stopFrameDelivered;
++            record.stopObservedStationary  = d.stopObservedStationary;
++            record.motionUncertain         = d.motionUncertain;
++            record.turntableMotionInhibited = d.motionInhibited;
++        }
++    }
++
+     record.selectedCamera  = selectedCamera_;
+     record.selectedScore   = selection_.score;
+     record.selectedQuality = bestQuality_;
+@@ -1922,6 +1941,14 @@ void MeasurementController::failWith(data::ErrorInfo error, uint64_t nowNs)
+     failureTrace_.finalFailedState = stateMachine_.state();
+     failureTrace_.finalError       = error;
+ 
++    // 先请求规定的停止处理，再记录结果（C-23）。
++    //
++    // ⚠ 停止的**结果**不从这一次调用的返回值推断：`stop()` 只负责
++    //    把停止请求交给设备层。帧是否交付、观测窗口内是否看到静止、
++    //    是否锁存 motionUncertain，由 `ITurntableDiagnostics` 给出，
++    //    并在 saveFailurePackage() 组装记录时读取。
++    requestTurntableStopOnce();
++
+     // 失败包落盘（裁决 C-007 §2.3）。
+     //
+     // ⚠ 必须在 transitionTo(FAILED) **之前**：onEnteredState() 在终态会
+@@ -1940,6 +1967,19 @@ void MeasurementController::failWith(data::ErrorInfo error, uint64_t nowNs)
+     }
+ }
+ 
++void MeasurementController::requestTurntableStopOnce()
++{
++    if (stopRequestedForTask_)
++    {
++        return;
++    }
++    stopRequestedForTask_ = true;
++
++    // 只读/运动禁用模式下设备层不产生任何控制帧，stop() 是无帧 no-op；
++    // 这里仍然调用，使"失败收口请求过停止"这件事有唯一入口。
++    turntable_.stop();
++}
++
+ void MeasurementController::note(const std::string& text)
+ {
+     if (std::find(notices_.begin(), notices_.end(), text) == notices_.end())
+diff --git a/AircraftPoseSystem/src/application/MeasurementController.h b/AircraftPoseSystem/src/application/MeasurementController.h
+index 1863624..d267add 100644
+--- a/AircraftPoseSystem/src/application/MeasurementController.h
++++ b/AircraftPoseSystem/src/application/MeasurementController.h
+@@ -453,8 +453,21 @@ private:
+     void applyRecovery(const Recovery& recovery, uint64_t nowNs);
+ 
+     /// 直接进入 FAILED 并记录错误（error.timestampNs 由本函数补齐）。
++    ///
++    /// ⚠ 这是任务的**唯一终止收口**：任务超时、终态失败、算法失败、
++    ///    人工取消全部经过这里。收口内先请求一次停止（幂等），
++    ///    再组装失败包 —— 停止结果与失败原因来自同一次终止事实。
+     void failWith(data::ErrorInfo error, uint64_t nowNs);
+ 
++    /// 请求转台停止（**每个任务至多一次**）。
++    ///
++    /// ⚠ 幂等标志在 `startMeasurement()` 清零：同一任务里 tick 超时、
++    ///    恢复策略失败、人工取消可能连续触发，但停止只应请求一次。
++    ///    停止结果（帧是否交付、是否观测到静止、是否不确定）由
++    ///    `buildRecord()` 从可选的 `ITurntableDiagnostics` 读取，
++    ///    不在调用线程臆测。
++    void requestTurntableStopOnce();
++
+     /// handleFailure() 的入口段：补时间戳 → `lastError_` → `pendingCause_`
+     /// →（首次失败时）记入 `failureTrace_.firstFailedState/firstError`。
+     ///
+@@ -578,6 +591,9 @@ private:
+ 
+     // ---- 任务级运行数据 ---------------------------------------------------
+ 
++    /// 本次任务的失败收口是否已请求过转台停止（C-23，任务级幂等）。
++    bool stopRequestedForTask_ = false;
++
+     /// 本次任务的记录（SAVE 的落盘对象）。
+     data::MeasurementTask task_;
+ 
+diff --git a/AircraftPoseSystem/src/data/ErrorInfo.cpp b/AircraftPoseSystem/src/data/ErrorInfo.cpp
+index 97318f2..3b71d42 100644
+--- a/AircraftPoseSystem/src/data/ErrorInfo.cpp
++++ b/AircraftPoseSystem/src/data/ErrorInfo.cpp
+@@ -54,6 +54,16 @@ const char* errorCodeName(int code)
+         return "ErrTurntableOverTravel";
+     case kErrAlignRetryExhausted:
+         return "ErrAlignRetryExhausted";
++    case kErrTurntableInvalidCommand:
++        return "ErrTurntableInvalidCommand";
++    case kErrTurntableStopNotDelivered:
++        return "ErrTurntableStopNotDelivered";
++    case kErrTurntableStopNotObserved:
++        return "ErrTurntableStopNotObserved";
++    case kErrTurntableMotionInhibited:
++        return "ErrTurntableMotionInhibited";
++    case kErrTurntableMotionWatchdog:
++        return "ErrTurntableMotionWatchdog";
+ 
+     // ---- 触发 / 同步段 ----
+     case kErrTriggerDegraded:
+diff --git a/AircraftPoseSystem/src/data/ErrorInfo.h b/AircraftPoseSystem/src/data/ErrorInfo.h
+index f1c30de..0ef6dbd 100644
+--- a/AircraftPoseSystem/src/data/ErrorInfo.h
++++ b/AircraftPoseSystem/src/data/ErrorInfo.h
+@@ -125,6 +125,28 @@ inline constexpr int kErrTurntableOverTravel = 2002;
+ /// 对应 MeasurementConfig::maxAlignAttempts（默认 8，经裁决 C-20 为唯一数据源）。
+ inline constexpr int kErrAlignRetryExhausted = 2003;
+ 
++// ---- 转台可信化（裁决 C-23，2026-10-19）----
++//
++// 判据全部在**发送任何字节之前**本地完成；拒绝路径不得产生控制帧。
++
++/// 2004 | 转台指令非法（非有限角/速度、目标不可解析） | C-23
++inline constexpr int kErrTurntableInvalidCommand = 2004;
++
++/// 2005 | 停止帧在重试窗口内未能交给传输层 | C-23
++/// ⚠ 语义只到"未交付"，不推断设备是否仍在运动；置 motionUncertain。
++inline constexpr int kErrTurntableStopNotDelivered = 2005;
++
++/// 2006 | 停止帧已交付，但观测窗口内未观察到静止 | C-23
++inline constexpr int kErrTurntableStopNotObserved = 2006;
++
++/// 2007 | 运动门禁拒绝（只读模式或 WorkMode 证据不足） | C-23
++inline constexpr int kErrTurntableMotionInhibited = 2007;
++
++/// 2008 | 运动看门狗到期 | C-23
++/// ⚠ 与 2001 分开：看门狗到期是"命令未在时限内完成"的事实，
++///    不是一次通信失败，重发同一指令不能解决问题。
++inline constexpr int kErrTurntableMotionWatchdog = 2008;
++
+ /// 3001 | 触发失效，已降级为软触发 | SYS-08 §7.5
+ /// 同 1002，是降级记录而非致命错误。
+ inline constexpr int kErrTriggerDegraded = 3001;
+diff --git a/AircraftPoseSystem/src/data/MeasurementRecord.h b/AircraftPoseSystem/src/data/MeasurementRecord.h
+index 624c05d..755047a 100644
+--- a/AircraftPoseSystem/src/data/MeasurementRecord.h
++++ b/AircraftPoseSystem/src/data/MeasurementRecord.h
+@@ -74,6 +74,24 @@ struct MeasurementRecord
+     /// （转台角度是粗姿态来源，也是误差归因的起点）。
+     TurntableState turntable;
+ 
++    /// 失败收口时请求转台停止的**已知结果**（裁决 C-23）。
++    ///
++    /// ⚠ 四个量描述的是四件不同的事，不得互相代替：
++    ///   · `stopRequested`          本任务的失败收口是否发起过停止处理；
++    ///   · `stopFrameDelivered`     停止帧已交给传输层（**不是**设备已停）；
++    ///   · `stopObservedStationary` 观测窗口内的连续新鲜样本满足静止判据；
++    ///   · `motionUncertain`        停止结果不确定（锁存，需显式恢复）。
++    /// 只读/运动禁用模式下不发送停止帧，故前两者为 false —— 这是
++    /// "没有发"而不是"发了没成功"。
++    bool stopRequested           = false;
++    bool stopFrameDelivered      = false;
++    bool stopObservedStationary  = false;
++    bool motionUncertain         = false;
++
++    /// 失败当时的转台运动门禁状态（只读/运动禁用时为 true）。
++    /// 没有它，`stopFrameDelivered=false` 会被误读成"停止帧发送失败"。
++    bool turntableMotionInhibited = false;
++
+     /// 本次测量使用的焦段（MEASURE_SELECT 的结论）。
+     CameraRole selectedCamera = CameraRole::CAM25;
+ 
+diff --git a/AircraftPoseSystem/src/data/TurntableConfig.h b/AircraftPoseSystem/src/data/TurntableConfig.h
+index 93ef632..8aa7daf 100644
+--- a/AircraftPoseSystem/src/data/TurntableConfig.h
++++ b/AircraftPoseSystem/src/data/TurntableConfig.h
+@@ -38,6 +38,18 @@ namespace aircraft
+ namespace data
+ {
+ 
++/// 发送门禁（裁决 C-23）。
++///
++/// ⚠ `ReadOnly` 是**生产配置的唯一取值**：ConfigManager 不解析任何
++///   能把它改成 `MotionEnabled` 的键。后者只允许由单元测试在进程内
++///   构造配置时显式设置，用于在 fake transport 上验证故障停止逻辑 ——
++///   它不会、也不能让一条真实 UDP 链路获得运动授权。
++enum class TurntableSendPolicy
++{
++    ReadOnly = 0,      ///< 只查询，控制帧恒为 0
++    MotionEnabled = 1, ///< 单元测试专用；生产装配不可达
++};
++
+ /// 转台配置（ENG-09 §6.3）。
+ struct TurntableConfig
+ {
+@@ -127,6 +139,27 @@ struct TurntableConfig
+     /// false = 表 3.5（设备默认速度，本批默认）；
+     /// true  = 表 3.65（指令携带转速，本批只做离线测试）。
+     bool useSpeedControl = false;
++
++    // ---- 可信化（裁决 C-23）----
++
++    /// 发送门禁。生产配置恒为 ReadOnly（ConfigManager 无对应键）。
++    TurntableSendPolicy sendPolicy = TurntableSendPolicy::ReadOnly;
++
++    /// 样本新鲜度上限，ms。超过即视为过期：诊断 stale、
++    /// `state().motion` 报 ERROR，上层不得采集。
++    int sampleStaleMs = 500;
++
++    /// 停止帧交付后等待“观测到静止”的窗口，ms。
++    int stopTimeoutMs = 3000;
++
++    /// 停止帧首次失败后的重发次数，[0,5]。总发送次数 ≤ 1 + 本值。
++    int stopRetryCount = 2;
++
++    /// 全部停止发送尝试必须在此时限内完成，ms。
++    int stopRetryWindowMs = 2000;
++
++    /// 停止重发间隔，ms。测试可置 0 以免拖慢用例。
++    int stopBackoffMs = 200;
+ };
+ 
+ }  // namespace data
+diff --git a/AircraftPoseSystem/src/device/turntable/PelcoDFrame.cpp b/AircraftPoseSystem/src/device/turntable/PelcoDFrame.cpp
+index bff2450..c2167cf 100644
+--- a/AircraftPoseSystem/src/device/turntable/PelcoDFrame.cpp
++++ b/AircraftPoseSystem/src/device/turntable/PelcoDFrame.cpp
+@@ -206,8 +206,14 @@ bool deviceAzimuthToSoftware(std::uint16_t raw, double& out)
+     return true;
+ }
+ 
+-std::uint16_t softwareAzimuthToDevice(double deg)
++bool softwareAzimuthToDeviceChecked(double deg, std::uint16_t& out)
+ {
++    // ⚠ std::lround(NaN) 是**实现定义值**（通常为 LONG_MIN），再强转成
++    // uint16_t 会静默变成一个“看起来正常”的角度。必须在取整之前拒绝。
++    if (!std::isfinite(deg))
++    {
++        return false;
++    }
+     double d = std::fmod(deg, 360.0);
+     if (d < 0.0)
+     {
+@@ -220,14 +226,29 @@ std::uint16_t softwareAzimuthToDevice(double deg)
+     {
+         raw -= 36000;
+     }
+-    return static_cast<std::uint16_t>(raw);
++    out = static_cast<std::uint16_t>(raw);
++    return true;
+ }
+ 
+-std::uint16_t encodeAngle100(double deg, bool signedAxis)
++std::uint16_t softwareAzimuthToDevice(double deg)
++{
++    std::uint16_t raw = 0;
++    if (!softwareAzimuthToDeviceChecked(deg, raw))
++    {
++        return 0xFFFF;  // 越界哨兵：调用方应改用 Checked 版本
++    }
++    return raw;
++}
++
++bool encodeAngle100Checked(double deg, bool signedAxis, std::uint16_t& out)
+ {
++    if (!std::isfinite(deg))
++    {
++        return false;
++    }
+     if (!signedAxis)
+     {
+-        return softwareAzimuthToDevice(deg);
++        return softwareAzimuthToDeviceChecked(deg, out);
+     }
+ 
+     const long raw = std::lround(deg * 100.0);
+@@ -235,7 +256,18 @@ std::uint16_t encodeAngle100(double deg, bool signedAxis)
+         std::max<long>(std::numeric_limits<std::int16_t>::min(),
+                        std::min<long>(std::numeric_limits<std::int16_t>::max(),
+                                       raw));
+-    return static_cast<std::uint16_t>(static_cast<std::int16_t>(clamped));
++    out = static_cast<std::uint16_t>(static_cast<std::int16_t>(clamped));
++    return true;
++}
++
++std::uint16_t encodeAngle100(double deg, bool signedAxis)
++{
++    std::uint16_t raw = 0;
++    if (!encodeAngle100Checked(deg, signedAxis, raw))
++    {
++        return 0xFFFF;
++    }
++    return raw;
+ }
+ 
+ double deviceElevationToSoftware(std::uint16_t raw)
+@@ -243,16 +275,33 @@ double deviceElevationToSoftware(std::uint16_t raw)
+     return static_cast<double>(static_cast<std::int16_t>(raw)) / 100.0;
+ }
+ 
+-std::uint8_t speedDegPerSecToRpm10(double degPerSec)
++bool speedDegPerSecToRpm10Checked(double degPerSec, std::uint8_t& out)
+ {
++    if (!std::isfinite(degPerSec))
++    {
++        return false;
++    }
+     if (degPerSec <= 0.0)
+     {
+-        return 0;
++        out = 0;
++        return true;
+     }
+     // 1 r/min = 6 °/s；指令值 = r/min × 10 = degPerSec × 10 / 6。
+     // 写成 ×6 会把 5 °/s 发成 30 r/min（180 °/s），是 36 倍的超速。
+     const long rpm10 = std::lround(degPerSec * 10.0 / 6.0);
+-    return static_cast<std::uint8_t>(std::max<long>(0, std::min<long>(255, rpm10)));
++    out = static_cast<std::uint8_t>(
++        std::max<long>(0, std::min<long>(255, rpm10)));
++    return true;
++}
++
++std::uint8_t speedDegPerSecToRpm10(double degPerSec)
++{
++    std::uint8_t rpm10 = 0;
++    if (!speedDegPerSecToRpm10Checked(degPerSec, rpm10))
++    {
++        return 0;  // 调用方应改用 Checked 版本
++    }
++    return rpm10;
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -291,28 +340,78 @@ PelcoDFrame makeStop(std::uint8_t address)
+     return frame;
+ }
+ 
+-PelcoDFrame makeAbsolutePosition(std::uint8_t address, bool horizontal,
+-                                 double angleDeg)
++bool makeAbsolutePositionChecked(std::uint8_t address, bool horizontal,
++                                 double angleDeg, PelcoDFrame& out)
+ {
++    std::uint16_t raw = 0;
++    if (!encodeAngle100Checked(angleDeg, !horizontal, raw))
++    {
++        return false;
++    }
+     PelcoDFrame frame;
+     frame.address = address;
+     frame.data2   = horizontal ? kOpPositionH : kOpPositionV;
+-    const std::uint16_t raw = encodeAngle100(angleDeg, !horizontal);
+     frame.data3 = static_cast<std::uint8_t>(raw >> 8);
+     frame.data4 = static_cast<std::uint8_t>(raw & 0xFF);
++    out = frame;
++    return true;
++}
++
++PelcoDFrame makeAbsolutePosition(std::uint8_t address, bool horizontal,
++                                 double angleDeg)
++{
++    PelcoDFrame frame;
++    if (!makeAbsolutePositionChecked(address, horizontal, angleDeg, frame))
++    {
++        // 无效帧：水平角 0xFFFF 越界、垂直角同样是非法样本。
++        // 调用方不得发送；生产路径使用 Checked 版本并走 2004。
++        frame = PelcoDFrame{};
++        frame.address = address;
++        frame.data2   = horizontal ? kOpPositionH : kOpPositionV;
++        frame.data3   = 0xFF;
++        frame.data4   = 0xFF;
++    }
+     return frame;
+ }
+ 
+-PelcoDFrame makeAbsolutePositionWithSpeed(std::uint8_t address, bool horizontal,
+-                                          double angleDeg, double speedDegPerSec)
++bool makeAbsolutePositionWithSpeedChecked(std::uint8_t address,
++                                          bool horizontal, double angleDeg,
++                                          double speedDegPerSec,
++                                          PelcoDFrame& out)
+ {
++    std::uint8_t rpm10 = 0;
++    if (!speedDegPerSecToRpm10Checked(speedDegPerSec, rpm10))
++    {
++        return false;
++    }
++    std::uint16_t raw = 0;
++    if (!encodeAngle100Checked(angleDeg, !horizontal, raw))
++    {
++        return false;
++    }
+     PelcoDFrame frame;
+     frame.address = address;
+     frame.data1   = horizontal ? kOpPositionH : kOpPositionV;  // 表 3.65
+-    frame.data2   = speedDegPerSecToRpm10(speedDegPerSec);
+-    const std::uint16_t raw = encodeAngle100(angleDeg, !horizontal);
++    frame.data2   = rpm10;
+     frame.data3 = static_cast<std::uint8_t>(raw >> 8);
+     frame.data4 = static_cast<std::uint8_t>(raw & 0xFF);
++    out = frame;
++    return true;
++}
++
++PelcoDFrame makeAbsolutePositionWithSpeed(std::uint8_t address, bool horizontal,
++                                          double angleDeg, double speedDegPerSec)
++{
++    PelcoDFrame frame;
++    if (!makeAbsolutePositionWithSpeedChecked(address, horizontal, angleDeg,
++                                              speedDegPerSec, frame))
++    {
++        frame = PelcoDFrame{};
++        frame.address = address;
++        frame.data1   = horizontal ? kOpPositionH : kOpPositionV;
++        frame.data3   = 0xFF;
++        frame.data4   = 0xFF;
++    }
+     return frame;
+ }
+ 
+diff --git a/AircraftPoseSystem/src/device/turntable/PelcoDFrame.h b/AircraftPoseSystem/src/device/turntable/PelcoDFrame.h
+index 43b8e9a..cabb6c7 100644
+--- a/AircraftPoseSystem/src/device/turntable/PelcoDFrame.h
++++ b/AircraftPoseSystem/src/device/turntable/PelcoDFrame.h
+@@ -111,20 +111,34 @@ bool deviceAzimuthToSoftware(std::uint16_t raw, double& out);
+ 
+ /// 软件水平角 → 设备无符号角（0～35999）。
+ /// `180.00` 与 `−180.00` 是同一物理点，编码均为 18000；读回为 `+180`。
++///
++/// ⚠ 输入非有限时返回 0xFFFF（越界哨兵）。**生产路径必须使用
++///    `...Checked` 版本**：0xFFFF 不是合法角，但把它当成角发出去，
++///    设备侧的错误会比本地拒绝晚一步才被发现。
+ std::uint16_t softwareAzimuthToDevice(double deg);
+ 
++/// 带检查的水平角编码。非有限输入返回 false 且不写 out。
++bool softwareAzimuthToDeviceChecked(double deg, std::uint16_t& out);
++
+ /// 角度 ×100 编码。
+ /// @param signedAxis true = 垂直轴（有符号，直接 ×100）；false = 水平轴
+ ///        （先规整到 [0, 360) 再 ×100）。
+ std::uint16_t encodeAngle100(double deg, bool signedAxis);
+ 
++/// 带检查的角度编码。非有限输入返回 false 且不写 out。
++bool encodeAngle100Checked(double deg, bool signedAxis, std::uint16_t& out);
++
+ /// 由垂直角原始 16 位值还原软件角（有符号）。
+ double deviceElevationToSoftware(std::uint16_t raw);
+ 
+ /// 速度换算：`rpm10 = round(degPerSec * 10 / 6)`（1 r/min = 6 °/s）。
+ /// 负值按 0 处理；结果夹在 0～255（指令只有一个字节）。
++/// 非有限输入返回 0（调用方应先用 ...Checked）。
+ std::uint8_t speedDegPerSecToRpm10(double degPerSec);
+ 
++/// 带检查的速度换算。非有限输入返回 false。
++bool speedDegPerSecToRpm10Checked(double degPerSec, std::uint8_t& out);
++
+ // ---------------------------------------------------------------------------
+ //  指令构造
+ //
+@@ -139,13 +153,26 @@ PelcoDFrame makeQueryWorkMode(std::uint8_t address);
+ PelcoDFrame makeStop(std::uint8_t address);
+ 
+ /// 表 3.5：绝对定位，设备内部默认速度（use_speed_control=false）。
++///
++/// 非有限角 ⇒ 返回无效帧（`data3 = data4 = 0xFF`），调用方不得发送。
++/// 生产路径使用 `...Checked`。
+ PelcoDFrame makeAbsolutePosition(std::uint8_t address, bool horizontal,
+                                  double angleDeg);
+ 
++/// 带检查的表 3.5 定位帧构造。角度非有限时返回 false 且不写 out。
++bool makeAbsolutePositionChecked(std::uint8_t address, bool horizontal,
++                                 double angleDeg, PelcoDFrame& out);
++
+ /// 表 3.65：绝对定位并携带转速（use_speed_control=true）。
+ PelcoDFrame makeAbsolutePositionWithSpeed(std::uint8_t address,
+                                           bool horizontal, double angleDeg,
+                                           double speedDegPerSec);
+ 
++/// 带检查的表 3.65 定位帧构造。角度或速度非有限时返回 false。
++bool makeAbsolutePositionWithSpeedChecked(std::uint8_t address,
++                                          bool horizontal, double angleDeg,
++                                          double speedDegPerSec,
++                                          PelcoDFrame& out);
++
+ }  // namespace device
+ }  // namespace aircraft
+diff --git a/AircraftPoseSystem/src/device/turntable/PelcoDSession.cpp b/AircraftPoseSystem/src/device/turntable/PelcoDSession.cpp
+index d24cd9d..e3cf421 100644
+--- a/AircraftPoseSystem/src/device/turntable/PelcoDSession.cpp
++++ b/AircraftPoseSystem/src/device/turntable/PelcoDSession.cpp
+@@ -1,15 +1,18 @@
+ // ============================================================================
+ //  src/device/turntable/PelcoDSession.cpp
+ //
+-//  依据：SYS-10 V1.1 §6.3～§6.6、ENG-09 V2.7 §6.3、裁决 C-22
++//  依据：SYS-10 V1.1 §6.3～§6.6、§12/§13、ENG-09 V2.7 §6.3、
++//        裁决 C-22、C-23
+ // ============================================================================
+ 
+ #include "device/turntable/PelcoDSession.h"
+ 
+ #include <algorithm>
++#include <chrono>
+ #include <cmath>
+ #include <cstdio>
+ #include <limits>
++#include <thread>
+ 
+ #include "data/ErrorInfo.h"
+ #include "data/MonotonicClock.h"
+@@ -22,13 +25,15 @@ namespace device
+ namespace
+ {
+ /// 指令重试次数：总尝试 = kCommandRetries + 1 = 3。
+-/// 查询在轮询周期里不重试（下一次 poll 就是重试），否则一个丢包会把
+-/// 一个 50 ms 的周期拖成 150 ms，worker 会持续落后。
+ constexpr int kCommandRetries = 2;
+ 
++/// 接收切片上限。停止屏障在**每个切片之后**都能被 worker 检查到；
++/// 单个切片超时只是继续等，**不是**整个事务超时。
++constexpr int kReceiveSliceMs = 10;
++
+ constexpr int kMaxDatagramBytes = 2048;
+ 
+-/// 看门狗估算：未启用转速控制时按 12 °/s 保守估计（SYS-10 V1.1 §6.5）。
++/// 看门狗估算：未启用转速控制时按 12 °/s 保守估计（SYS-10 §6.5）。
+ constexpr double kDefaultSpeedDegPerSec = 12.0;
+ 
+ std::uint64_t msToNs(int ms)
+@@ -42,9 +47,22 @@ bool frameEquals(const PelcoDFrame& a, const PelcoDFrame& b)
+            a.data3 == b.data3 && a.data4 == b.data4;
+ }
+ 
++/// 始终返回 [0, 180] 的绝对角差。
++///
++/// ⚠ 旧实现先取 |a-b|，仅在 delta > 180 时折成 360-delta。当两角相差
++///    超过 360°（例如 720°）时结果变成负数，而“<= tolerance”对负值恒真 ——
++///    到位判据会在转台根本没动时成立。先取模再折回，范围才封闭。
+ double circularDeltaDeg(double a, double b)
+ {
+-    double delta = std::fabs(a - b);
++    if (!std::isfinite(a) || !std::isfinite(b))
++    {
++        return 180.0;  // 非有限输入绝不能判成“到位”
++    }
++    double delta = std::fmod(a - b, 360.0);
++    if (delta < 0.0)
++    {
++        delta = -delta;
++    }
+     if (delta > 180.0)
+     {
+         delta = 360.0 - delta;
+@@ -59,6 +77,22 @@ std::string hexByte(std::uint8_t value)
+     return std::string(buffer);
+ }
+ 
++const char* workModeTrustName(data::WorkModeTrust trust)
++{
++    switch (trust)
++    {
++    case data::WorkModeTrust::Unknown:
++        return "Unknown";
++    case data::WorkModeTrust::EchoOnly:
++        return "EchoOnly";
++    case data::WorkModeTrust::ReplyNonZero:
++        return "ReplyNonZero";
++    case data::WorkModeTrust::NoReply:
++        return "NoReply";
++    }
++    return "Unknown";
++}
++
+ }  // namespace
+ 
+ PelcoDSession::PelcoDSession(const data::TurntableConfig& config,
+@@ -89,7 +123,8 @@ bool PelcoDSession::sendFrame(const PelcoDFrame& frame, std::string& error)
+ }
+ 
+ bool PelcoDSession::waitForEcho(const PelcoDFrame& sent, std::string& error,
+-                                bool& rejected)
++                                bool& rejected,
++                                const std::function<bool()>& shouldAbort)
+ {
+     rejected = false;
+     const std::uint64_t deadline = nowNs() + msToNs(config_.replyTimeoutMs);
+@@ -97,6 +132,12 @@ bool PelcoDSession::waitForEcho(const PelcoDFrame& sent, std::string& error,
+ 
+     for (;;)
+     {
++        if (shouldAbort && shouldAbort())
++        {
++            error = "指令被停止屏障取消";
++            return false;
++        }
++
+         const std::uint64_t now = nowNs();
+         if (now >= deadline)
+         {
+@@ -110,13 +151,15 @@ bool PelcoDSession::waitForEcho(const PelcoDFrame& sent, std::string& error,
+         {
+             remainingMs = 1;
+         }
++        // 切片：单次 receive 不跨越停止检查周期。切片超时后继续循环，
++        // 直到 deadline —— 切片超时不等于事务超时。
++        const int sliceMs = std::min(remainingMs, kReceiveSliceMs);
+ 
+         const auto result =
+-            transport_->receive(buffer, sizeof(buffer), remainingMs);
++            transport_->receive(buffer, sizeof(buffer), sliceMs);
+         if (result.status == TransportStatus::Timeout)
+         {
+-            error = "等待指令回显超时";
+-            return false;
++            continue;  // 本切片无数据；deadline 判断在循环顶部
+         }
+         if (result.status == TransportStatus::Error)
+         {
+@@ -144,45 +187,53 @@ bool PelcoDSession::waitForEcho(const PelcoDFrame& sent, std::string& error,
+                 return true;
+             }
+             // 角度/工作模式等其它帧：丢弃，继续等到超时。
+-            // 设备可能在回显前后夹带轮询回复，不能把"收到任何报文"
+-            // 当成"指令被接受"。
+         }
+     }
+ }
+ 
+-bool PelcoDSession::sendAndAwaitEcho(const PelcoDFrame& frame,
+-                                     std::string& error, bool& rejected)
++bool PelcoDSession::sendAndAwaitEcho(
++    const PelcoDFrame& frame, std::string& error, bool& rejected,
++    const std::function<bool()>& shouldAbort)
+ {
+     rejected = false;
+     for (int attempt = 0; attempt <= kCommandRetries; ++attempt)
+     {
++        if (shouldAbort && shouldAbort())
++        {
++            error = "指令被停止屏障取消";
++            return false;
++        }
+         if (!sendFrame(frame, error))
+         {
+             return false;
+         }
+-        if (waitForEcho(frame, error, rejected))
++        if (waitForEcho(frame, error, rejected, shouldAbort))
+         {
+             return true;
+         }
++        if (shouldAbort && shouldAbort())
++        {
++            error = "指令被停止屏障取消";
++            return false;
++        }
+         // EE 是设备明确拒绝，重发同一帧没有意义（SYS-10 V1.1 §6.5）。
+         if (rejected)
+         {
+             return false;
+         }
++        error.clear();
+     }
+-    error += "（已尝试 3 次）";
++    error += "（已尝试 " + std::to_string(kCommandRetries + 1) + " 次）";
+     return false;
+ }
+ 
+ bool PelcoDSession::queryAngle(bool horizontal, double& out,
+                                std::string& error, int retries)
+ {
+-    const PelcoDFrame query = horizontal ? makeQueryHorizontal(
+-                                               static_cast<std::uint8_t>(
+-                                                   config_.pelcoAddress))
+-                                         : makeQueryVertical(
+-                                               static_cast<std::uint8_t>(
+-                                                   config_.pelcoAddress));
++    const std::uint8_t address =
++        static_cast<std::uint8_t>(config_.pelcoAddress);
++    const PelcoDFrame query =
++        horizontal ? makeQueryHorizontal(address) : makeQueryVertical(address);
+     std::uint8_t buffer[kMaxDatagramBytes] = {};
+ 
+     for (int attempt = 0; attempt <= retries; ++attempt)
+@@ -211,14 +262,13 @@ bool PelcoDSession::queryAngle(bool horizontal, double& out,
+             {
+                 remainingMs = 1;
+             }
++            const int sliceMs = std::min(remainingMs, kReceiveSliceMs);
+ 
+             const auto result =
+-                transport_->receive(buffer, sizeof(buffer), remainingMs);
++                transport_->receive(buffer, sizeof(buffer), sliceMs);
+             if (result.status == TransportStatus::Timeout)
+             {
+-                error = horizontal ? "查询水平角超时" : "查询垂直角超时";
+-                retry = true;
+-                break;
++                continue;
+             }
+             if (result.status == TransportStatus::Error)
+             {
+@@ -229,15 +279,19 @@ bool PelcoDSession::queryAngle(bool horizontal, double& out,
+             const auto replies = parsePelcoDDatagram(buffer, result.size);
+             for (const auto& reply : replies)
+             {
+-                if (horizontal &&
+-                    reply.kind == PelcoDReplyKind::AngleHorizontal)
+-                {
+-                    out = reply.angleDeg;
+-                    return true;
+-                }
+-                if (!horizontal &&
+-                    reply.kind == PelcoDReplyKind::AngleVertical)
++                const bool wanted =
++                    (horizontal &&
++                     reply.kind == PelcoDReplyKind::AngleHorizontal) ||
++                    (!horizontal &&
++                     reply.kind == PelcoDReplyKind::AngleVertical);
++                if (wanted)
+                 {
++                    // C3：回复地址必须与配置一致。地址不符的回复按
++                    // “没有有效回复”处理，继续等到本事务超时。
++                    if (reply.frame.address != address)
++                    {
++                        continue;
++                    }
+                     out = reply.angleDeg;
+                     return true;
+                 }
+@@ -266,12 +320,14 @@ bool PelcoDSession::queryAngle(bool horizontal, double& out,
+     return false;
+ }
+ 
+-bool PelcoDSession::queryWorkMode(std::uint8_t& out, std::string& error,
+-                                  int retries)
++bool PelcoDSession::queryWorkMode(std::uint8_t& out, bool& echoOnly,
++                                  std::string& error, int retries)
+ {
+-    const PelcoDFrame query =
+-        makeQueryWorkMode(static_cast<std::uint8_t>(config_.pelcoAddress));
++    const std::uint8_t address =
++        static_cast<std::uint8_t>(config_.pelcoAddress);
++    const PelcoDFrame query = makeQueryWorkMode(address);
+     std::uint8_t buffer[kMaxDatagramBytes] = {};
++    echoOnly = false;
+ 
+     for (int attempt = 0; attempt <= retries; ++attempt)
+     {
+@@ -299,14 +355,13 @@ bool PelcoDSession::queryWorkMode(std::uint8_t& out, std::string& error,
+             {
+                 remainingMs = 1;
+             }
++            const int sliceMs = std::min(remainingMs, kReceiveSliceMs);
+ 
+             const auto result =
+-                transport_->receive(buffer, sizeof(buffer), remainingMs);
++                transport_->receive(buffer, sizeof(buffer), sliceMs);
+             if (result.status == TransportStatus::Timeout)
+             {
+-                error = "查询工作模式超时";
+-                retry = true;
+-                break;
++                continue;
+             }
+             if (result.status == TransportStatus::Error)
+             {
+@@ -320,10 +375,13 @@ bool PelcoDSession::queryWorkMode(std::uint8_t& out, std::string& error,
+             {
+                 if (reply.kind == PelcoDReplyKind::WorkMode)
+                 {
+-                    // ⚠ 若设备把查询帧原样回显（0xE0 00 00 00），它会与
+-                    // WorkMode=0x00 的回复同形。手册表 3.41 规定设备回
+-                    // 当前模式，故这里按回复解析；M5 只读实测会核对。
+-                    out = reply.workMode;
++                    // C3：地址不符不能完成工作模式事务。
++                    if (reply.frame.address != address)
++                    {
++                        continue;
++                    }
++                    out      = reply.workMode;
++                    echoOnly = frameEquals(reply.frame, query);
+                     return true;
+                 }
+                 if (reply.kind == PelcoDReplyKind::Rejected)
+@@ -345,60 +403,99 @@ bool PelcoDSession::queryWorkMode(std::uint8_t& out, std::string& error,
+     return false;
+ }
+ 
+-bool PelcoDSession::initialize(std::string& error)
++bool PelcoDSession::finiteConfig(std::string& error) const
+ {
+-    error.clear();
+-    lastError_        = data::ErrorInfo{};
+-    errorLatched_     = false;
+-    initialized_      = false;
+-    moving_           = false;
+-    stableCount_      = 0;
+-    hasLastRead_      = false;
+-    consecutiveFailures_ = 0;
+-    stopSent_         = false;
+-    motion_.store(data::TurntableMotionState::IDLE);
+-
+-    // ---- 配置自洽性。错误必须在打开 socket 之前暴露。----
+     if (!(config_.azimuthMin < config_.azimuthMax) ||
+         !(config_.elevationMin < config_.elevationMax))
+     {
+-        setError(data::kErrTurntableComm, "转台行程配置无效（上限不大于下限）",
+-                 true);
+-        motion_.store(data::TurntableMotionState::ERROR);
++        error = "转台行程配置无效（上限不大于下限）";
+         return false;
+     }
+-    if (config_.coarseSpeed <= 0.0 || config_.fineSpeed <= 0.0)
++    if (!std::isfinite(config_.azimuthMin) ||
++        !std::isfinite(config_.azimuthMax) ||
++        !std::isfinite(config_.elevationMin) ||
++        !std::isfinite(config_.elevationMax))
+     {
+-        setError(data::kErrTurntableComm, "转台速度配置无效（粗调或精调 <= 0）",
+-                 true);
+-        motion_.store(data::TurntableMotionState::ERROR);
++        error = "转台行程配置含非有限值";
++        return false;
++    }
++    if (!std::isfinite(config_.coarseSpeed) ||
++        !std::isfinite(config_.fineSpeed) || config_.coarseSpeed <= 0.0 ||
++        config_.fineSpeed <= 0.0)
++    {
++        error = "转台速度配置无效（非有限或 <= 0）";
++        return false;
++    }
++    if (!std::isfinite(config_.stableThresholdDeg) ||
++        !std::isfinite(config_.arrivalToleranceDeg) ||
++        config_.stableThresholdDeg < 0.0 || config_.arrivalToleranceDeg < 0.0)
++    {
++        error = "转台到位判定参数含非有限/负值";
+         return false;
+     }
+     if (config_.pelcoAddress < 1 || config_.pelcoAddress > 255)
+     {
+-        setError(data::kErrTurntableComm, "Pelco-D 设备地址必须在 1..255",
+-                 true);
+-        motion_.store(data::TurntableMotionState::ERROR);
++        error = "Pelco-D 设备地址必须在 1..255";
+         return false;
+     }
+     if (config_.port < 1 || config_.port > 65535)
+     {
+-        setError(data::kErrTurntableComm, "转台 UDP 端口必须在 1..65535", true);
+-        motion_.store(data::TurntableMotionState::ERROR);
++        error = "转台 UDP 端口必须在 1..65535";
+         return false;
+     }
+     if (config_.replyTimeoutMs < 1 || config_.stableReadCount < 1 ||
+-        config_.commFailureThreshold < 1 || config_.stableThresholdDeg < 0.0 ||
+-        config_.arrivalToleranceDeg < 0.0)
++        config_.commFailureThreshold < 1 || config_.sampleStaleMs < 1 ||
++        config_.stopTimeoutMs < 1 || config_.stopRetryCount < 0 ||
++        config_.stopRetryCount > 5 || config_.stopRetryWindowMs < 1 ||
++        config_.stopBackoffMs < 0)
+     {
+-        setError(data::kErrTurntableComm, "转台通信/到位判定参数无效", true);
++        error = "转台通信/停止/样本有效性参数无效";
++        return false;
++    }
++    return true;
++}
++
++bool PelcoDSession::initialize(std::string& error)
++{
++    error.clear();
++    {
++        std::lock_guard<std::mutex> lock(faultMutex_);
++        lastError_  = data::ErrorInfo{};
++        firstFault_ = data::TurntableFault{};
++    }
++    errorLatched_         = false;
++    initialized_          = false;
++    moving_               = false;
++    stableCount_          = 0;
++    hasLastRead_          = false;
++    consecutiveFailures_  = 0;
++    stopPending_          = false;
++    stopSent_             = false;
++    stopRetryArmed_       = false;
++    stopStationaryCount_  = 0;
++    stopHasLast_          = false;
++    stopObservationDeadlineNs_ = 0;
++    motionUncertain_      = false;
++    stopFrameDelivered_   = false;
++    stopObservedStationary_ = false;
++    sampleValid_          = false;
++    sampleTimestampNs_    = 0;
++    sampleCycleId_        = 0;
++    workModeTrust_        = data::WorkModeTrust::Unknown;
++    motion_               = data::TurntableMotionState::IDLE;
++
++    // ---- 配置自洽性。错误必须在打开 socket 之前暴露。----
++    if (!finiteConfig(error))
++    {
++        setError(data::kErrTurntableComm, error, true, "initialize/config");
+         motion_.store(data::TurntableMotionState::ERROR);
+         return false;
+     }
+ 
+     if (!transport_)
+     {
+-        setError(data::kErrTurntableComm, "转台传输未创建", true);
++        setError(data::kErrTurntableComm, "转台传输未创建", true,
++                 "initialize/transport");
+         motion_.store(data::TurntableMotionState::ERROR);
+         return false;
+     }
+@@ -407,7 +504,8 @@ bool PelcoDSession::initialize(std::string& error)
+                           error))
+     {
+         setError(data::kErrTurntableComm,
+-                 "打开转台 UDP 连接失败：" + error, true);
++                 "打开转台 UDP 连接失败：" + error, true,
++                 "initialize/open");
+         motion_.store(data::TurntableMotionState::ERROR);
+         return false;
+     }
+@@ -415,28 +513,49 @@ bool PelcoDSession::initialize(std::string& error)
+     double azimuth   = 0.0;
+     double elevation = 0.0;
+     std::uint8_t workMode = 0;
+-
+-    if (!queryAngle(true, azimuth, error, kCommandRetries) ||
+-        !queryAngle(false, elevation, error, kCommandRetries) ||
+-        !queryWorkMode(workMode, error, kCommandRetries))
++    bool echoOnly = false;
++
++    // 两轴与工作模式在同一初始化事务内查询；每一类回复都核验地址。
++    // ⚠ 保持原有的短路顺序：只有两轴都成功才查询工作模式。
++    const bool gotAzimuth   = queryAngle(true, azimuth, error, kCommandRetries);
++    const bool gotElevation = gotAzimuth &&
++                              queryAngle(false, elevation, error,
++                                         kCommandRetries);
++    const bool gotWorkMode  = gotElevation &&
++                              queryWorkMode(workMode, echoOnly, error,
++                                            kCommandRetries);
++    if (!gotAzimuth || !gotElevation || !gotWorkMode)
+     {
++        // 只有“确实发起了工作模式查询且没有有效回复”才记 NoReply ——
++        // 两轴失败时工作模式事务根本没发生，不能替它下结论。
++        if (gotElevation && !gotWorkMode)
++        {
++            workModeTrust_ = data::WorkModeTrust::NoReply;
++        }
+         transport_->close();
+-        setError(data::kErrTurntableComm, "转台初始化查询失败：" + error, true);
++        setError(data::kErrTurntableComm, "转台初始化查询失败：" + error, true,
++                 "initialize/query");
+         motion_.store(data::TurntableMotionState::ERROR);
+         return false;
+     }
+ 
+     if (workMode != 0x00)
+     {
++        workModeTrust_ = data::WorkModeTrust::ReplyNonZero;
+         transport_->close();
+         setError(data::kErrTurntableComm,
+                  "转台工作模式不是常规模式（当前 " + hexByte(workMode) +
+                      "），拒绝初始化；不自动清故障、不逃逸限位",
+-                 true);
++                 true, "initialize/work_mode");
+         motion_.store(data::TurntableMotionState::ERROR);
+         return false;
+     }
+ 
++    // ⚠ 不设 ConfirmedNormal：回复 0x00 但字节与查询不同，只能证明
++    //    “报文不同”，不能证明它是独立、有效的工作模式回复。
++    workModeTrust_ = echoOnly ? data::WorkModeTrust::EchoOnly
++                              : data::WorkModeTrust::Unknown;
++
+     if (azimuth < config_.azimuthMin - 1e-9 ||
+         azimuth > config_.azimuthMax + 1e-9 ||
+         elevation < config_.elevationMin - 1e-9 ||
+@@ -444,34 +563,92 @@ bool PelcoDSession::initialize(std::string& error)
+     {
+         transport_->close();
+         setError(data::kErrTurntableComm,
+-                 "转台实测角超出配置行程，拒绝初始化", true);
++                 "转台实测角超出配置行程，拒绝初始化", true,
++                 "initialize/range");
+         motion_.store(data::TurntableMotionState::ERROR);
+         return false;
+     }
+ 
+-    azimuth_.store(azimuth);
+-    elevation_.store(elevation);
+-    motion_.store(data::TurntableMotionState::IDLE);
++    sampleCycleId_.store(0);
++    publishSample(azimuth, elevation, nowNs(), true);  // cycle = 1
+     initialized_ = true;
++    motion_.store(data::TurntableMotionState::IDLE);
+     return true;
+ }
+ 
+ bool PelcoDSession::move(const data::TurntableCommand& command,
+                          std::string& error)
++{
++    return move(command, error, std::function<bool()>());
++}
++
++bool PelcoDSession::move(const data::TurntableCommand& command,
++                         std::string& error,
++                         const std::function<bool()>& shouldAbort)
+ {
+     error.clear();
+-    lastError_ = data::ErrorInfo{};
+ 
+-    if (!initialized_)
++    if (!initialized_.load())
++    {
++        setError(data::kErrTurntableComm, "转台未初始化即收到移动命令", false,
++                 "move/init");
++        error = lastErrorText();
++        return false;
++    }
++    if (errorLatched_.load())
+     {
+-        setError(data::kErrTurntableComm, "转台未初始化即收到移动命令", false);
+-        error = lastError_.message;
++        error = lastErrorText();
++        if (error.empty())
++        {
++            error = "转台处于锁存错误状态";
++        }
+         return false;
+     }
+-    if (errorLatched_)
++    if (motionUncertain_.load())
+     {
+-        error = lastError_.message.empty() ? "转台处于锁存错误状态"
+-                                           : lastError_.message;
++        setError(data::kErrTurntableMotionInhibited,
++                 "转台运动状态不确定（停止未确认），必须先显式停止或重新初始化",
++                 true, "move/motion_uncertain");
++        error = lastErrorText();
++        return false;
++    }
++
++    // 只有**即将开始一次新命令**时才清当前错误；锁存错误与运动不确定
++    // 分支必须保留原错误码/文本（修复：先前无条件清零会让上层看到空错误）。
++    {
++        std::lock_guard<std::mutex> lock(faultMutex_);
++        lastError_ = data::ErrorInfo{};  // 首因 firstFault_ 始终保留
++    }
++
++    // ---- 发送门禁（C1/A4）----
++    if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
++    {
++        setError(data::kErrTurntableMotionInhibited,
++                 "只读模式拒绝运动指令（控制帧恒为 0）", true,
++                 "move/read_only");
++        error = lastErrorText();
++        return false;
++    }
++    if (!testMotionGate_)
++    {
++        // 本批没有可放行运动的协议证据：WorkMode 不构成许可。
++        setError(data::kErrTurntableMotionInhibited,
++                 std::string("运动门禁拒绝：WorkMode 可信度 ") +
++                     workModeTrustName(workModeTrust_.load()) +
++                     "，无运动授权",
++                 true, "move/work_mode_gate");
++        error = lastErrorText();
++        return false;
++    }
++
++    // ---- 本地输入边界（C1/NaN）：非法命令一个字节都不发 ----
++    if (!std::isfinite(command.azimuthCommand) ||
++        !std::isfinite(command.elevationCommand))
++    {
++        setError(data::kErrTurntableInvalidCommand,
++                 "移动命令含非有限角，指令未发送", true, "move/nonfinite");
++        motion_.store(data::TurntableMotionState::ERROR);
++        error = lastErrorText();
+         return false;
+     }
+ 
+@@ -480,12 +657,19 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
+     if (!resolveAzimuth(command.azimuthCommand, azimuthTarget) ||
+         !resolveElevation(command.elevationCommand, elevationTarget))
+     {
+-        // 本地超行程：**一个字节都不发**。发出去再拦已经太晚 ——
+-        // 真机上这可能意味着已经撞到机械限位。
+         setError(data::kErrTurntableOverTravel,
+-                 "目标角度超出行程，指令未发送", true);
++                 "目标角度超出行程，指令未发送", true, "move/over_travel");
++        motion_.store(data::TurntableMotionState::ERROR);
++        error = lastErrorText();
++        return false;
++    }
++    if (!std::isfinite(azimuthTarget) || !std::isfinite(elevationTarget))
++    {
++        setError(data::kErrTurntableInvalidCommand,
++                 "解析后的目标角非有限，指令未发送", true,
++                 "move/resolve_nonfinite");
+         motion_.store(data::TurntableMotionState::ERROR);
+-        error = lastError_.message;
++        error = lastErrorText();
+         return false;
+     }
+ 
+@@ -497,37 +681,64 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
+ 
+     const std::uint8_t address =
+         static_cast<std::uint8_t>(config_.pelcoAddress);
+-    const PelcoDFrame horizontalFrame =
+-        config_.useSpeedControl
+-            ? makeAbsolutePositionWithSpeed(address, true, azimuthTarget, speed)
+-            : makeAbsolutePosition(address, true, azimuthTarget);
+-    const PelcoDFrame verticalFrame =
++    PelcoDFrame horizontalFrame;
++    PelcoDFrame verticalFrame;
++    const bool framed =
+         config_.useSpeedControl
+-            ? makeAbsolutePositionWithSpeed(address, false, elevationTarget,
+-                                            speed)
+-            : makeAbsolutePosition(address, false, elevationTarget);
++            ? (makeAbsolutePositionWithSpeedChecked(address, true,
++                                                    azimuthTarget, speed,
++                                                    horizontalFrame) &&
++               makeAbsolutePositionWithSpeedChecked(address, false,
++                                                    elevationTarget, speed,
++                                                    verticalFrame))
++            : (makeAbsolutePositionChecked(address, true, azimuthTarget,
++                                           horizontalFrame) &&
++               makeAbsolutePositionChecked(address, false, elevationTarget,
++                                           verticalFrame));
++    if (!framed)
++    {
++        setError(data::kErrTurntableInvalidCommand,
++                 "定位帧编码失败（非有限角/速度），指令未发送", true,
++                 "move/encode");
++        motion_.store(data::TurntableMotionState::ERROR);
++        error = lastErrorText();
++        return false;
++    }
+ 
+-    stopSent_ = false;
++    stopSent_       = false;
++    stopRetryArmed_ = false;
+ 
+     bool rejected = false;
+     std::string failure;
+ 
+-    if (!sendAndAwaitEcho(horizontalFrame, failure, rejected))
++    if (!sendAndAwaitEcho(horizontalFrame, failure, rejected, shouldAbort))
+     {
++        if (shouldAbort && shouldAbort())
++        {
++            // 停止屏障已取消本次命令：不恢复、不再自行发停止帧
++            //（停止帧由屏障路径发送一次）。
++            error = failure.empty() ? "指令被停止屏障取消" : failure;
++            return false;
++        }
+         // 回显超时/校验错误时设备**可能已经接受**了指令。
+-        // 此时不能假装"什么都没发生"，先尽力停止。
+-        bestEffortStop();
+-        setError(data::kErrTurntableComm, "水平轴指令失败：" + failure, false);
+-        error = lastError_.message;
++        // 不能假装"什么都没发生"：发起规定的停止处理并记录已知结果。
++        stopForFault(data::kErrTurntableComm,
++                     "水平轴指令失败：" + failure, "move/axis=horizontal");
++        error = lastErrorText();
+         return false;
+     }
+ 
+-    if (!sendAndAwaitEcho(verticalFrame, failure, rejected))
++    if (!sendAndAwaitEcho(verticalFrame, failure, rejected, shouldAbort))
+     {
+-        // 部分轴已接受：必须立即尽力停止，不能留下单轴运动。
+-        bestEffortStop();
+-        setError(data::kErrTurntableComm, "垂直轴指令失败：" + failure, false);
+-        error = lastError_.message;
++        if (shouldAbort && shouldAbort())
++        {
++            error = failure.empty() ? "指令被停止屏障取消" : failure;
++            return false;
++        }
++        // 部分轴已接受：必须请求停止，不能留下单轴运动。
++        stopForFault(data::kErrTurntableComm,
++                     "垂直轴指令失败：" + failure, "move/axis=vertical");
++        error = lastErrorText();
+         return false;
+     }
+ 
+@@ -537,6 +748,7 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
+     stableCount_ = 0;
+     hasLastRead_ = false;
+     consecutiveFailures_ = 0;
++    stopPending_ = false;
+     motion_.store(data::TurntableMotionState::MOVING);
+     armWatchdog(azimuthTarget, elevationTarget);
+     return true;
+@@ -544,16 +756,38 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
+ 
+ void PelcoDSession::pollOnce()
+ {
+-    if (!initialized_ || errorLatched_)
++    if (!initialized_.load())
+     {
+         return;
+     }
+ 
+-    if (moving_ && moveDeadlineNs_ != 0 && nowNs() >= moveDeadlineNs_)
++    const std::uint64_t now = nowNs();
++
++    // 停止观测窗口到期：无论本轮采样是否成功，都要如实锁存。
++    if (stopPending_ && stopFrameDelivered_ &&
++        now >= stopObservationDeadlineNs_)
+     {
+-        bestEffortStop();
+-        moving_ = false;
+-        setError(data::kErrTurntableComm, "移动看门狗超时，已尽力停止", true);
++        stopPending_ = false;
++        motionUncertain_ = true;
++        setFirstFault(data::kErrTurntableStopNotObserved,
++                      "停止帧已交付，但观测窗口内未观察到静止",
++                      "stop/observe_timeout");
++        setError(data::kErrTurntableStopNotObserved,
++                 "停止帧已交付，但观测窗口内未观察到静止", true,
++                 "stop/observe_timeout");
++        motion_.store(data::TurntableMotionState::ERROR);
++        return;
++    }
++
++    if (moving_ && !stopPending_ && moveDeadlineNs_ != 0 &&
++        now >= moveDeadlineNs_)
++    {
++        moveDeadlineNs_ = 0;
++        // 2008 是“命令未在时限内完成”的事实，不是一次通信失败。
++        stopForFault(data::kErrTurntableMotionWatchdog,
++                     "移动看门狗超时", "watchdog");
++        setError(data::kErrTurntableMotionWatchdog, "移动看门狗超时", true,
++                 "watchdog");
+         motion_.store(data::TurntableMotionState::ERROR);
+         return;
+     }
+@@ -568,112 +802,313 @@ void PelcoDSession::pollOnce()
+     const bool gotAzimuth = queryAngle(true, azimuth, azError, 0);
+     const bool gotElevation = queryAngle(false, elevation, elError, 0);
+ 
+-    if (gotAzimuth)
+-    {
+-        azimuth_.store(azimuth);
+-    }
+-    if (gotElevation)
+-    {
+-        elevation_.store(elevation);
+-    }
+-
++    // C4：两轴必须同轮。任一轴缺失 ⇒ 整个样本无效，**不得**把
++    // 新方位角与旧俯仰角拼在一起发布。
+     if (!gotAzimuth || !gotElevation)
+     {
++        sampleCycleId_.fetch_add(1);
++        sampleTimestampNs_.store(now);
++        sampleValid_.store(false);
+         ++consecutiveFailures_;
+         stableCount_ = 0;
+         hasLastRead_ = false;
+ 
+-        if (consecutiveFailures_ >= config_.commFailureThreshold)
++        // 没有新鲜样本时不能继续声称 STABLE。
++        if (motion_.load() == data::TurntableMotionState::STABLE)
+         {
+-            bestEffortStop();
+-            moving_ = false;
+-            setError(data::kErrTurntableComm,
+-                     "连续 " + std::to_string(consecutiveFailures_) +
+-                         " 个轮询周期无有效角度回复",
+-                     true);
++            motion_.store(data::TurntableMotionState::IDLE);
++        }
++
++        if (consecutiveFailures_ >= config_.commFailureThreshold &&
++            !errorLatched_.load())
++        {
++            const std::string text =
++                "连续 " + std::to_string(consecutiveFailures_) +
++                " 个轮询周期无有效角度回复";
++            setFirstFault(data::kErrTurntableComm, text, "poll/lost_link");
++            stopForFault(data::kErrTurntableComm, text, "poll/lost_link");
++            setError(data::kErrTurntableComm, text, true, "poll/lost_link");
+             motion_.store(data::TurntableMotionState::ERROR);
+         }
+         return;
+     }
+ 
+     consecutiveFailures_ = 0;
++    publishSample(azimuth, elevation, now, true);
++
++    if (stopPending_ && stopFrameDelivered_)
++    {
++        handleStopObservation(azimuth, elevation, now);
++        return;
++    }
++
+     updateMotion(azimuth, elevation);
+ }
+ 
+-void PelcoDSession::updateMotion(double azimuth, double elevation)
++bool PelcoDSession::performStop(int faultCode, const std::string& faultMessage,
++                                const std::string& context,
++                                bool recordFirstFault)
+ {
+-    const bool withinTolerance =
+-        circularDeltaDeg(azimuth, targetAz_) <= config_.arrivalToleranceDeg &&
+-        std::fabs(elevation - targetEl_) <= config_.arrivalToleranceDeg;
++    // 只读模式：所有路径均不得产生控制帧（C1）。
++    if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
++    {
++        return false;
++    }
+ 
+-    if (!moving_)
++    if (stopSent_ && !stopRetryArmed_)
+     {
+-        lastAz_      = azimuth;
+-        lastEl_      = elevation;
+-        hasLastRead_ = true;
+-        return;
++        return true;  // 已经交付过，等待观测；不自动重发
++    }
++    if (stopRetryArmed_)
++    {
++        stopSent_ = false;
+     }
+ 
+-    const bool unchanged =
+-        hasLastRead_ &&
+-        std::fabs(azimuth - lastAz_) <= config_.stableThresholdDeg &&
+-        std::fabs(elevation - lastEl_) <= config_.stableThresholdDeg;
++    const std::uint8_t address =
++        static_cast<std::uint8_t>(config_.pelcoAddress);
++    const PelcoDFrame stopFrame = makeStop(address);
+ 
+-    if (withinTolerance && unchanged)
++    const std::uint64_t deadline =
++        nowNs() + msToNs(config_.stopRetryWindowMs);
++    bool delivered = false;
++    std::string lastFailure;
++
++    for (int attempt = 0; attempt <= config_.stopRetryCount; ++attempt)
+     {
+-        ++stableCount_;
++        if (sendFrame(stopFrame, lastFailure))
++        {
++            delivered = true;
++            break;
++        }
++        if (attempt >= config_.stopRetryCount)
++        {
++            break;
++        }
++        const std::uint64_t now = nowNs();
++        if (now + msToNs(config_.stopBackoffMs) > deadline)
++        {
++            break;
++        }
++        if (config_.stopBackoffMs > 0)
++        {
++            std::this_thread::sleep_for(
++                std::chrono::milliseconds(config_.stopBackoffMs));
++        }
+     }
+-    else
++
++    stopSent_ = delivered;
++    if (delivered)
+     {
+-        stableCount_ = 0;
++        stopFrameDelivered_     = true;
++        stopObservedStationary_ = false;
++        stopPending_            = true;
++        stopStationaryCount_    = 0;
++        stopHasLast_            = false;
++        stopObservationDeadlineNs_ =
++            nowNs() + msToNs(config_.stopTimeoutMs);
++        moving_ = false;
++        // 停止帧已交付 ≠ 已观察到静止。在观测窗口内保持 MOVING，
++        // 不谎报 IDLE/STABLE。
++        if (!errorLatched_.load())
++        {
++            motion_.store(data::TurntableMotionState::MOVING);
++        }
++        return true;
+     }
+ 
+-    lastAz_      = azimuth;
+-    lastEl_      = elevation;
+-    hasLastRead_ = true;
++    // 窗口耗尽仍无法交付：2005 + motionUncertain，停止自动重试。
++    motionUncertain_      = true;
++    stopFrameDelivered_   = false;
++    stopObservedStationary_ = false;
++    stopPending_          = true;
++    (void)recordFirstFault;
++    if (faultCode != 0)
++    {
++        // 首因优先：原始故障（如 2001/2008）先写入；setFirstFault
++        // 只写一次，后续的 2005 不会覆盖它。
++        setFirstFault(faultCode, faultMessage, context);
++    }
++    setFirstFault(data::kErrTurntableStopNotDelivered,
++                  "停止帧未能在窗口内交付：" + lastFailure,
++                  context + ";attempts<= " +
++                      std::to_string(config_.stopRetryCount + 1));
++    setError(data::kErrTurntableStopNotDelivered,
++             "停止帧未能在窗口内交付：" + lastFailure, true,
++             context);
++    motion_.store(data::TurntableMotionState::ERROR);
++    return false;
++}
+ 
+-    if (withinTolerance &&
+-        stableCount_ >= std::max(1, config_.stableReadCount))
++void PelcoDSession::stopForFault(int faultCode, const std::string& message,
++                                 const std::string& context)
++{
++    if (!initialized_.load())
+     {
+-        moving_ = false;
+-        motion_.store(data::TurntableMotionState::STABLE);
++        return;
+     }
+-    else
++    setFirstFault(faultCode, message, context);
++    // 只读模式：故障也不得产生控制帧。原故障照实锁存。
++    if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
+     {
+-        motion_.store(data::TurntableMotionState::MOVING);
++        setError(faultCode, message, true, context);
++        return;
++    }
++    const bool delivered = performStop(faultCode, message, context, false);
++    if (delivered)
++    {
++        // 原始故障保留为首因；当前错误如实记为原始码（非锁存），
++        // 由观测窗口决定是否升级为 2006。
++        setError(faultCode, message, false, context);
+     }
+ }
+ 
+ void PelcoDSession::stop()
+ {
+-    if (!initialized_)
++    if (!initialized_.load())
+     {
+         return;
+     }
+-    // 只读启动/退出时既没有未完成动作、也没有锁存错误 ⇒ **不发任何帧**。
+-    if (!moving_ && !errorLatched_)
++    // ReadOnly：无帧 no-op（C1）。
++    if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
+     {
+         return;
+     }
+-    if (stopSent_)
++    if (!moving_ && !errorLatched_.load() && !motionUncertain_.load() &&
++        !stopPending_)
+     {
+         return;
+     }
+ 
+-    std::string ignored;
+-    if (sendFrame(makeStop(static_cast<std::uint8_t>(config_.pelcoAddress)),
+-                  ignored))
++    // 显式停止是唯一允许“重新武装停止重试”的入口之一
++    //（另一处是成功的 initialize()）。只有**上次未交付**时才重新武装；
++    // 已交付的停止再次调用 stop() 不重复发帧。
++    stopRetryArmed_ = motionUncertain_.load() && !stopFrameDelivered_.load();
++    performStop(0, "显式停止", "stop/explicit", false);
++    stopRetryArmed_ = false;
++
++    if (motionUncertain_.load() && !errorLatched_.load())
+     {
+-        stopSent_ = true;
++        motion_.store(data::TurntableMotionState::ERROR);
+     }
++}
+ 
+-    if (moving_)
++void PelcoDSession::publishSample(double az, double el, std::uint64_t now,
++                                  bool valid)
++{
++    azimuth_.store(az);
++    elevation_.store(el);
++    sampleTimestampNs_.store(now);
++    sampleValid_.store(valid);
++    if (valid)
+     {
+-        moving_ = false;
+-        if (!errorLatched_)
++        sampleCycleId_.fetch_add(1);
++    }
++}
++
++bool PelcoDSession::withinTolerance(double az, double el) const
++{
++    return circularDeltaDeg(az, targetAz_) <=
++               config_.arrivalToleranceDeg &&
++           std::fabs(el - targetEl_) <= config_.arrivalToleranceDeg;
++}
++
++void PelcoDSession::handleStopObservation(double az, double el,
++                                          std::uint64_t now)
++{
++    const bool unchanged =
++        stopHasLast_ &&
++        std::fabs(az - stopLastAz_) <= config_.stableThresholdDeg &&
++        std::fabs(el - stopLastEl_) <= config_.stableThresholdDeg;
++
++    if (unchanged)
++    {
++        ++stopStationaryCount_;
++    }
++    else
++    {
++        stopStationaryCount_ = 0;
++    }
++
++    stopHasLast_ = true;
++    stopLastAz_  = az;
++    stopLastEl_  = el;
++
++    if (stopStationaryCount_ >= std::max(1, config_.stableReadCount))
++    {
++        stopObservedStationary_ = true;
++        stopPending_            = false;
++        if (!errorLatched_.load())
++        {
++            motion_.store(data::TurntableMotionState::IDLE);
++        }
++        return;
++    }
++
++    if (now >= stopObservationDeadlineNs_)
++    {
++        stopPending_     = false;
++        motionUncertain_ = true;
++        setFirstFault(data::kErrTurntableStopNotObserved,
++                      "停止后未在观测窗口内观察到静止",
++                      "stop/observe_timeout");
++        setError(data::kErrTurntableStopNotObserved,
++                 "停止后未在观测窗口内观察到静止", true,
++                 "stop/observe_timeout");
++        motion_.store(data::TurntableMotionState::ERROR);
++    }
++}
++
++void PelcoDSession::updateMotion(double az, double el)
++{
++    if (errorLatched_.load() || motionUncertain_.load())
++    {
++        return;
++    }
++
++    const bool inTolerance = withinTolerance(az, el);
++
++    if (!moving_)
++    {
++        // C2：已到位后读数明显偏离 ⇒ **撤销** STABLE，不得一次置位后
++        // 永久保持。STABLE 必须是“本轮样本满足判据”的结论。
++        if (motion_.load() == data::TurntableMotionState::STABLE &&
++            !inTolerance)
+         {
+             motion_.store(data::TurntableMotionState::IDLE);
+         }
++        lastAz_      = az;
++        lastEl_      = el;
++        hasLastRead_ = true;
++        return;
++    }
++
++    const bool unchanged =
++        hasLastRead_ &&
++        std::fabs(az - lastAz_) <= config_.stableThresholdDeg &&
++        std::fabs(el - lastEl_) <= config_.stableThresholdDeg;
++
++    if (inTolerance && unchanged)
++    {
++        ++stableCount_;
++    }
++    else
++    {
++        stableCount_ = 0;
++    }
++
++    lastAz_      = az;
++    lastEl_      = el;
++    hasLastRead_ = true;
++
++    if (inTolerance &&
++        stableCount_ >= std::max(1, config_.stableReadCount))
++    {
++        moving_ = false;
++        motion_.store(data::TurntableMotionState::STABLE);
++    }
++    else
++    {
++        motion_.store(data::TurntableMotionState::MOVING);
+     }
+ }
+ 
+@@ -683,46 +1118,116 @@ data::TurntableState PelcoDSession::snapshot() const
+     state.azimuth   = azimuth_.load();
+     state.elevation = elevation_.load();
+     state.motion    = motion_.load();
++
++    if (initialized_.load())
++    {
++        const std::uint64_t now = nowNs();
++        const std::uint64_t ts  = sampleTimestampNs_.load();
++        const bool stale =
++            !sampleValid_.load() || ts == 0 || now < ts ||
++            (now - ts) > msToNs(config_.sampleStaleMs);
++        if (stale)
++        {
++            // 过期/无效样本不得再被当作“可采集的稳定状态”。
++            state.motion = data::TurntableMotionState::ERROR;
++        }
++    }
+     return state;
+ }
+ 
++data::TurntableDiagnostics PelcoDSession::diagnostics() const
++{
++    data::TurntableDiagnostics d;
++    d.sample.azimuth         = azimuth_.load();
++    d.sample.elevation       = elevation_.load();
++    d.sample.sampleTimestampNs = sampleTimestampNs_.load();
++    d.sample.cycleId         = sampleCycleId_.load();
++    d.sample.valid           = sampleValid_.load();
++    d.sample.source = d.sample.valid ? data::TurntableSampleSource::Poll
++                                     : data::TurntableSampleSource::None;
++
++    const std::uint64_t now = nowNs();
++    const std::uint64_t ts  = d.sample.sampleTimestampNs;
++    d.sampleFresh = initialized_.load() && d.sample.valid && ts != 0 &&
++                    now >= ts &&
++                    (now - ts) <= msToNs(config_.sampleStaleMs);
++
++    d.stopFrameDelivered     = stopFrameDelivered_.load();
++    d.stopObservedStationary = stopObservedStationary_.load();
++    d.motionUncertain        = motionUncertain_.load();
++    d.errorLatched           = errorLatched_.load();
++    d.workModeTrust          = workModeTrust_.load();
++    d.motionInhibited        = motionInhibited();
++
++    {
++        std::lock_guard<std::mutex> lock(faultMutex_);
++        d.firstFault = firstFault_;
++    }
++    return d;
++}
++
+ data::ErrorInfo PelcoDSession::lastError() const
+ {
++    std::lock_guard<std::mutex> lock(faultMutex_);
+     return lastError_;
+ }
+ 
+ std::string PelcoDSession::lastErrorText() const
+ {
++    std::lock_guard<std::mutex> lock(faultMutex_);
+     return lastError_.message;
+ }
+ 
+-void PelcoDSession::setError(int code, const std::string& text, bool latch)
++bool PelcoDSession::motionInhibited() const
+ {
+-    lastError_.code        = code;
+-    lastError_.message     = text;
+-    lastError_.timestampNs = nowNs();
+-    errorLatched_          = latch;
++    if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
++    {
++        return true;
++    }
++    // 本批没有可放行运动的协议证据；单元测试门是唯一例外。
++    return !testMotionGate_;
+ }
+ 
+-void PelcoDSession::bestEffortStop()
++void PelcoDSession::setError(int code, const std::string& text, bool latch,
++                             const std::string& context)
+ {
+-    if (stopSent_)
+     {
+-        return;
++        std::lock_guard<std::mutex> lock(faultMutex_);
++        lastError_.code        = code;
++        lastError_.message     = text;
++        lastError_.timestampNs = nowNs();
++        (void)context;
+     }
+-    std::string ignored;
+-    if (sendFrame(makeStop(static_cast<std::uint8_t>(config_.pelcoAddress)),
+-                  ignored))
++    if (latch)
+     {
+-        stopSent_ = true;
++        errorLatched_ = true;
+     }
+ }
+ 
++void PelcoDSession::setFirstFault(int code, const std::string& text,
++                                  const std::string& context)
++{
++    std::lock_guard<std::mutex> lock(faultMutex_);
++    if (firstFault_.code != 0)
++    {
++        return;  // 首因只写一次
++    }
++    firstFault_.code        = code;
++    firstFault_.message     = text;
++    firstFault_.context     = context;
++    firstFault_.timestampNs = nowNs();
++}
++
+ bool PelcoDSession::resolveAzimuth(double command, double& resolved) const
+ {
++    if (!std::isfinite(command))
++    {
++        return false;
++    }
+     const double tolerance = 1e-9;
+     auto inRange = [&](double value) {
+-        return value >= config_.azimuthMin - tolerance &&
++        return std::isfinite(value) &&
++               value >= config_.azimuthMin - tolerance &&
+                value <= config_.azimuthMax + tolerance;
+     };
+ 
+@@ -768,6 +1273,10 @@ bool PelcoDSession::resolveAzimuth(double command, double& resolved) const
+ 
+ bool PelcoDSession::resolveElevation(double command, double& resolved) const
+ {
++    if (!std::isfinite(command))
++    {
++        return false;
++    }
+     if (command < config_.elevationMin - 1e-9 ||
+         command > config_.elevationMax + 1e-9)
+     {
+@@ -792,23 +1301,34 @@ void PelcoDSession::armWatchdog(double targetAz, double targetEl)
+     const double travel =
+         std::max(circularDeltaDeg(targetAz, current.azimuth),
+                  std::fabs(targetEl - current.elevation));
+-    const double maxDelta = travel;
+ 
+     double speed = config_.useSpeedControl
+-                       ? selectedSpeedDegPerSec(maxDelta)
++                       ? selectedSpeedDegPerSec(travel)
+                        : kDefaultSpeedDegPerSec;
+-    if (speed <= 0.0)
++    if (!std::isfinite(speed) || speed <= 0.0)
+     {
+         speed = kDefaultSpeedDegPerSec;
+     }
+ 
+     double seconds = travel / speed * 1.5 + 5.0;
+-    if (seconds > 600.0)
++    if (!std::isfinite(seconds) || seconds > 600.0)
+     {
+         seconds = 600.0;
+     }
++    if (seconds < 0.001)
++    {
++        seconds = 0.001;
++    }
+ 
+-    moveDeadlineNs_ = nowNs() + static_cast<std::uint64_t>(seconds * 1e9);
++    // 先做有限性与范围检查，再转整数：直接对 NaN/Inf 强转会得到
++    // 未定义的截止时刻。
++    const double ns = seconds * 1e9;
++    if (!std::isfinite(ns) || ns < 0.0)
++    {
++        moveDeadlineNs_ = nowNs() + msToNs(600000);
++        return;
++    }
++    moveDeadlineNs_ = nowNs() + static_cast<std::uint64_t>(ns);
+ }
+ 
+ }  // namespace device
+diff --git a/AircraftPoseSystem/src/device/turntable/PelcoDSession.h b/AircraftPoseSystem/src/device/turntable/PelcoDSession.h
+index abbb171..d915b47 100644
+--- a/AircraftPoseSystem/src/device/turntable/PelcoDSession.h
++++ b/AircraftPoseSystem/src/device/turntable/PelcoDSession.h
+@@ -3,33 +3,41 @@
+ // ============================================================================
+ //  src/device/turntable/PelcoDSession.h
+ //
+-//  依据：SYS-10 V1.1 §6.3～§6.6、ENG-09 V2.7 §6.3、裁决 C-22
++//  依据：SYS-10 V1.1 §6.3～§6.6、§12/§13、ENG-09 V2.7 §6.3、裁决 C-22/C-23
+ //
+ //  作用：Pelco-D 的**协议与会话状态**：查询、移动回显、重试、STABLE 判据、
+-//  看门狗与错误锁存。**不持有线程、不做 socket**：真实后端的 I/O 线程
+-//  在 `PelcoDTurntableController` 里，测试可以直接调用 `pollOnce()`。
++//  看门狗、停止语义与错误锁存。**不持有线程、不做 socket**：真实后端的
++//  I/O 线程在 `PelcoDTurntableController` 里，测试可以直接调用 `pollOnce()`。
+ //
+-//  ⚠ 线程/锁约定（必须遵守，否则 state() 会阻塞主 tick）：
+-//    · `initialize()` / `move()` / `pollOnce()` / `stop()` 由调用方在
+-//      **同一把锁**（控制器的 `ioMutex_`）内串行调用；
+-//    · `snapshot()` **不加锁、不做 I/O**，只读原子快照；
+-//    · `lastError()` / `lastErrorText()` 只在持有控制器 `ioMutex_` 时调用。
++//  ⚠ 线程/锁约定：
++//    · 所有**变更**方法（initialize/move/pollOnce/stop）必须由**同一个
++//      I/O 所有者**串行调用（控制器 worker；initialize 在 worker 启动前）；
++//    · `snapshot()` / `diagnostics()` **不做 I/O**，只读原子量 + 短暂锁
++//      （仅用于首因诊断文本），可在主 tick 里调用；
++//    · `lastError()` / `lastErrorText()` 可跨线程调用（内部短锁）。
+ //
+-//  ⚠ 本批**不发送** 0xC5/0xDD/0xE1，也不把它们的回传用于位置或稳定判据：
++//  ⚠ 本批不发送 0xC5/0xDD/0xE1，也不把它们的回传用于位置或稳定判据：
+ //    · 0xC5 回的是**指定目标角**，不是实测角；
+ //    · 0xDD 的刹车标志在角度仍变化时也可能置位；
+ //    · 0xE1 实时角度流本批不开启。
++//
++//  ⚠ 只读门禁（C1）：`sendPolicy == ReadOnly` 时，**所有路径**（初始化、
++//    轮询、失联、错误锁存、退出、stop()）都不得发送控制帧；stop() 是
++//    无帧 no-op。本类不提供任何能把门禁改成 MotionEnabled 的方法。
+ // ============================================================================
+ 
+ #include <atomic>
+ #include <cstdint>
+ #include <functional>
+ #include <memory>
++#include <mutex>
+ #include <string>
+ 
+ #include "data/ErrorInfo.h"
+ #include "data/TurntableCommand.h"
+ #include "data/TurntableConfig.h"
++#include "data/TurntableDiagnostics.h"
++#include "data/TurntableSample.h"
+ #include "data/TurntableState.h"
+ #include "device/turntable/IPelcoTransport.h"
+ #include "device/turntable/PelcoDFrame.h"
+@@ -52,76 +60,131 @@ public:
+     /// 注入单调时钟（测试用）。默认使用 data::monotonicNowNs()。
+     void setClock(std::function<std::uint64_t()> clock);
+ 
+-    /// 打开传输、查询两轴角度与工作模式。
++    /// 打开传输、查询两轴角度与工作模式；两轴必须在同一事务内成功，
++    /// 且工作模式回复的**地址**必须与配置一致（C3）。
+     /// 失败时关闭传输、锁存错误，返回 false。
++    /// 成功时清锁存、清 motionUncertain —— 这是唯一的重臂点。
+     bool initialize(std::string& error);
+ 
+-    /// 下发绝对定位（两轴）。**不阻塞到到位**，只等设备回显。
++    /// 下发绝对定位（两轴）。**在 worker 线程内**等待回显（≤10 ms 切片）。
++    /// @param shouldAbort 停止屏障回调；返回 true 时放弃等待且不恢复旧命令。
+     bool move(const data::TurntableCommand& command, std::string& error);
++    bool move(const data::TurntableCommand& command, std::string& error,
++              const std::function<bool()>& shouldAbort);
+ 
+-    /// 执行一个轮询周期：查询两轴、更新快照、推进 STABLE/看门狗。
++    /// 执行一个轮询周期：查询两轴（**同一轮次**）、更新快照、推进
++    /// STABLE/看门狗与停止后静止观测。
+     void pollOnce();
+ 
+-    /// 尽力停止。仅在 MOVING 或有锁存错误时发送，且每次错误/动作只发一次。
+-    /// 不清除已锁存的 ERROR（清除只能由新的 initialize() 完成）。
++    /// 显式停止：允许重新武装停止重试。ReadOnly 下为无帧 no-op。
+     void stop();
+ 
+-    /// 无线程安全的只读快照（原子读）。
++    /// 故障收口使用的停止：保留原始首因，记录停止结果；停止未交付/
++    /// 未观测到静止时升级为 2005/2006 并锁存 motionUncertain。
++    void stopForFault(int faultCode, const std::string& message,
++                      const std::string& context);
++
++    /// 无线程安全的只读快照（原子读）。样本过期或无效时 motion 报 ERROR。
+     data::TurntableState snapshot() const;
+ 
+-    /// 最近一次错误（仅在持有 ioMutex_ 时调用）。
++    /// 诊断快照（不做 I/O）。
++    data::TurntableDiagnostics diagnostics() const;
++
++    /// 最近一次错误（短锁）。
+     data::ErrorInfo lastError() const;
+     std::string    lastErrorText() const;
+ 
+-    bool errorLatched() const { return errorLatched_; }
+-    bool initialized() const { return initialized_; }
++    bool errorLatched() const { return errorLatched_.load(); }
++    bool initialized() const { return initialized_.load(); }
++
++    /// 运动门禁是否正在拒绝运动（供上层诊断/测试）。
++    bool motionInhibited() const;
++
++    /// ⚠ 单元测试专用：允许 MotionEnabled 会话在 fake transport 上执行
++    /// 运动指令，以验证停止/故障路径。生产装配从调用点、配置解析和
++    /// 默认值三处都不可达。**不改变 WorkMode 可信度**。
++    void setTestMotionGate(bool allow) { testMotionGate_ = allow; }
+ 
+ private:
+     // ---- 单次收发的辅助 ----
+     std::uint64_t nowNs() const;
+     bool sendFrame(const PelcoDFrame& frame, std::string& error);
+-    bool waitForEcho(const PelcoDFrame& sent, std::string& error, bool& rejected);
++    bool waitForEcho(const PelcoDFrame& sent, std::string& error, bool& rejected,
++                     const std::function<bool()>& shouldAbort);
+     bool sendAndAwaitEcho(const PelcoDFrame& frame, std::string& error,
+-                          bool& rejected);
+-    /// @param retries 额外重试次数（总尝试 = retries + 1）。初始化用 2，
+-    ///                轮询用 0 —— 轮询的下一个周期本身就是重试。
++                          bool& rejected,
++                          const std::function<bool()>& shouldAbort);
++    /// 地址错误的回复按“没有有效回复”处理（C3）。
+     bool queryAngle(bool horizontal, double& out, std::string& error,
+                     int retries);
+-    bool queryWorkMode(std::uint8_t& out, std::string& error, int retries);
++    /// @param echoOnly 收到的回复与查询帧逐字节相同（回显歧义）。
++    bool queryWorkMode(std::uint8_t& out, bool& echoOnly, std::string& error,
++                       int retries);
+ 
+     // ---- 状态维护 ----
+-    void setError(int code, const std::string& text, bool latch);
+-    void bestEffortStop();
++    void setError(int code, const std::string& text, bool latch,
++                  const std::string& context = std::string());
++    void setFirstFault(int code, const std::string& text,
++                       const std::string& context);
++    void publishSample(double az, double el, std::uint64_t now, bool valid);
++    void checkStaleLocked() const;
++    bool withinTolerance(double az, double el) const;
+     void updateMotion(double az, double el);
++    void handleStopObservation(double az, double el, std::uint64_t now);
++    bool performStop(int faultCode, const std::string& faultMessage,
++                     const std::string& context, bool recordFirstFault);
+     bool resolveAzimuth(double command, double& resolved) const;
+     bool resolveElevation(double command, double& resolved) const;
+     double selectedSpeedDegPerSec(double maxDeltaDeg) const;
+     void armWatchdog(double targetAz, double targetEl);
++    bool finiteConfig(std::string& error) const;
+ 
+     data::TurntableConfig            config_;
+     std::shared_ptr<IPelcoTransport> transport_;
+     std::function<std::uint64_t()>   clock_;
++    bool                             testMotionGate_ = false;
+ 
+-    // 协议/状态（由调用方的 ioMutex_ 串行保护）
+-    bool     initialized_      = false;
+-    bool     moving_           = false;
+-    bool     errorLatched_     = false;
+-    bool     stopSent_         = false;
+-    bool     hasLastRead_      = false;
+-    int      stableCount_      = 0;
++    // ---- I/O 所有者线程独占的状态 ----
++    bool     moving_              = false;
++    bool     hasLastRead_         = false;
++    int      stableCount_         = 0;
+     int      consecutiveFailures_ = 0;
+-    double   targetAz_         = 0.0;
+-    double   targetEl_         = 0.0;
+-    double   lastAz_           = 0.0;
+-    double   lastEl_           = 0.0;
++    double   targetAz_            = 0.0;
++    double   targetEl_            = 0.0;
++    double   lastAz_              = 0.0;
++    double   lastEl_              = 0.0;
+     std::uint64_t moveDeadlineNs_ = 0;
+-    data::ErrorInfo lastError_;
+ 
+-    // 快照（可被 state() 无锁读取）
+-    std::atomic<double>                    azimuth_{0.0};
+-    std::atomic<double>                    elevation_{0.0};
++    // 停止状态机（I/O 所有者线程独占）
++    bool     stopPending_              = false;
++    bool     stopSent_                 = false;
++    bool     stopRetryArmed_           = false;
++    int      stopStationaryCount_      = 0;
++    bool     stopHasLast_              = false;
++    double   stopLastAz_               = 0.0;
++    double   stopLastEl_               = 0.0;
++    std::uint64_t stopObservationDeadlineNs_ = 0;
++
++    // ---- 跨线程诊断/错误（短锁）----
++    mutable std::mutex faultMutex_;
++    data::ErrorInfo    lastError_;
++    data::TurntableFault firstFault_;
++
++    // ---- 快照（无锁原子量）----
++    std::atomic<bool>     initialized_{false};
++    std::atomic<bool>     errorLatched_{false};
++    std::atomic<double>   azimuth_{0.0};
++    std::atomic<double>   elevation_{0.0};
++    std::atomic<std::uint64_t> sampleTimestampNs_{0};
++    std::atomic<std::uint64_t> sampleCycleId_{0};
++    std::atomic<bool>     sampleValid_{false};
+     std::atomic<data::TurntableMotionState> motion_{
+         data::TurntableMotionState::IDLE};
++    std::atomic<data::WorkModeTrust> workModeTrust_{
++        data::WorkModeTrust::Unknown};
++    std::atomic<bool> stopFrameDelivered_{false};
++    std::atomic<bool> stopObservedStationary_{false};
++    std::atomic<bool> motionUncertain_{false};
+ };
+ 
+ }  // namespace device
+diff --git a/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp b/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp
+index a4c8709..cf5b7ea 100644
+--- a/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp
++++ b/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp
+@@ -1,12 +1,13 @@
+ // ============================================================================
+ //  src/device/turntable/PelcoDTurntableController.cpp
+ //
+-//  依据：SYS-10 V1.1 §6.3～§6.6、§17（线程）、§18（tick 影响）、C-22
++//  依据：SYS-10 V1.1 §6.3～§6.6、§17（线程）、§18（tick 影响）、C-22/C-23
+ // ============================================================================
+ 
+ #include "device/turntable/PelcoDTurntableController.h"
+ 
+ #include <chrono>
++#include <cmath>
+ #include <system_error>
+ #include <utility>
+ 
+@@ -23,46 +24,44 @@ PelcoDTurntableController::PelcoDTurntableController(
+     : config_(config),
+       transport_(transport ? std::move(transport) : makeUdpPelcoTransport())
+ {
+-    // session_ 在这里创建：其生命周期与传输一致，且构造只做值拷贝。
+     session_ = std::make_unique<PelcoDSession>(config_, transport_);
+ }
+ 
+ PelcoDTurntableController::~PelcoDTurntableController()
+ {
+     running_.store(false);
+-    waitCv_.notify_all();
++    commandCv_.notify_all();
+     if (worker_.joinable())
+     {
+         worker_.join();
+     }
+ 
+-    {
+-        std::lock_guard<std::mutex> lock(ioMutex_);
+-        // 仅在 MOVING 或有锁存错误时才会真正发帧（见 PelcoDSession::stop）。
+-        session_->stop();
+-        transport_->close();
+-    }
++    // worker 已退出：此后的 session 调用不再有并发方。
++    session_->stop();
++    transport_->close();
+     initialized_.store(false);
+ }
+ 
+ void PelcoDTurntableController::setDiagnosticSink(
+     std::function<void(const std::string&)> sink)
+ {
+-    std::lock_guard<std::mutex> lock(ioMutex_);
++    std::lock_guard<std::mutex> lock(diagMutex_);
+     diagnosticSink_ = std::move(sink);
+ }
+ 
+ void PelcoDTurntableController::setClock(std::function<std::uint64_t()> clock)
+ {
+-    std::lock_guard<std::mutex> lock(ioMutex_);
+     clock_ = std::move(clock);
+     session_->setClock(clock_);
+ }
+ 
+-bool PelcoDTurntableController::initialize()
++void PelcoDTurntableController::setTestMotionGate(bool allow)
+ {
+-    std::lock_guard<std::mutex> lock(ioMutex_);
++    session_->setTestMotionGate(allow);
++}
+ 
++bool PelcoDTurntableController::initialize()
++{
+     if (initialized_.load())
+     {
+         return true;
+@@ -76,7 +75,6 @@ bool PelcoDTurntableController::initialize()
+ 
+     initialized_.store(true);
+     running_.store(true);
+-    lastReportedError_.clear();
+ 
+     try
+     {
+@@ -95,16 +93,55 @@ bool PelcoDTurntableController::initialize()
+     return true;
+ }
+ 
+-bool PelcoDTurntableController::move(const data::TurntableCommand& command)
++bool PelcoDTurntableController::move(
++    const data::TurntableCommand& command)
+ {
+     if (!initialized_.load())
+     {
+         return false;
+     }
+ 
+-    std::lock_guard<std::mutex> lock(ioMutex_);
+-    std::string error;
+-    return session_->move(command, error);
++    // 只读模式：不产生任何控制帧，连命令槽都不写。
++    if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
++    {
++        return false;
++    }
++
++    const bool finite = std::isfinite(command.azimuthCommand) &&
++                        std::isfinite(command.elevationCommand);
++
++    std::uint64_t seq = 0;
++    std::optional<PendingMove> superseded;
++    {
++        std::lock_guard<std::mutex> lock(commandMutex_);
++        seq = ++nextCommandSeq_;
++        latestCommandSeq_ = seq;
++        if (finite)
++        {
++            if (pendingMove_)
++            {
++                superseded = pendingMove_;  // 旧命令必须得到终结结果
++            }
++            pendingMove_ = PendingMove{command, seq};
++        }
++    }
++
++    if (superseded)
++    {
++        setCommandOutcome(superseded->seq,
++                          data::TurntableCommandOutcome::Superseded,
++                          "命令被更新的运动命令覆盖");
++    }
++    if (!finite)
++    {
++        setCommandOutcome(seq, data::TurntableCommandOutcome::Failed,
++                          "命令含非有限角，未受理");
++        return false;
++    }
++
++    commandCv_.notify_all();
++    // ⚠ 这里**不**等待回显：true 仅表示已受理。
++    return true;
+ }
+ 
+ data::TurntableState PelcoDTurntableController::state()
+@@ -115,50 +152,211 @@ data::TurntableState PelcoDTurntableController::state()
+ 
+ void PelcoDTurntableController::stop()
+ {
+-    std::lock_guard<std::mutex> lock(ioMutex_);
+-    session_->stop();
++    if (!initialized_.load())
++    {
++        return;
++    }
++    // 只读模式：stop() 是无帧 no-op（C1）。
++    if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
++    {
++        return;
++    }
++
++    std::optional<PendingMove> cancelled;
++    std::uint64_t seq = 0;
++    {
++        std::lock_guard<std::mutex> lock(commandMutex_);
++        seq = ++stopRequestSeq_;
++        if (pendingMove_)
++        {
++            // 屏障之前的旧命令一律作废，停止后不得恢复执行。
++            cancelled = pendingMove_;
++            pendingMove_.reset();
++        }
++    }
++    if (cancelled)
++    {
++        setCommandOutcome(cancelled->seq,
++                          data::TurntableCommandOutcome::Cancelled,
++                          "命令被停止屏障取消");
++    }
++
++    commandCv_.notify_all();
++
++    // 等 worker 处理到该停止。上限由重试窗口给出；不把“观测到静止”
++    // 的窗口算进来 —— 那是停止之后的事实，不是 stop() 返回的前提。
++    const auto waitMs = std::chrono::milliseconds(
++        config_.stopRetryWindowMs > 0 ? config_.stopRetryWindowMs + 1000
++                                      : 1000);
++    std::unique_lock<std::mutex> lock(stopWaitMutex_);
++    stopWaitCv_.wait_for(lock, waitMs, [this, seq] {
++        return stopCompletedSeq_.load() >= seq;
++    });
++}
++
++data::TurntableDiagnostics PelcoDTurntableController::diagnostics() const
++{
++    data::TurntableDiagnostics d = session_->diagnostics();
++    {
++        std::lock_guard<std::mutex> lock(diagMutex_);
++        d.lastCommandSeq     = lastCommandSeq_;
++        d.lastCommandOutcome = lastCommandOutcome_;
++        d.lastCommandMessage = lastCommandMessage_;
++    }
++    d.stopRequestSeq   = stopRequestSeq_.load();
++    d.stopCompletedSeq = stopCompletedSeq_.load();
++    return d;
+ }
+ 
+ std::string PelcoDTurntableController::lastErrorText() const
+ {
+-    std::lock_guard<std::mutex> lock(ioMutex_);
+     return session_->lastErrorText();
+ }
+ 
+ data::ErrorInfo PelcoDTurntableController::lastError() const
+ {
+-    std::lock_guard<std::mutex> lock(ioMutex_);
+     return session_->lastError();
+ }
+ 
++bool PelcoDTurntableController::commandSuperseded(std::uint64_t seq) const
++{
++    std::lock_guard<std::mutex> lock(commandMutex_);
++    return latestCommandSeq_ > seq;
++}
++
++void PelcoDTurntableController::setCommandOutcome(
++    std::uint64_t seq, data::TurntableCommandOutcome outcome,
++    const std::string& message)
++{
++    std::lock_guard<std::mutex> lock(diagMutex_);
++    lastCommandSeq_     = seq;
++    lastCommandOutcome_ = outcome;
++    lastCommandMessage_ = message;
++}
++
++void PelcoDTurntableController::handleCommand(const PendingMove& move)
++{
++    std::string error;
++    const bool ok = session_->move(
++        move.command, error, [this, &move] {
++            return stopRequestSeq_.load() > stopCompletedSeq_.load() ||
++                   commandSuperseded(move.seq);
++        });
++
++    if (stopRequestSeq_.load() > stopCompletedSeq_.load())
++    {
++        setCommandOutcome(move.seq, data::TurntableCommandOutcome::Cancelled,
++                          "命令被停止屏障取消");
++        return;
++    }
++    if (commandSuperseded(move.seq))
++    {
++        setCommandOutcome(move.seq,
++                          data::TurntableCommandOutcome::Superseded,
++                          "命令被更新的运动命令覆盖");
++        return;
++    }
++    if (ok)
++    {
++        setCommandOutcome(move.seq, data::TurntableCommandOutcome::Delivered,
++                          "两轴指令已交付");
++    }
++    else
++    {
++        setCommandOutcome(move.seq, data::TurntableCommandOutcome::Failed,
++                          error.empty() ? std::string("转台指令失败")
++                                        : error);
++    }
++}
++
+ void PelcoDTurntableController::workerLoop()
+ {
+     const int pollMs = config_.pollIntervalMs > 0 ? config_.pollIntervalMs : 1;
+ 
+     while (running_.load())
+     {
+-        std::string errorText;
+-        std::function<void(const std::string&)> sink;
++        {
++            std::unique_lock<std::mutex> lock(commandMutex_);
++            commandCv_.wait_for(lock, std::chrono::milliseconds(pollMs), [this] {
++                return !running_.load() || pendingMove_.has_value() ||
++                       stopRequestSeq_.load() > stopCompletedSeq_.load();
++            });
++            if (!running_.load())
++            {
++                break;
++            }
++        }
++
++        // ---- 停止屏障优先：清槽 → 停止 → 通告完成 ----
++        const std::uint64_t stopSeq = stopRequestSeq_.load();
++        if (stopSeq > stopCompletedSeq_.load())
++        {
++            std::optional<PendingMove> cancelled;
++            {
++                std::lock_guard<std::mutex> lock(commandMutex_);
++                if (pendingMove_)
++                {
++                    cancelled = pendingMove_;
++                    pendingMove_.reset();
++                }
++            }
++            if (cancelled)
++            {
++                setCommandOutcome(cancelled->seq,
++                                  data::TurntableCommandOutcome::Cancelled,
++                                  "命令被停止屏障取消");
++            }
++
++            session_->stop();
++            stopCompletedSeq_.store(stopSeq);
++            stopWaitCv_.notify_all();
++            continue;
++        }
+ 
++        // ---- 运动命令 ----
++        std::optional<PendingMove> move;
+         {
+-            std::lock_guard<std::mutex> lock(ioMutex_);
+-            session_->pollOnce();
+-            errorText = session_->lastErrorText();
+-            sink      = diagnosticSink_;
++            std::lock_guard<std::mutex> lock(commandMutex_);
++            if (pendingMove_)
++            {
++                move = pendingMove_;
++                pendingMove_.reset();
++            }
++        }
++        if (move)
++        {
++            handleCommand(*move);
++            continue;  // 接着轮询，让角度快照尽快反映设备
++        }
++
++        // ---- 轮询 ----
++        session_->pollOnce();
++
++        std::string errorText = session_->lastErrorText();
++        std::function<void(const std::string&)> sink;
++        {
++            std::lock_guard<std::mutex> lock(diagMutex_);
++            sink = diagnosticSink_;
+         }
+ 
+-        // sink 在锁外调用：它可能写日志、拿 Logger 自己的锁，
+-        // 不应因此把主线程的 move()/state() 挡在 ioMutex_ 外。
++        // sink 在锁外调用：它可能写日志、拿 Logger 自己的锁。
+         if (sink && !errorText.empty() && errorText != lastReportedError_)
+         {
+             lastReportedError_ = errorText;
+-            sink(errorText);
++            try
++            {
++                sink(errorText);
++            }
++            catch (...)
++            {
++                // 诊断回调抛异常不得导致 std::terminate。
++            }
+         }
+-
+-        std::unique_lock<std::mutex> wait(waitMutex_);
+-        waitCv_.wait_for(wait, std::chrono::milliseconds(pollMs),
+-                         [this] { return !running_.load(); });
+     }
++
++    // ---- 退出路径 ----
++    session_->stop();
++    transport_->close();
+ }
+ 
+ }  // namespace device
+diff --git a/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.h b/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.h
+index 7ef2459..cfeb4f3 100644
+--- a/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.h
++++ b/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.h
+@@ -3,21 +3,33 @@
+ // ============================================================================
+ //  src/device/turntable/PelcoDTurntableController.h
+ //
+-//  依据：SYS-10 V1.1 §6.3～§6.6、SYS-06 V2.7 §11.2、ENG-09 V2.7 §4.3、C-22
++//  依据：SYS-10 V1.1 §6.3～§6.6、§17（线程）、§18（tick 影响）、
++//        SYS-06 V2.7 §11.2、ENG-09 V2.7 §4.3、裁决 C-22/C-23
+ //
+-//  作用：`ITurntableController` 的真实 Pelco-D/UDP 后端。
++//  作用：`ITurntableController` 的真实 Pelco-D/UDP 后端，并实现并列的
++//  `ITurntableDiagnostics`。
+ //  · `PelcoDSession` 负责协议与状态机（无线程）；
+-//  · 本类负责 socket 生命周期、后台 I/O 线程、`ioMutex_` 与快照发布。
++//  · 本类负责 socket 生命周期、**单所有者 worker**、停止屏障与快照发布。
+ //
+-//  ⚠ 线程/锁约定：
+-//    · `initialize()` / `move()` / `stop()` 与 worker 的 `pollOnce()`
+-//      共用 `ioMutex_` —— 否则轮询回复会被 `move()` 的等回显抢走；
+-//    · `state()` **只读原子快照**，不拿锁、不做 I/O，可在每 16 ms 的
+-//      主 tick 里安全调用；它绝不会因为 UDP 超时而阻塞界面；
+-//    · 析构：停止 worker → join → 必要时尽力 stop → close。
++//  ⚠ 线程/锁约定（裁决 C-23）：
++//    · worker 是启动后的**唯一 I/O 所有者**。`initialize()` 在 worker
++//      启动前完成（它是启动期事务，不参与运行期抢占）。
++//    · `move()==true` 仅表示**命令已受理**：调用线程只把命令写入单槽
++//      （带单调序号）后立即返回，**不等待回显**。发送/回显结果通过
++//      `diagnostics().lastCommandOutcome` 与命令序号给出。
++//    · `stop()` 分配更高的停止序号、清空待执行运动槽，并等待 worker
++//      处理到该停止（有界）。worker 在每次发送前、每轴切换前、每个
++//      接收切片后检查停止序号；屏障之前的旧命令一律作废，停止后不得
++//      恢复执行。
++//    · `state()` / `diagnostics()` 只读原子快照 + 短锁，不拿 I/O 锁、
++//      不做 I/O，可在每 16 ms 的主 tick 里安全调用。
++//    · 析构：停止 worker → join → 必要时停止 → close。
+ //
+-//  ⚠ 诊断 sink 由 worker 线程调用，**只能**接 `Logger`（自身持锁），
+-//    不得接 `SystemInitializer::warn()`（会改 `warnings_`，与主线程竞争）。
++//  ⚠ 单所有者 worker 是**选定方案**，不是唯一可能的方案。SYS-09 记录
++//    选择理由与测试条件，不写“唯一方案”或未经实测的时延绝对保证。
++//
++//  ⚠ 诊断 sink 由 worker 线程调用，**只能**接 `Logger`（自身持锁）；
++//    本类在锁外调用并捕获异常 —— sink 抛异常不得导致 std::terminate。
+ // ============================================================================
+ 
+ #include <atomic>
+@@ -26,13 +38,16 @@
+ #include <functional>
+ #include <memory>
+ #include <mutex>
++#include <optional>
+ #include <string>
+ #include <thread>
+ 
+ #include "data/ErrorInfo.h"
+ #include "data/TurntableConfig.h"
++#include "data/TurntableDiagnostics.h"
+ #include "device/turntable/IPelcoTransport.h"
+ #include "device/turntable/ITurntableController.h"
++#include "device/turntable/ITurntableDiagnostics.h"
+ 
+ namespace aircraft
+ {
+@@ -41,7 +56,8 @@ namespace device
+ 
+ class PelcoDSession;
+ 
+-class PelcoDTurntableController final : public ITurntableController
++class PelcoDTurntableController final : public ITurntableController,
++                                        public ITurntableDiagnostics
+ {
+ public:
+     /// @param transport 设备层内部 seam；为空时创建 POSIX UDP 实现。
+@@ -55,10 +71,16 @@ public:
+         delete;
+ 
+     bool initialize() override;
++
++    /// ⚠ 返回 true 只表示**已受理**，不表示设备已接收或到位。
+     bool move(const data::TurntableCommand& command) override;
++
+     data::TurntableState state() override;
+     void stop() override;
+ 
++    /// 诊断快照（实现 `ITurntableDiagnostics`）。
++    data::TurntableDiagnostics diagnostics() const override;
++
+     /// 设置诊断输出（worker 线程调用）。必须在 `initialize()` 之前设置。
+     void setDiagnosticSink(std::function<void(const std::string&)> sink);
+ 
+@@ -70,21 +92,53 @@ public:
+ 
+     bool initialized() const { return initialized_.load(); }
+ 
++    /// ⚠ 单元测试专用：仅用于在 fake transport 上验证停止/故障路径。
++    /// 生产装配不调用；它不改变 WorkMode 可信度，也不改变只读门禁。
++    void setTestMotionGate(bool allow);
++
+ private:
++    struct PendingMove
++    {
++        data::TurntableCommand command;
++        std::uint64_t          seq = 0;
++    };
++
+     void workerLoop();
++    void handleCommand(const PendingMove& move);
++    void setCommandOutcome(std::uint64_t seq,
++                           data::TurntableCommandOutcome outcome,
++                           const std::string& message);
++    bool commandSuperseded(std::uint64_t seq) const;
+ 
+     data::TurntableConfig            config_;
+     std::shared_ptr<IPelcoTransport> transport_;
+     std::unique_ptr<PelcoDSession>   session_;
+ 
+-    mutable std::mutex ioMutex_;
++    // ---- 命令槽（move() 只写这里，立即返回）----
++    mutable std::mutex                commandMutex_;
++    std::condition_variable           commandCv_;
++    std::optional<PendingMove>        pendingMove_;
++    std::uint64_t                     nextCommandSeq_   = 0;
++    std::uint64_t                     latestCommandSeq_ = 0;
+ 
++    // ---- 停止屏障 ----
++    std::atomic<std::uint64_t>        stopRequestSeq_{0};
++    std::atomic<std::uint64_t>        stopCompletedSeq_{0};
++    std::mutex                        stopWaitMutex_;
++    std::condition_variable           stopWaitCv_;
++
++    // ---- 生命周期 ----
+     std::thread             worker_;
+-    std::mutex              waitMutex_;
+-    std::condition_variable waitCv_;
+     std::atomic<bool>       running_{false};
+     std::atomic<bool>       initialized_{false};
+ 
++    // ---- 诊断 ----
++    mutable std::mutex diagMutex_;
++    std::uint64_t      lastCommandSeq_ = 0;
++    data::TurntableCommandOutcome lastCommandOutcome_ =
++        data::TurntableCommandOutcome::None;
++    std::string        lastCommandMessage_;
++
+     std::function<void(const std::string&)> diagnosticSink_;
+     std::function<std::uint64_t()>          clock_;
+ 
+diff --git a/AircraftPoseSystem/src/infrastructure/config/ConfigManager.cpp b/AircraftPoseSystem/src/infrastructure/config/ConfigManager.cpp
+index 2027156..88ee94d 100644
+--- a/AircraftPoseSystem/src/infrastructure/config/ConfigManager.cpp
++++ b/AircraftPoseSystem/src/infrastructure/config/ConfigManager.cpp
+@@ -877,6 +877,22 @@ bool ConfigManager::load(const std::string& configDir)
+             turntable_.useSpeedControl = r.boolean(
+                 g["use_speed_control"], "use_speed_control", false);
+ 
++            // ---- 可信化键（裁决 C-23）----
++            //
++            // ⚠ 这里**没有** send_policy 键：生产配置不能打开运动门禁。
++            //    `TurntableSendPolicy::MotionEnabled` 只允许单元测试在
++            //    进程内构造配置时设置，不经过 ConfigManager。
++            turntable_.sampleStaleMs = r.integer(
++                g["sample_stale_ms"], "sample_stale_ms", 500);
++            turntable_.stopTimeoutMs = r.integer(
++                g["stop_timeout_ms"], "stop_timeout_ms", 3000);
++            turntable_.stopRetryCount = r.integer(
++                g["stop_retry_count"], "stop_retry_count", 2);
++            turntable_.stopRetryWindowMs = r.integer(
++                g["stop_retry_window_ms"], "stop_retry_window_ms", 2000);
++            turntable_.stopBackoffMs = r.integer(
++                g["stop_backoff_ms"], "stop_backoff_ms", 200);
++
+             if (turntable_.host.empty())
+             {
+                 errors_.push_back(
+@@ -936,6 +952,37 @@ bool ConfigManager::load(const std::string& configDir)
+                                       turntable_.commFailureThreshold) +
+                                   "（允许 1..20）");
+             }
++            if (!insideRange(turntable_.sampleStaleMs, 50, 5000))
++            {
++                errors_.push_back("turntable.sample_stale_ms 越界：" +
++                                  std::to_string(turntable_.sampleStaleMs) +
++                                  "（允许 50..5000）");
++            }
++            if (!insideRange(turntable_.stopTimeoutMs, 100, 30000))
++            {
++                errors_.push_back("turntable.stop_timeout_ms 越界：" +
++                                  std::to_string(turntable_.stopTimeoutMs) +
++                                  "（允许 100..30000）");
++            }
++            if (!insideRange(turntable_.stopRetryCount, 0, 5))
++            {
++                errors_.push_back("turntable.stop_retry_count 越界：" +
++                                  std::to_string(turntable_.stopRetryCount) +
++                                  "（允许 0..5）");
++            }
++            if (!insideRange(turntable_.stopRetryWindowMs, 100, 10000))
++            {
++                errors_.push_back(
++                    "turntable.stop_retry_window_ms 越界：" +
++                    std::to_string(turntable_.stopRetryWindowMs) +
++                    "（允许 100..10000）");
++            }
++            if (!insideRange(turntable_.stopBackoffMs, 0, 1000))
++            {
++                errors_.push_back("turntable.stop_backoff_ms 越界：" +
++                                  std::to_string(turntable_.stopBackoffMs) +
++                                  "（允许 0..1000）");
++            }
+         }
+         else
+         {
+@@ -945,7 +992,9 @@ bool ConfigManager::load(const std::string& configDir)
+                 "host",           "port",           "pelco_address",
+                 "reply_timeout_ms", "poll_interval_ms", "stable_read_count",
+                 "stable_threshold_deg", "arrival_tolerance_deg",
+-                "comm_failure_threshold", "use_speed_control"};
++                "comm_failure_threshold", "use_speed_control",
++                "sample_stale_ms", "stop_timeout_ms", "stop_retry_count",
++                "stop_retry_window_ms", "stop_backoff_ms"};
+             for (const char* key : kPelcoOnlyKeys)
+             {
+                 const cv::FileNode node = g[key];
+diff --git a/AircraftPoseSystem/src/infrastructure/recorder/Recorder.cpp b/AircraftPoseSystem/src/infrastructure/recorder/Recorder.cpp
+index e29726f..f0f6077 100644
+--- a/AircraftPoseSystem/src/infrastructure/recorder/Recorder.cpp
++++ b/AircraftPoseSystem/src/infrastructure/recorder/Recorder.cpp
+@@ -977,10 +977,24 @@ bool Recorder::writeResultJson(const data::MeasurementRecord& record,
+     os << "  },\n";
+ 
+     // ---- 转台（turntable.json 另存一份，此处为内联摘要）----
++    //
++    // 停止事实四件分开写（C-23）：请求过停止 ≠ 停止帧已交付 ≠ 观察到静止
++    // ≠ 结果确定。`motion_inhibited` 标明"没发帧"是门禁所致，
++    // 避免把只读模式的 stop_frame_delivered=false 读成发送失败。
+     os << "  \"turntable\": {\n";
+     os << "    \"azimuth\": " << num(record.turntable.azimuth, 6) << ",\n";
+     os << "    \"elevation\": " << num(record.turntable.elevation, 6) << ",\n";
+-    os << "    \"motion\": \"" << motionName(record.turntable.motion) << "\"\n";
++    os << "    \"motion\": \"" << motionName(record.turntable.motion) << "\",\n";
++    os << "    \"stop_requested\": "
++       << jsonBool(record.stopRequested) << ",\n";
++    os << "    \"stop_frame_delivered\": "
++       << jsonBool(record.stopFrameDelivered) << ",\n";
++    os << "    \"stop_observed_stationary\": "
++       << jsonBool(record.stopObservedStationary) << ",\n";
++    os << "    \"motion_uncertain\": "
++       << jsonBool(record.motionUncertain) << ",\n";
++    os << "    \"motion_inhibited\": "
++       << jsonBool(record.turntableMotionInhibited) << "\n";
+     os << "  },\n";
+ 
+     // ---- 失败根因与终点（裁决 C-007）----
+diff --git a/AircraftPoseSystem/tests/CMakeLists.txt b/AircraftPoseSystem/tests/CMakeLists.txt
+index 90b5539..25cba5a 100644
+--- a/AircraftPoseSystem/tests/CMakeLists.txt
++++ b/AircraftPoseSystem/tests/CMakeLists.txt
+@@ -72,7 +72,7 @@ include(GoogleTest)
+ #   显式列举换来的是：文件缺失时配置期直接报错。
+ # ----------------------------------------------------------------------------
+ function(aps_add_test name)
+-    cmake_parse_arguments(ARG "" "" "SOURCES;DEPENDS" ${ARGN})
++    cmake_parse_arguments(ARG "" "WORKING_DIRECTORY" "SOURCES;DEPENDS" ${ARGN})
+ 
+     if(NOT ARG_SOURCES)
+         message(FATAL_ERROR "[APS] aps_add_test(${name})：未指定 SOURCES")
+@@ -115,10 +115,17 @@ function(aps_add_test name)
+     #   · 测试需要显示环境或真实设备
+     #   这两种情形下会让"编译通过"这一步莫名失败。
+     # 该选项 3.18 才引入，故加版本判断以兼容 min 3.16。
++    # WORKING_DIRECTORY：个别用例要读仓库级资产（如 config/）。
++    # 显式写进 CTest 注册，避免“只有从正确目录手工启动才通过”。
++    set(_wd_arg "")
++    if(ARG_WORKING_DIRECTORY)
++        set(_wd_arg WORKING_DIRECTORY "${ARG_WORKING_DIRECTORY}")
++    endif()
++
+     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
+-        gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST)
++        gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST ${_wd_arg})
+     else()
+-        gtest_discover_tests(${name})
++        gtest_discover_tests(${name} ${_wd_arg})
+     endif()
+ endfunction()
+ 
+diff --git a/AircraftPoseSystem/tests/device/CMakeLists.txt b/AircraftPoseSystem/tests/device/CMakeLists.txt
+index 48453fb..d242a65 100644
+--- a/AircraftPoseSystem/tests/device/CMakeLists.txt
++++ b/AircraftPoseSystem/tests/device/CMakeLists.txt
+@@ -33,3 +33,12 @@ aps_add_test(test_pelco_d
+         data
+         device
+ )
++
++# PelcoDTurntableControllerTest.cpp 含真实 Qt 事件循环用例
++# （QtEventLoopDispatchesStopWhileMoveInFlight）：需要 QCoreApplication/QTimer。
++if(TARGET Qt5::Core)
++    target_link_libraries(test_pelco_d PRIVATE Qt5::Core)
++else()
++    message(STATUS
++        "[APS] test_pelco_d：Qt5::Core 未生成，Qt 事件循环用例将无法编译")
++endif()
+diff --git a/AircraftPoseSystem/tests/device/FakePelcoTransport.h b/AircraftPoseSystem/tests/device/FakePelcoTransport.h
+index b44e361..8dcb485 100644
+--- a/AircraftPoseSystem/tests/device/FakePelcoTransport.h
++++ b/AircraftPoseSystem/tests/device/FakePelcoTransport.h
+@@ -44,6 +44,11 @@ public:
+     /// atomic：控制器测试会在 worker 运行时从主线程修改它。
+     std::atomic<int> receiveBlockMs{0};
+ 
++    /// 接下来 N 次**停止帧**发送失败（模拟停止未交付）。
++    /// 按帧内容识别，不影响查询与定位帧。
++    std::atomic<int> failStopSends{0};
++    std::atomic<int> stopSendAttempts{0};
++
+     std::vector<std::vector<std::uint8_t>> sent;
+     std::deque<std::vector<std::uint8_t>> inbox;
+ 
+@@ -85,6 +90,21 @@ public:
+             return false;
+         }
+         std::vector<std::uint8_t> bytes(data, data + size);
++        if (isStopFrame(bytes))
++        {
++            ++stopSendAttempts;
++            int remaining = failStopSends.load();
++            while (remaining > 0 &&
++                   !failStopSends.compare_exchange_weak(remaining,
++                                                        remaining - 1))
++            {
++            }
++            if (remaining > 0)
++            {
++                error = "模拟停止帧发送失败";
++                return false;
++            }
++        }
+         sent.push_back(bytes);
+         if (onSend)
+         {
+@@ -146,6 +166,17 @@ public:
+         return count;
+     }
+ 
++    /// 停止帧：标准指令 Data2=0x00，且 Data1/Data3/Data4 均为 0。
++    static bool isStopFrame(const std::vector<std::uint8_t>& bytes)
++    {
++        if (bytes.size() < 7)
++        {
++            return false;
++        }
++        return bytes[2] == 0x00 && bytes[3] == 0x00 && bytes[4] == 0x00 &&
++               bytes[5] == 0x00;
++    }
++
+     static PelcoDFrame decode(const std::vector<std::uint8_t>& bytes)
+     {
+         PelcoDFrame frame;
+@@ -173,6 +204,24 @@ struct FakePelcoDevice
+     double elevation = 0.0;   // 软件角 deg
+     std::uint8_t workMode = 0x00;
+ 
++    /// 三类回复各自使用的地址字节。与配置不一致时，会话必须把该回复
++    /// 当作“没有有效回复”（C3）。
++    std::uint8_t horizontalReplyAddress = 0x01;
++    std::uint8_t verticalReplyAddress   = 0x01;
++    std::uint8_t workModeReplyAddress   = 0x01;
++    std::uint8_t replyAddress           = 0x01;  ///< 兼容：同时改三类
++
++    /// true = 工作模式查询完全不回包（用于 NoReply 可信度）。
++    bool dropWorkMode = false;
++
++    /// 工作模式回复的 Data3。非 0 时回复与查询**字节不同**（Data2 仍可为 0），
++    /// 用于构造“独立回复但无法证明正常”的 Unknown 状态。
++    std::uint8_t workModeReplyData3 = 0x00;
++
++    /// 每次角度查询前两轴同时漂移的角度（deg）。用于模拟“停止没有
++    /// 效果”：停止帧已交付，但观测窗口内角度持续变化 ⇒ 2006。
++    double driftPerQueryDeg = 0.0;
++
+     // atomic：控制器测试会在 worker 运行时从主线程置位，
+     // 模拟"从某一刻起设备不再回复"。
+     std::atomic<bool> dropHorizontal{false};
+@@ -197,10 +246,11 @@ struct FakePelcoDevice
+         };
+     }
+ 
+-    static std::vector<std::uint8_t> angleReply(bool horizontal, double deg)
++    std::vector<std::uint8_t> angleReply(bool horizontal, double deg) const
+     {
+         PelcoDFrame frame;
+-        frame.address = 0x01;
++        frame.address = horizontal ? horizontalReplyAddress
++                                   : verticalReplyAddress;
+         frame.data1   = 0x00;
+         frame.data2   = horizontal ? 0x59 : 0x5B;
+         const std::uint16_t raw =
+@@ -211,12 +261,13 @@ struct FakePelcoDevice
+         return std::vector<std::uint8_t>(encoded.begin(), encoded.end());
+     }
+ 
+-    static std::vector<std::uint8_t> workModeReply(std::uint8_t mode)
++    std::vector<std::uint8_t> workModeReply(std::uint8_t mode) const
+     {
+         PelcoDFrame frame;
+-        frame.address = 0x01;
++        frame.address = workModeReplyAddress;
+         frame.data1   = 0xE0;
+         frame.data2   = mode;
++        frame.data3   = workModeReplyData3;
+         const auto encoded = encodePelcoD(frame);
+         return std::vector<std::uint8_t>(encoded.begin(), encoded.end());
+     }
+@@ -238,6 +289,13 @@ private:
+         // 标准指令码在 Data2、Data1=0x00
+         if (frame.data1 == 0x00 && frame.data2 == 0x51)
+         {
++            // 每轮只在水平查询到达时推进一次，两轴同步漂移：
++            // 模拟“停止帧没有效果”时，两轴都在变化。
++            if (driftPerQueryDeg != 0.0)
++            {
++                azimuth += driftPerQueryDeg;
++                elevation += driftPerQueryDeg;
++            }
+             if (!dropHorizontal)
+             {
+                 transport->inbox.push_back(angleReply(true, azimuth));
+@@ -262,7 +320,10 @@ private:
+         // 自定义指令码在 Data1
+         if (frame.data1 == 0xE0)
+         {
+-            transport->inbox.push_back(workModeReply(workMode));
++            if (!dropWorkMode)
++            {
++                transport->inbox.push_back(workModeReply(workMode));
++            }
+             return;
+         }
+ 
+diff --git a/AircraftPoseSystem/tests/device/PelcoDSessionTest.cpp b/AircraftPoseSystem/tests/device/PelcoDSessionTest.cpp
+index f56e119..33c4699 100644
+--- a/AircraftPoseSystem/tests/device/PelcoDSessionTest.cpp
++++ b/AircraftPoseSystem/tests/device/PelcoDSessionTest.cpp
+@@ -1,11 +1,12 @@
+ // ============================================================================
+ //  tests/device/PelcoDSessionTest.cpp
+ //
+-//  覆盖 SYS-10 V1.1 §6.5 的失败策略表：
+-//  · initialize 的成功/WorkMode 故障/实测超行程/配置非法；
+-//  · move 的回显、FF 重试、EE 不重试、部分轴失败立即 stop、本地超行程零发送；
+-//  · pollOnce 的 MOVING→STABLE、假稳定、单轴丢包、连续失败锁存、看门狗；
+-//  · stop 的幂等与"不清除锁存 ERROR"。
++//  覆盖裁决 C-23 的验收项：
++//  · C1 只读模式在正常/失联/错误/退出路径上控制帧恒为 0；
++//  · C2 偏离/单轴失效/过期均撤销 STABLE，过期报 ERROR；
++//  · C3 三类回复（水平角/俯仰角/工作模式）的地址都必须核对；
++//  · C4 两轴跨轮样本不得发布，样本带轮次/时刻/有效性；
++//  · NaN/Inf、宽行程、停止 2005/2006、重试窗口、看门狗、首因与重臂。
+ // ============================================================================
+ 
+ #include "FakePelcoTransport.h"
+@@ -14,6 +15,7 @@
+ 
+ #include <cmath>
+ #include <cstdint>
++#include <limits>
+ #include <memory>
+ #include <string>
+ 
+@@ -27,7 +29,7 @@ namespace
+ using test::FakePelcoDevice;
+ using test::FakePelcoTransport;
+ 
+-data::TurntableConfig makeConfig()
++data::TurntableConfig makeConfig(bool motion = false)
+ {
+     data::TurntableConfig cfg;
+     cfg.protocol          = "pelco_d_udp";
+@@ -40,13 +42,20 @@ data::TurntableConfig makeConfig()
+     cfg.elevationMax      = 90.0;
+     cfg.coarseSpeed       = 5.0;
+     cfg.fineSpeed         = 1.0;
+-    cfg.replyTimeoutMs    = 50;
+-    cfg.pollIntervalMs    = 50;
++    cfg.replyTimeoutMs    = 20;
++    cfg.pollIntervalMs    = 5;
+     cfg.stableReadCount   = 3;
+     cfg.stableThresholdDeg    = 0.02;
+     cfg.arrivalToleranceDeg   = 0.2;
+     cfg.commFailureThreshold  = 5;
+     cfg.useSpeedControl       = false;
++    cfg.sampleStaleMs         = 500;
++    cfg.stopTimeoutMs         = 200;
++    cfg.stopRetryCount        = 2;
++    cfg.stopRetryWindowMs     = 200;
++    cfg.stopBackoffMs         = 0;
++    cfg.sendPolicy = motion ? data::TurntableSendPolicy::MotionEnabled
++                            : data::TurntableSendPolicy::ReadOnly;
+     return cfg;
+ }
+ 
+@@ -57,11 +66,12 @@ struct Fixture
+     FakePelcoDevice dev;
+     std::unique_ptr<PelcoDSession> session;
+ 
+-    explicit Fixture(const data::TurntableConfig& cfg)
++    explicit Fixture(const data::TurntableConfig& cfg, bool motion = false)
+     {
+         dev.transport = fake.get();
+         dev.install();
+         session = std::make_unique<PelcoDSession>(cfg, fake);
++        session->setTestMotionGate(motion);
+     }
+ 
+     bool init()
+@@ -71,6 +81,7 @@ struct Fixture
+     }
+ 
+     data::TurntableState snap() const { return session->snapshot(); }
++    data::TurntableDiagnostics diag() const { return session->diagnostics(); }
+ };
+ 
+ bool isPositioning(const PelcoDFrame& frame)
+@@ -92,7 +103,7 @@ bool isControl(const PelcoDFrame& frame)
+ }
+ 
+ // ---------------------------------------------------------------------------
+-//  initialize
++//  initialize / C3 地址校验
+ // ---------------------------------------------------------------------------
+ 
+ TEST(PelcoDSessionTest, InitializeReadsBothAxesAndWorkMode)
+@@ -111,6 +122,14 @@ TEST(PelcoDSessionTest, InitializeReadsBothAxesAndWorkMode)
+     EXPECT_DOUBLE_EQ(state.elevation, -14.51);
+     EXPECT_EQ(state.motion, data::TurntableMotionState::IDLE);
+ 
++    const auto d = f.diag();
++    EXPECT_TRUE(d.sample.valid);
++    EXPECT_TRUE(d.sampleFresh);
++    EXPECT_EQ(d.sample.cycleId, 1u);
++    EXPECT_GT(d.sample.sampleTimestampNs, 0u);
++    // 0xE0 回复与查询逐字节相同 ⇒ 只能是 EchoOnly，不得升级为“确认正常”。
++    EXPECT_EQ(d.workModeTrust, data::WorkModeTrust::EchoOnly);
++
+     // 三帧查询，且没有一帧是控制指令 —— 只读启动的硬要求。
+     EXPECT_EQ(f.fake->sent.size(), 3u);
+     EXPECT_EQ(f.fake->countSent(isControl), 0);
+@@ -126,10 +145,57 @@ TEST(PelcoDSessionTest, InitializeFailsOnNonZeroWorkMode)
+     EXPECT_FALSE(f.session->initialized());
+     EXPECT_TRUE(f.session->errorLatched());
+     EXPECT_EQ(f.session->lastError().code, data::kErrTurntableComm);
++    EXPECT_EQ(f.diag().workModeTrust, data::WorkModeTrust::ReplyNonZero);
+     EXPECT_TRUE(f.fake->closeCalls > 0);
+     EXPECT_EQ(f.snap().motion, data::TurntableMotionState::ERROR);
+ }
+ 
++// 0x00 且与查询字节不同：只能证明“报文不同”，不能升级为正常模式。
++TEST(PelcoDSessionTest, IndependentWorkModeReplyStaysUnknown)
++{
++    Fixture f(makeConfig());
++    f.dev.workMode            = 0x00;
++    f.dev.workModeReplyData3  = 0x01;  // 与查询不再逐字节相同
++
++    EXPECT_TRUE(f.init());
++    EXPECT_EQ(f.diag().workModeTrust, data::WorkModeTrust::Unknown);
++}
++
++// 工作模式事务没有有效回复（地址错/丢包）⇒ NoReply，且初始化失败。
++TEST(PelcoDSessionTest, MissingWorkModeReplyReportsNoReply)
++{
++    data::TurntableConfig cfg = makeConfig();
++    cfg.replyTimeoutMs = 10;   // 缩短重试等待
++
++    Fixture f(cfg);
++    f.dev.dropWorkMode = true;
++
++    EXPECT_FALSE(f.init());
++    EXPECT_FALSE(f.session->initialized());
++    EXPECT_EQ(f.diag().workModeTrust, data::WorkModeTrust::NoReply);
++    EXPECT_TRUE(f.session->errorLatched());
++}
++
++// Unknown 不是运动许可：即使 MotionEnabled，没有测试授权也不得发运动帧。
++TEST(PelcoDSessionTest, UnknownWorkModeCannotMoveWithoutAuthorization)
++{
++    Fixture f(makeConfig(true));   // MotionEnabled，但不打开测试门
++    f.dev.workMode           = 0x00;
++    f.dev.workModeReplyData3 = 0x01;
++    ASSERT_TRUE(f.init());
++    EXPECT_EQ(f.diag().workModeTrust, data::WorkModeTrust::Unknown);
++    f.fake->sent.clear();
++
++    data::TurntableCommand command;
++    command.azimuthCommand   = 1.0;
++    command.elevationCommand = 0.0;
++    std::string error;
++    EXPECT_FALSE(f.session->move(command, error));
++    EXPECT_TRUE(f.fake->sent.empty());
++    EXPECT_EQ(f.session->lastError().code,
++              data::kErrTurntableMotionInhibited);
++}
++
+ TEST(PelcoDSessionTest, InitializeFailsWhenMeasuredAngleOutsideRange)
+ {
+     data::TurntableConfig cfg = makeConfig();
+@@ -155,9 +221,39 @@ TEST(PelcoDSessionTest, InitializeRejectsInconsistentConfigBeforeOpeningSocket)
+     EXPECT_TRUE(f.session->errorLatched());
+ }
+ 
+-TEST(PelcoDSessionTest, MoveBeforeInitializeFailsWithoutSending)
++// C3：请求地址 1、只收到地址 2 的回复 ⇒ 初始化不得成功。
++TEST(PelcoDSessionTest, HorizontalReplyFromWrongAddressCannotInitialize)
+ {
+     Fixture f(makeConfig());
++    f.dev.horizontalReplyAddress = 0x02;
++
++    EXPECT_FALSE(f.init());
++    EXPECT_TRUE(f.session->errorLatched());
++    EXPECT_GT(f.fake->closeCalls, 0);
++}
++
++TEST(PelcoDSessionTest, VerticalReplyFromWrongAddressCannotInitialize)
++{
++    Fixture f(makeConfig());
++    f.dev.verticalReplyAddress = 0x02;
++
++    EXPECT_FALSE(f.init());
++    EXPECT_TRUE(f.session->errorLatched());
++}
++
++TEST(PelcoDSessionTest, WorkModeReplyFromWrongAddressCannotInitialize)
++{
++    Fixture f(makeConfig());
++    f.dev.workModeReplyAddress = 0x02;
++
++    EXPECT_FALSE(f.init());
++    EXPECT_TRUE(f.session->errorLatched());
++    EXPECT_FALSE(f.session->initialized());
++}
++
++TEST(PelcoDSessionTest, MoveBeforeInitializeFailsWithoutSending)
++{
++    Fixture f(makeConfig(true), true);
+     data::TurntableCommand command;
+     command.azimuthCommand   = 1.0;
+     command.elevationCommand = 1.0;
+@@ -168,15 +264,95 @@ TEST(PelcoDSessionTest, MoveBeforeInitializeFailsWithoutSending)
+ }
+ 
+ // ---------------------------------------------------------------------------
+-//  move
++//  C1：只读门禁 —— 控制帧恒为 0
+ // ---------------------------------------------------------------------------
+ 
+-TEST(PelcoDSessionTest, MoveSendsBothAxesAndAcceptsEcho)
++TEST(PelcoDSessionTest, ReadOnlyMoveIsRejectedWithoutAnyControlFrame)
++{
++    Fixture f(makeConfig());  // ReadOnly
++    ASSERT_TRUE(f.init());
++    f.fake->sent.clear();
++
++    data::TurntableCommand command;
++    command.azimuthCommand   = 1.0;
++    command.elevationCommand = 0.0;
++    std::string error;
++    EXPECT_FALSE(f.session->move(command, error));
++
++    EXPECT_TRUE(f.fake->sent.empty());
++    EXPECT_EQ(f.dev.stopFrames, 0);
++    EXPECT_EQ(f.session->lastError().code,
++              data::kErrTurntableMotionInhibited);
++    EXPECT_EQ(f.diag().lastCommandOutcome,
++              data::TurntableCommandOutcome::None);
++}
++
++TEST(PelcoDSessionTest, ReadOnlyLostLinkSendsNoControlFrame)
++{
++    Fixture f(makeConfig());
++    ASSERT_TRUE(f.init());
++    f.fake->sent.clear();
++
++    f.dev.dropHorizontal = true;
++    f.dev.dropVertical   = true;
++    for (int i = 0; i < 6; ++i)
++    {
++        f.session->pollOnce();
++    }
++
++    EXPECT_TRUE(f.session->errorLatched());
++    EXPECT_EQ(f.session->lastError().code, data::kErrTurntableComm);
++
++    // 失联后**上层会走失败收口**（MeasurementController::failWith →
++    // turntable_.stop()）。错误已锁存时 stop() 不再命中"未运动"的早退，
++    // 故这里必须单独验证：只读模式下这条路径同样零控制帧。
++    f.session->stop();
++
++    EXPECT_EQ(f.fake->countSent(isControl), 0);
++    EXPECT_EQ(f.dev.stopFrames, 0);
++    EXPECT_EQ(f.snap().motion, data::TurntableMotionState::ERROR);
++}
++
++TEST(PelcoDSessionTest, ReadOnlyStopIsFrameFreeNoOp)
+ {
+     Fixture f(makeConfig());
+     ASSERT_TRUE(f.init());
+     f.fake->sent.clear();
+ 
++    f.session->stop();
++    f.session->stop();
++
++    EXPECT_TRUE(f.fake->sent.empty());
++    EXPECT_EQ(f.dev.stopFrames, 0);
++    EXPECT_FALSE(f.diag().stopFrameDelivered);
++}
++
++// ---------------------------------------------------------------------------
++//  MotionEnabled（仅 fake transport 单测）：命令与停止
++// ---------------------------------------------------------------------------
++
++TEST(PelcoDSessionTest, MotionGateRejectsWithoutTestAuthorization)
++{
++    Fixture f(makeConfig(true));  // MotionEnabled，但不打开测试门
++    ASSERT_TRUE(f.init());
++    f.fake->sent.clear();
++
++    data::TurntableCommand command;
++    command.azimuthCommand   = 1.0;
++    command.elevationCommand = 0.0;
++    std::string error;
++    EXPECT_FALSE(f.session->move(command, error));
++    EXPECT_TRUE(f.fake->sent.empty());
++    EXPECT_EQ(f.session->lastError().code,
++              data::kErrTurntableMotionInhibited);
++}
++
++TEST(PelcoDSessionTest, MoveSendsBothAxesAndAcceptsEcho)
++{
++    Fixture f(makeConfig(true), true);
++    ASSERT_TRUE(f.init());
++    f.fake->sent.clear();
++
+     data::TurntableCommand command;
+     command.azimuthCommand   = 1.0;
+     command.elevationCommand = 0.0;
+@@ -197,10 +373,10 @@ TEST(PelcoDSessionTest, MoveSendsBothAxesAndAcceptsEcho)
+ 
+ TEST(PelcoDSessionTest, MoveRetriesOnChecksumErrorMarker)
+ {
+-    Fixture f(makeConfig());
++    Fixture f(makeConfig(true), true);
+     ASSERT_TRUE(f.init());
+     f.fake->sent.clear();
+-    f.dev.positioningChecksumErrors = 1;  // 第一次定位回 FF FF FF FF
++    f.dev.positioningChecksumErrors = 1;
+ 
+     data::TurntableCommand command;
+     command.azimuthCommand   = 1.0;
+@@ -224,10 +400,10 @@ TEST(PelcoDSessionTest, MoveRetriesOnChecksumErrorMarker)
+ 
+ TEST(PelcoDSessionTest, MoveDoesNotRetryOnRejectedMarker)
+ {
+-    Fixture f(makeConfig());
++    Fixture f(makeConfig(true), true);
+     ASSERT_TRUE(f.init());
+     f.fake->sent.clear();
+-    f.dev.rejectMoveAxis = 1;  // 水平定位回 EE EE EE EE
++    f.dev.rejectMoveAxis = 1;
+ 
+     data::TurntableCommand command;
+     command.azimuthCommand   = 1.0;
+@@ -249,12 +425,15 @@ TEST(PelcoDSessionTest, MoveDoesNotRetryOnRejectedMarker)
+     EXPECT_EQ(f.dev.stopFrames, 1);
+     EXPECT_EQ(f.session->lastError().code, data::kErrTurntableComm);
+     EXPECT_FALSE(f.session->errorLatched());
+-    EXPECT_NE(f.snap().motion, data::TurntableMotionState::MOVING);
++    // 停止帧已交付但尚未观测到静止：不得谎报 IDLE/STABLE。
++    EXPECT_EQ(f.snap().motion, data::TurntableMotionState::MOVING);
++    EXPECT_TRUE(f.diag().stopFrameDelivered);
++    EXPECT_FALSE(f.diag().stopObservedStationary);
+ }
+ 
+ TEST(PelcoDSessionTest, PartialAxisFailureSendsStop)
+ {
+-    Fixture f(makeConfig());
++    Fixture f(makeConfig(true), true);
+     ASSERT_TRUE(f.init());
+     f.fake->sent.clear();
+     f.dev.rejectMoveAxis = 2;  // 水平接受，垂直拒绝
+@@ -266,16 +445,16 @@ TEST(PelcoDSessionTest, PartialAxisFailureSendsStop)
+     std::string error;
+     EXPECT_FALSE(f.session->move(command, error));
+     EXPECT_EQ(f.dev.stopFrames, 1);
+-    EXPECT_NE(f.snap().motion, data::TurntableMotionState::MOVING);
++    EXPECT_EQ(f.snap().motion, data::TurntableMotionState::MOVING);
+ }
+ 
+ TEST(PelcoDSessionTest, LocalOverTravelSendsNoFrameAtAll)
+ {
+-    data::TurntableConfig cfg = makeConfig();
++    data::TurntableConfig cfg = makeConfig(true);
+     cfg.azimuthMin = -10.0;
+     cfg.azimuthMax = 10.0;
+ 
+-    Fixture f(cfg);
++    Fixture f(cfg, true);
+     ASSERT_TRUE(f.init());
+     f.fake->sent.clear();
+ 
+@@ -292,9 +471,77 @@ TEST(PelcoDSessionTest, LocalOverTravelSendsNoFrameAtAll)
+     EXPECT_EQ(f.dev.stopFrames, 0);
+ }
+ 
++// 原报告第六条：错误已锁存，再调用 move() 会把错误码和文本清空。
++// 锁存后必须拒绝运动、零运动帧，且原错误码/文本原样保留。
++TEST(PelcoDSessionTest, MoveAfterLatchedErrorPreservesOriginalError)
++{
++    data::TurntableConfig cfg = makeConfig(true);
++    cfg.azimuthMax = 10.0;
++
++    Fixture f(cfg, true);
++    ASSERT_TRUE(f.init());
++
++    data::TurntableCommand command;
++    command.azimuthCommand   = 50.0;  // 本地越程 ⇒ 2002 锁存
++    command.elevationCommand = 0.0;
++    std::string error;
++    ASSERT_FALSE(f.session->move(command, error));
++    ASSERT_TRUE(f.session->errorLatched());
++
++    const data::ErrorInfo first = f.session->lastError();
++    ASSERT_EQ(first.code, data::kErrTurntableOverTravel);
++    ASSERT_FALSE(first.message.empty());
++    f.fake->sent.clear();
++
++    command.azimuthCommand = 1.0;
++    EXPECT_FALSE(f.session->move(command, error));
++    EXPECT_TRUE(f.fake->sent.empty());
++    EXPECT_EQ(f.dev.stopFrames, 0);
++    EXPECT_EQ(error, first.message);
++
++    const data::ErrorInfo after = f.session->lastError();
++    EXPECT_EQ(after.code, first.code);
++    EXPECT_EQ(after.message, first.message);
++    EXPECT_EQ(after.timestampNs, first.timestampNs);
++}
++
++TEST(PelcoDSessionTest, NaNCommandIsRejectedBeforeAnyByteIsSent)
++{
++    Fixture f(makeConfig(true), true);
++    ASSERT_TRUE(f.init());
++    f.fake->sent.clear();
++
++    data::TurntableCommand command;
++    command.azimuthCommand   = std::numeric_limits<double>::quiet_NaN();
++    command.elevationCommand = 0.0;
++    std::string error;
++    EXPECT_FALSE(f.session->move(command, error));
++    EXPECT_TRUE(f.fake->sent.empty());
++    EXPECT_EQ(f.session->lastError().code,
++              data::kErrTurntableInvalidCommand);
++    EXPECT_TRUE(f.session->errorLatched());
++
++    command.azimuthCommand   = 0.0;
++    command.elevationCommand = std::numeric_limits<double>::infinity();
++    EXPECT_FALSE(f.session->move(command, error));
++    EXPECT_TRUE(f.fake->sent.empty());
++}
++
++TEST(PelcoDSessionTest, NaNSpeedConfigFailsBeforeOpeningSocket)
++{
++    data::TurntableConfig cfg = makeConfig(true);
++    cfg.useSpeedControl = true;
++    cfg.coarseSpeed     = std::numeric_limits<double>::quiet_NaN();
++
++    Fixture f(cfg, true);
++    EXPECT_FALSE(f.init());
++    EXPECT_EQ(f.fake->openCalls, 0);
++    EXPECT_TRUE(f.session->errorLatched());
++}
++
+ TEST(PelcoDSessionTest, AzimuthCommandWrapsIntoRange)
+ {
+-    Fixture f(makeConfig());  // 行程 -180..180
++    Fixture f(makeConfig(true), true);
+     ASSERT_TRUE(f.init());
+     f.fake->sent.clear();
+ 
+@@ -314,11 +561,11 @@ TEST(PelcoDSessionTest, AzimuthCommandWrapsIntoRange)
+ 
+ TEST(PelcoDSessionTest, SpeedControlUsesTable365AndRpm10)
+ {
+-    data::TurntableConfig cfg = makeConfig();
++    data::TurntableConfig cfg = makeConfig(true);
+     cfg.useSpeedControl = true;
+     cfg.coarseSpeed     = 5.0;  // 5 °/s ⇒ 8.333 r/min ⇒ 8
+ 
+-    Fixture f(cfg);
++    Fixture f(cfg, true);
+     ASSERT_TRUE(f.init());
+     f.fake->sent.clear();
+ 
+@@ -336,12 +583,12 @@ TEST(PelcoDSessionTest, SpeedControlUsesTable365AndRpm10)
+ }
+ 
+ // ---------------------------------------------------------------------------
+-//  pollOnce / STABLE / 看门狗
++//  C2：STABLE 撤销 / 样本过期
+ // ---------------------------------------------------------------------------
+ 
+ TEST(PelcoDSessionTest, PollReachesStableAfterConfiguredReadCount)
+ {
+-    Fixture f(makeConfig());  // stableReadCount = 3
++    Fixture f(makeConfig(true), true);
+     ASSERT_TRUE(f.init());
+ 
+     data::TurntableCommand command;
+@@ -350,109 +597,205 @@ TEST(PelcoDSessionTest, PollReachesStableAfterConfiguredReadCount)
+     std::string error;
+     ASSERT_TRUE(f.session->move(command, error));
+ 
+-    // 第 1 次：建立 lastRead，计数仍为 0
+     f.session->pollOnce();
+     EXPECT_EQ(f.snap().motion, data::TurntableMotionState::MOVING);
+-    // 第 2、3 次：计数 1、2
+     f.session->pollOnce();
+     f.session->pollOnce();
+     EXPECT_EQ(f.snap().motion, data::TurntableMotionState::MOVING);
+-    // 第 4 次：计数达到 3 ⇒ STABLE
+     f.session->pollOnce();
+     EXPECT_EQ(f.snap().motion, data::TurntableMotionState::STABLE);
+ }
+ 
+-TEST(PelcoDSessionTest, PollDoesNotCallStableWhenFarFromTarget)
++TEST(PelcoDSessionTest, StableIsRevokedWhenMeasuredAngleDeviates)
+ {
+-    Fixture f(makeConfig());
++    Fixture f(makeConfig(true), true);
+     ASSERT_TRUE(f.init());
+ 
+-    f.dev.snapToTarget = false;
+-
+     data::TurntableCommand command;
+-    command.azimuthCommand   = 5.0;
++    command.azimuthCommand   = 1.0;
+     command.elevationCommand = 0.0;
+     std::string error;
+     ASSERT_TRUE(f.session->move(command, error));
+ 
+-    // 读数恒定但离目标 1°：只满足"没变"，不满足"到位"。
+-    f.dev.azimuth = 4.0;
+-    for (int i = 0; i < 6; ++i)
++    for (int i = 0; i < 4; ++i)
+     {
+         f.session->pollOnce();
+-        EXPECT_EQ(f.snap().motion, data::TurntableMotionState::MOVING);
+     }
++    ASSERT_EQ(f.snap().motion, data::TurntableMotionState::STABLE);
++
++    // 已到位后读数明显偏离：STABLE 必须撤销，不得锁存。
++    f.dev.azimuth = 5.0;
++    f.session->pollOnce();
++    EXPECT_NE(f.snap().motion, data::TurntableMotionState::STABLE);
++    EXPECT_EQ(f.snap().motion, data::TurntableMotionState::IDLE);
+ }
+ 
+-TEST(PelcoDSessionTest, PollSingleAxisDropDoesNotLatchError)
++TEST(PelcoDSessionTest, SingleAxisInvalidRevokesStable)
+ {
+-    Fixture f(makeConfig());
++    Fixture f(makeConfig(true), true);
+     ASSERT_TRUE(f.init());
+ 
++    data::TurntableCommand command;
++    command.azimuthCommand   = 1.0;
++    command.elevationCommand = 0.0;
++    std::string error;
++    ASSERT_TRUE(f.session->move(command, error));
++    for (int i = 0; i < 4; ++i)
++    {
++        f.session->pollOnce();
++    }
++    ASSERT_EQ(f.snap().motion, data::TurntableMotionState::STABLE);
++
+     f.dev.dropVertical = true;
+     f.session->pollOnce();
+-    EXPECT_FALSE(f.session->errorLatched());
+-    EXPECT_NE(f.snap().motion, data::TurntableMotionState::ERROR);
+ 
++    EXPECT_NE(f.snap().motion, data::TurntableMotionState::STABLE);
++    EXPECT_FALSE(f.diag().sample.valid);
++    EXPECT_FALSE(f.diag().sampleFresh);
++}
++
++TEST(PelcoDSessionTest, StaleSampleReportsErrorAndIsNotFresh)
++{
++    Fixture f(makeConfig(true), true);
++    std::uint64_t now = 1000000000ULL;
++    f.session->setClock([&now]() { return now; });
++    ASSERT_TRUE(f.init());
++
++    now += 600ULL * 1000000ULL;  // sample_stale_ms = 500
++    EXPECT_EQ(f.snap().motion, data::TurntableMotionState::ERROR);
++    EXPECT_FALSE(f.diag().sampleFresh);
++}
++
++// ---------------------------------------------------------------------------
++//  C4：两轴跨轮 / 轮次与时刻
++// ---------------------------------------------------------------------------
++
++TEST(PelcoDSessionTest, CrossRoundSampleIsNeverPublished)
++{
++    Fixture f(makeConfig(true), true);
++    ASSERT_TRUE(f.init());
++    const std::uint64_t cycle0 = f.diag().sample.cycleId;
++    const double az0 = f.snap().azimuth;
++
++    // 水平轴读到新值、垂直轴缺回复：整轮无效，不得把新 az 配旧 el。
++    f.dev.azimuth    = 5.0;
++    f.dev.dropVertical = true;
++    f.session->pollOnce();
++
++    const auto d = f.diag();
++    EXPECT_FALSE(d.sample.valid);
++    EXPECT_GT(d.sample.cycleId, cycle0);  // 轮次推进，证明这是新的一轮
++    EXPECT_DOUBLE_EQ(f.snap().azimuth, az0);
++
++    // 下一轮两轴齐全：才允许发布。
+     f.dev.dropVertical = false;
+     f.session->pollOnce();
+-    EXPECT_FALSE(f.session->errorLatched());
++    EXPECT_TRUE(f.diag().sample.valid);
++    EXPECT_DOUBLE_EQ(f.snap().azimuth, 5.0);
++    EXPECT_GT(f.diag().sample.cycleId, d.sample.cycleId);
+ }
+ 
+-TEST(PelcoDSessionTest, PollLatchesErrorAfterConsecutiveFailures)
++// ---------------------------------------------------------------------------
++//  停止：2005 / 2006 / 重臂
++// ---------------------------------------------------------------------------
++
++TEST(PelcoDSessionTest, StopNotDeliveredLatches2005AndExhaustsRetries)
+ {
+-    Fixture f(makeConfig());  // commFailureThreshold = 5
++    Fixture f(makeConfig(true), true);
+     ASSERT_TRUE(f.init());
++    f.fake->sent.clear();
+ 
+-    f.dev.dropHorizontal = true;
+-    f.dev.dropVertical   = true;
++    // 先让会话处于“有未完成动作”的状态。
++    f.dev.snapToTarget = false;
++    data::TurntableCommand command;
++    command.azimuthCommand   = 1.0;
++    command.elevationCommand = 0.0;
++    std::string error;
++    ASSERT_TRUE(f.session->move(command, error));
+ 
+-    for (int i = 0; i < 4; ++i)
+-    {
+-        f.session->pollOnce();
+-        EXPECT_FALSE(f.session->errorLatched());
+-    }
++    f.fake->failStopSends = 100;
++    f.fake->stopSendAttempts = 0;
++    f.session->stop();
+ 
+-    f.session->pollOnce();  // 第 5 次
+-    EXPECT_TRUE(f.session->errorLatched());
+-    EXPECT_EQ(f.session->lastError().code, data::kErrTurntableComm);
+-    EXPECT_EQ(f.dev.stopFrames, 1);
++    // 总尝试 = 1 + stop_retry_count = 3。
++    EXPECT_EQ(f.fake->stopSendAttempts.load(), 3);
++    EXPECT_EQ(f.session->lastError().code,
++              data::kErrTurntableStopNotDelivered);
++    const auto d = f.diag();
++    EXPECT_TRUE(d.motionUncertain);
++    EXPECT_FALSE(d.stopFrameDelivered);
++    EXPECT_FALSE(d.stopObservedStationary);
++    EXPECT_EQ(d.firstFault.code, data::kErrTurntableStopNotDelivered);
+     EXPECT_EQ(f.snap().motion, data::TurntableMotionState::ERROR);
++
++    // 显式 stop() 是唯一重新武装点：恢复发送后正好再尝试一次。
++    f.fake->failStopSends = 0;
++    f.fake->stopSendAttempts = 0;
++    f.session->stop();
++    EXPECT_EQ(f.fake->stopSendAttempts.load(), 1);
++    EXPECT_TRUE(f.diag().stopFrameDelivered);
+ }
+ 
+-TEST(PelcoDSessionTest, WatchdogLatchesErrorAndStops)
++TEST(PelcoDSessionTest, StopDeliveredButNotStationaryLatches2006)
+ {
+-    data::TurntableConfig cfg = makeConfig();
+-    Fixture f(cfg);
+-
+-    std::uint64_t now = 0;
++    data::TurntableConfig cfg = makeConfig(true);
++    Fixture f(cfg, true);
++    std::uint64_t now = 1000000000ULL;
+     f.session->setClock([&now]() { return now; });
+-
+     ASSERT_TRUE(f.init());
+ 
+     f.dev.snapToTarget = false;
+     data::TurntableCommand command;
+-    command.azimuthCommand   = 10.0;
++    command.azimuthCommand   = 1.0;
+     command.elevationCommand = 0.0;
+     std::string error;
+     ASSERT_TRUE(f.session->move(command, error));
+ 
+-    // 10° / 12 °/s × 1.5 + 5 s = 6.25 s
+-    now = 7000000000ULL;  // 7 s
++    f.session->stop();
++    ASSERT_TRUE(f.diag().stopFrameDelivered);
++    ASSERT_FALSE(f.diag().stopObservedStationary);
++
++    now += 300ULL * 1000000ULL;  // stop_timeout_ms = 200
+     f.session->pollOnce();
+ 
+-    EXPECT_TRUE(f.session->errorLatched());
++    const auto d = f.diag();
++    EXPECT_EQ(f.session->lastError().code,
++              data::kErrTurntableStopNotObserved);
++    EXPECT_TRUE(d.motionUncertain);
++    EXPECT_TRUE(d.stopFrameDelivered);
++    EXPECT_FALSE(d.stopObservedStationary);
++    EXPECT_EQ(d.firstFault.code, data::kErrTurntableStopNotObserved);
+     EXPECT_EQ(f.snap().motion, data::TurntableMotionState::ERROR);
+-    EXPECT_EQ(f.dev.stopFrames, 1);
+ }
+ 
+-// ---------------------------------------------------------------------------
+-//  stop
+-// ---------------------------------------------------------------------------
++TEST(PelcoDSessionTest, StopObservedStationaryRequiresFreshStableSamples)
++{
++    Fixture f(makeConfig(true), true);
++    ASSERT_TRUE(f.init());
++
++    data::TurntableCommand command;
++    command.azimuthCommand   = 1.0;
++    command.elevationCommand = 0.0;
++    std::string error;
++    ASSERT_TRUE(f.session->move(command, error));
++
++    f.session->stop();
++    ASSERT_TRUE(f.diag().stopFrameDelivered);
++
++    for (int i = 0; i < 4; ++i)
++    {
++        f.session->pollOnce();
++    }
++
++    const auto d = f.diag();
++    EXPECT_TRUE(d.stopObservedStationary);
++    EXPECT_FALSE(d.motionUncertain);
++    EXPECT_EQ(f.snap().motion, data::TurntableMotionState::IDLE);
++}
+ 
+ TEST(PelcoDSessionTest, StopIsNoOpWhenIdle)
+ {
+-    Fixture f(makeConfig());
++    Fixture f(makeConfig(true), true);
+     ASSERT_TRUE(f.init());
+     f.fake->sent.clear();
+ 
+@@ -463,10 +806,10 @@ TEST(PelcoDSessionTest, StopIsNoOpWhenIdle)
+ 
+ TEST(PelcoDSessionTest, StopIsIdempotentAndDoesNotClearLatchedError)
+ {
+-    data::TurntableConfig cfg = makeConfig();
++    data::TurntableConfig cfg = makeConfig(true);
+     cfg.azimuthMax = 10.0;
+ 
+-    Fixture f(cfg);
++    Fixture f(cfg, true);
+     ASSERT_TRUE(f.init());
+ 
+     data::TurntableCommand command;
+@@ -482,10 +825,69 @@ TEST(PelcoDSessionTest, StopIsIdempotentAndDoesNotClearLatchedError)
+     EXPECT_EQ(f.snap().motion, data::TurntableMotionState::ERROR);
+ 
+     f.session->stop();
+-    EXPECT_EQ(f.dev.stopFrames, 1);  // 不重复发送
++    EXPECT_EQ(f.dev.stopFrames, 1);  // 已交付的停止不重复发送
+     EXPECT_TRUE(f.session->errorLatched());
+ }
+ 
++// ---------------------------------------------------------------------------
++//  看门狗 / 首因
++// ---------------------------------------------------------------------------
++
++TEST(PelcoDSessionTest, WatchdogLatches2008AndRequestsStop)
++{
++    Fixture f(makeConfig(true), true);
++    std::uint64_t now = 1000000000ULL;
++    f.session->setClock([&now]() { return now; });
++    ASSERT_TRUE(f.init());
++
++    f.dev.snapToTarget = false;
++    data::TurntableCommand command;
++    command.azimuthCommand   = 10.0;
++    command.elevationCommand = 0.0;
++    std::string error;
++    ASSERT_TRUE(f.session->move(command, error));
++
++    // 10° / 12 °/s × 1.5 + 5 s = 6.25 s
++    now += 7000000000ULL;
++    f.session->pollOnce();
++
++    EXPECT_TRUE(f.session->errorLatched());
++    EXPECT_EQ(f.session->lastError().code,
++              data::kErrTurntableMotionWatchdog);
++    EXPECT_EQ(f.diag().firstFault.code,
++              data::kErrTurntableMotionWatchdog);
++    EXPECT_EQ(f.snap().motion, data::TurntableMotionState::ERROR);
++    EXPECT_EQ(f.dev.stopFrames, 1);
++}
++
++TEST(PelcoDSessionTest, FirstFaultIsPreservedAcrossStopEscalation)
++{
++    Fixture f(makeConfig(true), true);
++    ASSERT_TRUE(f.init());
++
++    f.dev.snapToTarget = false;
++    data::TurntableCommand command;
++    command.azimuthCommand   = 1.0;
++    command.elevationCommand = 0.0;
++    std::string error;
++    ASSERT_TRUE(f.session->move(command, error));
++
++    f.fake->failStopSends = 100;
++    f.session->stop();
++
++    // 首因是显式 stop() 引发的 2005（没有更早的故障）；
++    // 这里验证的是“先写者不被后续升级覆盖”的机制。
++    ASSERT_EQ(f.diag().firstFault.code,
++              data::kErrTurntableStopNotDelivered);
++    EXPECT_EQ(f.session->lastError().code,
++              data::kErrTurntableStopNotDelivered);
++
++    // 再次触发不会改写首因。
++    f.session->stop();
++    EXPECT_EQ(f.diag().firstFault.code,
++              data::kErrTurntableStopNotDelivered);
++}
++
+ }  // namespace
+ }  // namespace device
+ }  // namespace aircraft
+diff --git a/AircraftPoseSystem/tests/device/PelcoDTurntableControllerTest.cpp b/AircraftPoseSystem/tests/device/PelcoDTurntableControllerTest.cpp
+index f565064..ef214ea 100644
+--- a/AircraftPoseSystem/tests/device/PelcoDTurntableControllerTest.cpp
++++ b/AircraftPoseSystem/tests/device/PelcoDTurntableControllerTest.cpp
+@@ -1,21 +1,30 @@
+ // ============================================================================
+ //  tests/device/PelcoDTurntableControllerTest.cpp
+ //
+-//  覆盖后端线程模型（SYS-10 V1.1 §17/§18）：
++//  覆盖后端线程模型（SYS-10 V1.1 §17/§18、裁决 C-23）：
+ //  · state() 只读快照 —— worker 阻塞在 UDP 上时也不阻塞主 tick；
+-//  · worker 轮询推进 STABLE；
+-//  · 析构 join、关闭传输；
+-//  · 诊断 sink 只在 worker 线程、错误文本变化时调用一次。
++//  · move() 只表示“已受理”，不在调用线程等回显；
++//  · 停止屏障优先于排队命令，被取消的命令有终结结果；
++//  · 诊断快照合并会话诊断与命令终结结果；
++//  · sink 在锁外调用，抛异常不得 terminate；
++//  · 只读控制器所有路径控制帧为 0；
++//  · 析构 join 并关闭传输。
+ // ============================================================================
+ 
+ #include "FakePelcoTransport.h"
+ #include "device/turntable/PelcoDTurntableController.h"
+ #include "gtest/gtest.h"
+ 
++#include <QCoreApplication>
++#include <QElapsedTimer>
++#include <QTimer>
++
+ #include <atomic>
+ #include <chrono>
++#include <functional>
+ #include <memory>
+ #include <mutex>
++#include <stdexcept>
+ #include <string>
+ #include <thread>
+ 
+@@ -29,7 +38,7 @@ namespace
+ using test::FakePelcoDevice;
+ using test::FakePelcoTransport;
+ 
+-data::TurntableConfig makeConfig()
++data::TurntableConfig makeConfig(bool motion = false)
+ {
+     data::TurntableConfig cfg;
+     cfg.protocol          = "pelco_d_udp";
+@@ -49,6 +58,13 @@ data::TurntableConfig makeConfig()
+     cfg.arrivalToleranceDeg   = 0.2;
+     cfg.commFailureThreshold  = 2;
+     cfg.useSpeedControl       = false;
++    cfg.sampleStaleMs         = 500;
++    cfg.stopTimeoutMs         = 200;
++    cfg.stopRetryCount        = 2;
++    cfg.stopRetryWindowMs     = 200;
++    cfg.stopBackoffMs         = 0;
++    cfg.sendPolicy = motion ? data::TurntableSendPolicy::MotionEnabled
++                            : data::TurntableSendPolicy::ReadOnly;
+     return cfg;
+ }
+ 
+@@ -57,6 +73,35 @@ void sleepMs(int ms)
+     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+ }
+ 
++template <typename Predicate>
++bool waitFor(Predicate predicate, int timeoutMs = 1500)
++{
++    const auto deadline = std::chrono::steady_clock::now() +
++                          std::chrono::milliseconds(timeoutMs);
++    while (std::chrono::steady_clock::now() < deadline)
++    {
++        if (predicate())
++        {
++            return true;
++        }
++        sleepMs(2);
++    }
++    return predicate();
++}
++
++bool isControlFrame(const PelcoDFrame& frame)
++{
++    if (frame.data1 == 0x00 && frame.data2 == 0x00 &&
++        frame.data3 == 0x00 && frame.data4 == 0x00)
++    {
++        return true;  // stop
++    }
++    return (frame.data1 == 0x00 &&
++            (frame.data2 == 0x4B || frame.data2 == 0x4D)) ||
++           ((frame.data1 == 0x4B || frame.data1 == 0x4D) &&
++            frame.data2 != 0x00);
++}
++
+ TEST(PelcoDTurntableControllerTest, StateIsCheapWhileWorkerBlocksOnTransport)
+ {
+     auto fake = std::make_shared<FakePelcoTransport>();
+@@ -72,7 +117,6 @@ TEST(PelcoDTurntableControllerTest, StateIsCheapWhileWorkerBlocksOnTransport)
+     PelcoDTurntableController controller(cfg, fake);
+     ASSERT_TRUE(controller.initialize());
+ 
+-    // 让下一次轮询真正阻塞在 receive() 上。
+     fake->receiveBlockMs.store(200);
+     dev.dropHorizontal = true;
+     dev.dropVertical   = true;
+@@ -87,11 +131,102 @@ TEST(PelcoDTurntableControllerTest, StateIsCheapWhileWorkerBlocksOnTransport)
+     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+         std::chrono::steady_clock::now() - start);
+ 
+-    // 100 次快照应接近 0 ms。若 state() 去拿 ioMutex_，worker 正持锁
++    // 100 次快照应接近 0 ms。若 state() 去拿 I/O 锁，worker 正持锁
+     // 阻塞在 200 ms 的 UDP 等待上，这 100 次调用会被拖过 100 ms。
+     EXPECT_LT(elapsed.count(), 100);
+ }
+ 
++TEST(PelcoDTurntableControllerTest, MoveIsAcceptedWithoutWaitingForEcho)
++{
++    auto fake = std::make_shared<FakePelcoTransport>();
++    FakePelcoDevice dev;
++    dev.transport = fake.get();
++    dev.install();
++
++    PelcoDTurntableController controller(makeConfig(true), fake);
++    controller.setTestMotionGate(true);
++    ASSERT_TRUE(controller.initialize());
++
++    // 让 worker 阻塞在轮询接收上，确保 move() 无法搭便车等回显。
++    fake->receiveBlockMs.store(100);
++    dev.dropHorizontal = true;
++    dev.dropVertical   = true;
++    sleepMs(20);
++
++    const auto start = std::chrono::steady_clock::now();
++    for (int i = 0; i < 5; ++i)
++    {
++        data::TurntableCommand command;
++        command.azimuthCommand   = static_cast<double>(i);
++        command.elevationCommand = 0.0;
++        EXPECT_TRUE(controller.move(command));
++    }
++    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
++        std::chrono::steady_clock::now() - start);
++
++    // true 仅表示已受理：调用线程不得等待回显/停止。
++    EXPECT_LT(elapsed.count(), 100);
++    EXPECT_GT(controller.diagnostics().lastCommandSeq, 0u);
++}
++
++TEST(PelcoDTurntableControllerTest, StopBarrierCancelsQueuedMove)
++{
++    auto fake = std::make_shared<FakePelcoTransport>();
++    FakePelcoDevice dev;
++    dev.transport = fake.get();
++    dev.install();
++
++    PelcoDTurntableController controller(makeConfig(true), fake);
++    controller.setTestMotionGate(true);
++    ASSERT_TRUE(controller.initialize());
++
++    // worker 正在慢速轮询：此时排队的命令尚未执行。
++    fake->receiveBlockMs.store(200);
++    dev.dropHorizontal = true;
++    dev.dropVertical   = true;
++    sleepMs(20);
++
++    data::TurntableCommand command;
++    command.azimuthCommand   = 2.0;
++    command.elevationCommand = 0.0;
++    ASSERT_TRUE(controller.move(command));
++
++    controller.stop();
++
++    const auto d = controller.diagnostics();
++    EXPECT_EQ(d.lastCommandOutcome, data::TurntableCommandOutcome::Cancelled);
++    EXPECT_GE(d.stopCompletedSeq, d.stopRequestSeq);
++    EXPECT_GT(d.stopRequestSeq, 0u);
++}
++
++TEST(PelcoDTurntableControllerTest, DiagnosticsReportDeliveredCommand)
++{
++    auto fake = std::make_shared<FakePelcoTransport>();
++    FakePelcoDevice dev;
++    dev.transport = fake.get();
++    dev.install();
++
++    PelcoDTurntableController controller(makeConfig(true), fake);
++    controller.setTestMotionGate(true);
++    ASSERT_TRUE(controller.initialize());
++
++    data::TurntableCommand command;
++    command.azimuthCommand   = 1.0;
++    command.elevationCommand = 0.0;
++    ASSERT_TRUE(controller.move(command));
++
++    const bool delivered = waitFor([&controller] {
++        return controller.diagnostics().lastCommandOutcome ==
++               data::TurntableCommandOutcome::Delivered;
++    });
++    EXPECT_TRUE(delivered);
++
++    const auto d = controller.diagnostics();
++    EXPECT_GT(d.lastCommandSeq, 0u);
++    EXPECT_EQ(d.stopRequestSeq, 0u);
++    EXPECT_TRUE(d.sample.valid);
++}
++
+ TEST(PelcoDTurntableControllerTest, WorkerDrivesMotionToStable)
+ {
+     auto fake = std::make_shared<FakePelcoTransport>();
+@@ -99,7 +234,8 @@ TEST(PelcoDTurntableControllerTest, WorkerDrivesMotionToStable)
+     dev.transport = fake.get();
+     dev.install();
+ 
+-    PelcoDTurntableController controller(makeConfig(), fake);
++    PelcoDTurntableController controller(makeConfig(true), fake);
++    controller.setTestMotionGate(true);
+     ASSERT_TRUE(controller.initialize());
+ 
+     data::TurntableCommand command;
+@@ -107,17 +243,32 @@ TEST(PelcoDTurntableControllerTest, WorkerDrivesMotionToStable)
+     command.elevationCommand = 0.0;
+     ASSERT_TRUE(controller.move(command));
+ 
+-    bool stable = false;
+-    for (int i = 0; i < 200; ++i)
++    const bool stable = waitFor([&controller] {
++        return controller.state().motion == data::TurntableMotionState::STABLE;
++    });
++    EXPECT_TRUE(stable);
++}
++
++TEST(PelcoDTurntableControllerTest, ReadOnlyControllerSendsNoControlFrames)
++{
++    auto fake = std::make_shared<FakePelcoTransport>();
++    FakePelcoDevice dev;
++    dev.transport = fake.get();
++    dev.install();
++
+     {
+-        if (controller.state().motion == data::TurntableMotionState::STABLE)
+-        {
+-            stable = true;
+-            break;
+-        }
+-        sleepMs(5);
++        PelcoDTurntableController controller(makeConfig(), fake);
++        ASSERT_TRUE(controller.initialize());
++
++        fake->sent.clear();
++        dev.dropHorizontal = true;
++        dev.dropVertical   = true;
++        sleepMs(100);       // 触发失联锁存
++        controller.stop();  // 只读：无帧 no-op
+     }
+-    EXPECT_TRUE(stable);
++
++    EXPECT_EQ(fake->countSent(isControlFrame), 0);
++    EXPECT_EQ(dev.stopFrames, 0);
+ }
+ 
+ TEST(PelcoDTurntableControllerTest, DestructorJoinsWorkerAndClosesTransport)
+@@ -143,7 +294,7 @@ TEST(PelcoDTurntableControllerTest, DestructorJoinsWorkerAndClosesTransport)
+         std::chrono::steady_clock::now() - start);
+ 
+     EXPECT_LT(elapsed.count(), 2000);
+-    EXPECT_TRUE(fake->closeCalls > 0);
++    EXPECT_GT(fake->closeCalls, 0);
+ }
+ 
+ TEST(PelcoDTurntableControllerTest, DiagnosticSinkReportsLatchedErrorOnce)
+@@ -171,18 +322,15 @@ TEST(PelcoDTurntableControllerTest, DiagnosticSinkReportsLatchedErrorOnce)
+     dev.dropHorizontal = true;
+     dev.dropVertical   = true;
+ 
+-    for (int i = 0; i < 200 && calls.load() == 0; ++i)
+-    {
+-        sleepMs(5);
+-    }
+-
++    EXPECT_TRUE(waitFor([&calls] { return calls.load() > 0; }));
++    sleepMs(30);  // 错误文本未变时不得重复上报
+     EXPECT_EQ(calls.load(), 1);
+     std::lock_guard<std::mutex> lock(messageMutex);
+     EXPECT_FALSE(message.empty());
+     EXPECT_TRUE(message.find("连续") != std::string::npos);
+ }
+ 
+-TEST(PelcoDTurntableControllerTest, ConcurrentMoveAndWorkerDoNotDeadlock)
++TEST(PelcoDTurntableControllerTest, ThrowingSinkDoesNotTerminateWorker)
+ {
+     auto fake = std::make_shared<FakePelcoTransport>();
+     FakePelcoDevice dev;
+@@ -190,6 +338,34 @@ TEST(PelcoDTurntableControllerTest, ConcurrentMoveAndWorkerDoNotDeadlock)
+     dev.install();
+ 
+     PelcoDTurntableController controller(makeConfig(), fake);
++
++    std::atomic<int> calls{0};
++    controller.setDiagnosticSink([&calls](const std::string&) {
++        calls.fetch_add(1);
++        throw std::runtime_error("sink 故意抛异常");
++    });
++
++    ASSERT_TRUE(controller.initialize());
++    dev.dropHorizontal = true;
++    dev.dropVertical   = true;
++
++    EXPECT_TRUE(waitFor([&calls] { return calls.load() > 0; }));
++
++    // worker 仍存活：快照仍可读，且锁存的是通信错误。
++    const data::TurntableState state = controller.state();
++    EXPECT_EQ(state.motion, data::TurntableMotionState::ERROR);
++    EXPECT_EQ(controller.lastError().code, data::kErrTurntableComm);
++}
++
++TEST(PelcoDTurntableControllerTest, ConcurrentMoveAndWorkerDoNotDeadlock)
++{
++    auto fake = std::make_shared<FakePelcoTransport>();
++    FakePelcoDevice dev;
++    dev.transport = fake.get();
++    dev.install();
++
++    PelcoDTurntableController controller(makeConfig(true), fake);
++    controller.setTestMotionGate(true);
+     ASSERT_TRUE(controller.initialize());
+ 
+     for (int i = 0; i < 10; ++i)
+@@ -204,7 +380,10 @@ TEST(PelcoDTurntableControllerTest, ConcurrentMoveAndWorkerDoNotDeadlock)
+             controller.stop();
+         }
+     }
+-    EXPECT_EQ(controller.lastError().code, 0);
++
++    // 没有死锁：停止屏障都得到应答。
++    const auto d = controller.diagnostics();
++    EXPECT_GE(d.stopCompletedSeq, d.stopRequestSeq);
+ }
+ 
+ TEST(PelcoDTurntableControllerTest, MoveBeforeInitializeFails)
+@@ -214,7 +393,8 @@ TEST(PelcoDTurntableControllerTest, MoveBeforeInitializeFails)
+     dev.transport = fake.get();
+     dev.install();
+ 
+-    PelcoDTurntableController controller(makeConfig(), fake);
++    PelcoDTurntableController controller(makeConfig(true), fake);
++    controller.setTestMotionGate(true);
+ 
+     data::TurntableCommand command;
+     command.azimuthCommand   = 1.0;
+@@ -226,6 +406,79 @@ TEST(PelcoDTurntableControllerTest, MoveBeforeInitializeFails)
+     EXPECT_DOUBLE_EQ(state.azimuth, 0.0);
+ }
+ 
++// A3 / S2：生产调用路径在真实 Qt 事件循环里。
++//   · 界面线程调用 move() 必须立即返回（不在调用线程等回显）；
++//   · 同一事件循环中的定时器仍能派发 stop() 请求；
++//   · 后台 worker 阻塞在接收上不影响上述两点。
++// 只测两个后台线程的并发不能覆盖“GUI 线程是否被回显等待卡住”。
++TEST(PelcoDTurntableControllerTest, QtEventLoopDispatchesStopWhileMoveInFlight)
++{
++    int argc = 1;
++    char appName[] = "PelcoDTest";
++    char* argv[] = {appName, nullptr};
++    QCoreApplication app(argc, argv);
++
++    auto fake = std::make_shared<FakePelcoTransport>();
++    FakePelcoDevice dev;
++    dev.transport = fake.get();
++    dev.install();
++
++    PelcoDTurntableController controller(makeConfig(true), fake);
++    controller.setTestMotionGate(true);
++    ASSERT_TRUE(controller.initialize());
++
++    // worker 阻塞在轮询接收上：若 move() 在调用线程等回显，界面线程会被拖住。
++    fake->receiveBlockMs.store(20);
++    dev.dropHorizontal = true;
++    dev.dropVertical   = true;
++    sleepMs(15);
++
++    std::atomic<int> heartbeats{0};
++    std::atomic<long long> moveMs{-1};
++    std::atomic<long long> stopMs{-1};
++    std::atomic<bool> stopDispatched{false};
++
++    QTimer heartbeat;
++    heartbeat.setInterval(5);
++    QObject::connect(&heartbeat, &QTimer::timeout,
++                     [&heartbeats]() { ++heartbeats; });
++    heartbeat.start();
++
++    QTimer::singleShot(0, [&]() {
++        data::TurntableCommand command;
++        command.azimuthCommand   = 1.0;
++        command.elevationCommand = 0.0;
++        QElapsedTimer timer;
++        timer.start();
++        EXPECT_TRUE(controller.move(command));
++        moveMs.store(timer.elapsed());
++    });
++
++    // 关键：停止请求由事件循环派发，而不是在 move() 返回前同步调用。
++    QTimer::singleShot(20, [&]() {
++        stopDispatched.store(true);
++        QElapsedTimer timer;
++        timer.start();
++        controller.stop();
++        stopMs.store(timer.elapsed());
++    });
++
++    QTimer::singleShot(200, [&]() { app.quit(); });
++    app.exec();
++    heartbeat.stop();
++
++    EXPECT_TRUE(stopDispatched.load());
++    EXPECT_GE(moveMs.load(), 0);
++    EXPECT_LT(moveMs.load(), 50);   // 立即返回，不等 20 ms 接收切片后的回显
++    EXPECT_GE(stopMs.load(), 0);
++    EXPECT_LT(stopMs.load(), 400);  // 屏障在 worker 处理到停止后返回
++    EXPECT_GE(heartbeats.load(), 3);
++
++    const auto d = controller.diagnostics();
++    EXPECT_GT(d.stopRequestSeq, 0u);
++    EXPECT_GE(d.stopCompletedSeq, d.stopRequestSeq);
++}
++
+ }  // namespace
+ }  // namespace device
+ }  // namespace aircraft
+diff --git a/AircraftPoseSystem/tests/integration/CMakeLists.txt b/AircraftPoseSystem/tests/integration/CMakeLists.txt
+index 6722b02..0fd4b1d 100644
+--- a/AircraftPoseSystem/tests/integration/CMakeLists.txt
++++ b/AircraftPoseSystem/tests/integration/CMakeLists.txt
+@@ -69,6 +69,33 @@ aps_add_test(test_recorder_package
+         infrastructure
+ )
+ 
++# ----------------------------------------------------------------------------
++#  app 层落盘适配器（C-009 / H-002）
++#
++#  ⚠ 覆盖缺口修正：此前这里写着"`RecorderSinkAdapter` 测不到"，理由是
++#    "src/app 只有可执行目标，adapter 链不进测试"。该理由**不成立** ——
++#    `RecorderSinkAdapter` 是 `app/ApplicationContext.h` 里的**内联类**，
++#    包含头即可编译，不需要 libapp。本目标即为它补上判据（7 个用例）。
++#
++#  ⚠ 依赖只需 data + infrastructure：适配器内联调用 `Recorder::save()`，
++#    其余头文件仅用于类型声明。Qt 亦不需要（ApplicationContext.h 不含 Qt 头）。
++# ----------------------------------------------------------------------------
++aps_add_test(test_recorder_adapter
++    SOURCES
++        RecorderAdapterTest.cpp
++    DEPENDS
++        data
++        infrastructure
++    WORKING_DIRECTORY
++        "${PROJECT_SOURCE_DIR}"
++)
++
++# 该用例按绝对路径检查仓库 config/（见 RecorderAdapterTest.cpp 的说明）。
++# WORKING_DIRECTORY 之外再传入编译期宏：换 cwd 也不会退化成“找不到配置”。
++target_compile_definitions(test_recorder_adapter PRIVATE
++    APS_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
++)
++
+ # ----------------------------------------------------------------------------
+ #  app 层装配与空闲补帧（R04 收尾，2026-09-24 评审裁定）
+ #
+diff --git a/AircraftPoseSystem/tests/integration/MeasurementFlowTest.cpp b/AircraftPoseSystem/tests/integration/MeasurementFlowTest.cpp
+index 9be53fa..7c2f449 100644
+--- a/AircraftPoseSystem/tests/integration/MeasurementFlowTest.cpp
++++ b/AircraftPoseSystem/tests/integration/MeasurementFlowTest.cpp
+@@ -134,6 +134,11 @@ public:
+     double elevation = 0.0;
+     int    moveCount = 0;
+ 
++    /// stop() 被调用的次数。失败收口只应请求一次（C-23 / A3）。
++    /// 本桩不实现 ITurntableDiagnostics —— 失败包里的停止事实
++    /// 因此是"未请求诊断能力"的默认值，而不是猜测。
++    int    stopCount = 0;
++
+     /// 把转台**静置**在给定角度（同时写入目标角）。
+     ///
+     /// ⚠ 必须同时写 targetAz_/targetEl_：state() 在"无待执行指令"时会用
+@@ -203,6 +208,7 @@ public:
+ 
+     void stop() override
+     {
++        ++stopCount;
+         pending_ = 0;
+         targetAz_ = azimuth;
+         targetEl_ = elevation;
+@@ -1298,6 +1304,14 @@ TEST(MeasurementFlowTest, 用例1_任务时限_桩恒不检出在Ttask内以9001
+     // SEARCH 不设次数上限，计数只反映"搜了多少次"。
+     EXPECT_GT(h.controller_->attempts(S::SEARCH), 1);
+     EXPECT_EQ(h.controller_->rollbackCount(), 0);
++
++    // 失败收口（C-23 / A3）：T_task 超时只请求一次停止；失败包如实
++    // 记录"请求过停止"，但不伪造"帧已交付"（虚拟转台无诊断能力）。
++    EXPECT_EQ(h.turntable_.stopCount, 1);
++    ASSERT_EQ(h.recorder_.saveCalls, 1);
++    EXPECT_TRUE(h.recorder_.lastRecord.stopRequested);
++    EXPECT_FALSE(h.recorder_.lastRecord.stopFrameDelivered);
++    EXPECT_FALSE(h.recorder_.lastRecord.stopObservedStationary);
+ }
+ 
+ // ===========================================================================
+@@ -1732,6 +1746,9 @@ TEST(MeasurementFlowTest, 转台故障直接FAILED且不重试)
+     // 不重试的量化体现：ALIGN 只进入过一次（尝试 1 次即失败）。
+     EXPECT_LE(h.controller_->attempts(S::ALIGN), 1);
+     EXPECT_EQ(h.controller_->rollbackCount(), 0);
++
++    // 硬件故障同样经过唯一收口：只请求一次停止。
++    EXPECT_EQ(h.turntable_.stopCount, 1);
+ }
+ 
+ TEST(MeasurementFlowTest, 转台指令下发失败按瞬态重试)
+@@ -1828,6 +1845,15 @@ TEST(MeasurementFlowTest, 人工取消以9003终止并让转台停下)
+     EXPECT_EQ(h.controller_->state(), S::FAILED);
+     EXPECT_EQ(h.controller_->lastError().code, aircraft::data::kErrManualCancel);
+ 
++    // 人工取消与超时走同一收口：只请求一次停止，失败包记录停止事实。
++    EXPECT_EQ(h.turntable_.stopCount, 1);
++    EXPECT_TRUE(h.recorder_.lastRecord.stopRequested);
++
++    // 同一任务内重复取消不得再请求停止（任务级幂等）。
++    h.controller_->stopMeasurement();
++    EXPECT_EQ(h.turntable_.stopCount, 1);
++    EXPECT_EQ(h.controller_->lastError().code, aircraft::data::kErrManualCancel);
++
+     // 取消之后可以重新开始（FAILED → IDLE → SEARCH）。
+     h.controller_->startMeasurement(now);
+     EXPECT_EQ(h.controller_->state(), S::SEARCH);
+diff --git a/AircraftPoseSystem/tests/integration/RecorderAdapterTest.cpp b/AircraftPoseSystem/tests/integration/RecorderAdapterTest.cpp
+index b4c3baa..05f298c 100644
+--- a/AircraftPoseSystem/tests/integration/RecorderAdapterTest.cpp
++++ b/AircraftPoseSystem/tests/integration/RecorderAdapterTest.cpp
+@@ -632,14 +632,19 @@ TEST(RecorderAdapter, EmptyConfigDirStillSavesButMustReportWhy)
+ ///   配置目录），而真实部署下第 8 个文件会一直缺失 —— 且只在复盘时才发现。
+ ///   本用例把"部署侧给了什么"与"落盘侧要什么"对起来。
+ ///
+-/// ⚠ 依赖 cwd 为仓库根（`build_tests.sh` 会 `cd "$ROOT"`）。找不到配置目录
+-///   时**报失败而不是跳过**：静默跳过正是本批要消灭的失败模式。
++/// ⚠ 仓库路径由编译期宏 `APS_SOURCE_DIR` 给出，**不依赖 cwd**：CTest 与
++///   垫片两条执行路径都定义该宏（CMake 侧同时把 WORKING_DIRECTORY 设为
++///   仓库根，双重保证）。找不到配置目录时**报失败而不是跳过**：静默跳过
++///   正是本批要消灭的失败模式。
++#ifndef APS_SOURCE_DIR
++#error "RecorderAdapterTest 需要 APS_SOURCE_DIR 编译期定义"
++#endif
+ TEST(RecorderAdapter, RepoConfigMatchesTheNamesTheRecorderExpects)
+ {
+-    const std::string repoCfg = "config";
++    const std::string repoCfg = std::string(APS_SOURCE_DIR) + "/config";
+     ASSERT_TRUE(pathExists(repoCfg))
+         << "未找到 " << repoCfg
+-        << " —— 本用例需在仓库根运行（build_tests.sh 已 cd \"$ROOT\"）";
++        << " —— 检查 APS_SOURCE_DIR 是否指向仓库根";
+ 
+     std::vector<std::string> onDisk;
+     for (const std::string& name : listDir(repoCfg))
+diff --git a/AircraftPoseSystem/tests/integration/SystemInitializerTest.cpp b/AircraftPoseSystem/tests/integration/SystemInitializerTest.cpp
+index 84864c8..c1c4ca0 100644
+--- a/AircraftPoseSystem/tests/integration/SystemInitializerTest.cpp
++++ b/AircraftPoseSystem/tests/integration/SystemInitializerTest.cpp
+@@ -1664,6 +1664,24 @@ struct CountingTurntable : aircraft::device::ITurntableController
+     int stopCalls = 0;
+ };
+ 
++/// shutdown 用例的转台替身：计数放在共享状态里，对象被
++/// `shutdownDevices()` 释放后仍可读取"停了几次"。
++struct ShutdownTrackingTurntable : aircraft::device::ITurntableController
++{
++    std::shared_ptr<int> stopCalls;
++
++    bool initialize() override { return true; }
++    bool move(const aircraft::data::TurntableCommand&) override { return true; }
++    aircraft::data::TurntableState state() override { return {}; }
++    void stop() override
++    {
++        if (stopCalls)
++        {
++            ++(*stopCalls);
++        }
++    }
++};
++
+ }  // namespace
+ 
+ TEST(SystemInitializerTest, 场景T_注入工厂优先于协议且对象被实际装配)
+@@ -1698,4 +1716,64 @@ TEST(SystemInitializerTest, 场景T_注入工厂优先于协议且对象被实
+         << "装配的不是注入工厂造出的对象";
+ }
+ 
++TEST(SystemInitializerTest, 场景A3_shutdown停止转台释放触发与相机且幂等)
++{
++    std::string err;
++    ASSERT_TRUE(prepareWorkspace(err)) << err;
++
++    Harness h;
++    auto stopCalls = std::make_shared<int>(0);
++    h.ctx.turntableFactory =
++        [stopCalls](const aircraft::data::TurntableConfig&,
++                    std::string&) -> std::unique_ptr<
++            aircraft::device::ITurntableController> {
++            auto t = std::make_unique<ShutdownTrackingTurntable>();
++            t->stopCalls = stopCalls;
++            return t;
++        };
++
++    ASSERT_TRUE(h.build()) << "全虚拟配置本应启动成功：" << h.init->errorText();
++    ASSERT_NE(h.ctx.turntable, nullptr);
++    ASSERT_NE(h.ctx.trigger, nullptr);
++    EXPECT_TRUE(h.ctx.trigger->enabled());
++
++    // 启动后的生命周期证据：三路都已 initialize → start。
++    const std::shared_ptr<aircraft::device::ICameraBackend> rows[] = {
++        h.ctx.backend25, h.ctx.backend50, h.ctx.backend100};
++    for (const auto& b : rows)
++    {
++        ASSERT_EQ(joinLog(backendLogOf(b).entries), "initialize -> start");
++    }
++
++    h.init->shutdown();
++
++    // 1. 关闭入口：ready_ 不再为真，tick 不再推进。
++    EXPECT_FALSE(h.init->ready());
++
++    // 2. 转台：停止一次后释放（析构 join worker）。
++    EXPECT_EQ(*stopCalls, 1);
++    EXPECT_TRUE(h.ctx.turntable == nullptr);
++
++    // 3. 触发器：disable 后释放。
++    EXPECT_TRUE(h.ctx.trigger == nullptr);
++
++    // 4. 相机：每路都 stop → close（这是 closeBackends 的可见结果）。
++    for (const auto& b : rows)
++    {
++        EXPECT_EQ(joinLog(backendLogOf(b).entries),
++                  "initialize -> start -> stop -> close");
++    }
++
++    // 5. 幂等：重复调用不再停转台、不再重复 stop/close。
++    h.init->shutdown();
++    EXPECT_EQ(*stopCalls, 1);
++    for (const auto& b : rows)
++    {
++        EXPECT_EQ(joinLog(backendLogOf(b).entries),
++                  "initialize -> start -> stop -> close");
++    }
++
++    // 6. 析构兜底也不得再触发一次（Harness 负责销毁 init 与 ctx）。
++}
++
+ }  // namespace
+diff --git a/AircraftPoseSystem/待裁决问题汇总.md b/AircraftPoseSystem/待裁决问题汇总.md
+index 7121762..6254d62 100644
+--- a/AircraftPoseSystem/待裁决问题汇总.md
++++ b/AircraftPoseSystem/待裁决问题汇总.md
+@@ -50,6 +50,36 @@
+ > 证据：`AircraftPoseSystem/evidence/转台_PelcoD_v1/02_探针实测_只读.txt`、
+ > `03_应用只读装配.txt`（原始载荷在仓库外 `验收证据/转台_PelcoD_v1/`）。
+ >
++> **C-23 转台可信化裁决（2026-10-19）**：闭合评审列出的四条反例
++> （C1 只读失联仍发停止帧／C2 到位后偏离仍保持 `STABLE`／C3 错地址回复被接受／
++> C4 两轴跨轮拼接）与已知缺陷（NaN 穿透、停止发送失败改 IDLE、失败路径不停、
++> WorkMode 未知仍初始化）。冻结结论：
++> ① `TurntableSendPolicy { ReadOnly, MotionEnabled }`，**生产配置无键可打开**；
++> ② `TurntableSample { azimuth, elevation, sampleTimestampNs, cycleId, valid, source }`，
++> 两轴**同轮**、过期即失效，`STABLE` **非锁存**；
++> ③ 工作模式/水平角/俯仰角回复**全部核验地址**；
++> ④ 错误码 **2004～2008**（非法命令／停止帧未交付／停止后未观测到静止／门禁拒绝／看门狗）；
++> ⑤ `stopFrameDelivered` ≠ `stopObservedStationary` ≠ **协议 ACK**（本批不声称 ACK）；
++> ⑥ 停止重试：`stop_retry_count`（默认 2，总发送 ≤ 1+本值）、
++> `stop_retry_window_ms`（默认 2000）、`stop_backoff_ms`（默认 200）；
++> ⑦ 首因诊断 `TurntableFault {code, message, context, timestampNs}`；
++> ⑧ 并列接口 `ITurntableDiagnostics`（`ITurntableController` 四方法签名不变）。
++> 依据登记：**SYS-10 V1.2**、**SYS-06 V2.8**、**SYS-04 V2.8**、
++> **ENG-09 V2.8**、**SYS-17 V1.6**、**SYS-09 V2.2**。
++>
++> **C-23 执行记录（2026-10-19）**：软件修复已实施，`build`（`APS_HAVE_IMVSDK=1`）
++> 与 `build_nosdk` 均编译通过；12 个垫片目标逐个运行共 433 例 0 失败，
++> 其中 `PelcoDTest` 76 例（含 WorkMode 四态、`NoReply` 赋值、
++> 锁存后错误保留、Qt 事件循环停止派发）、`flowtest` 45 例、
++> `RecorderPackageTest` 24 例、`RecorderAdapterTest` 7 例、`sysinittest` 21 例；
++> 定向 ASan/UBSan 三个套件（`PelcoDTest_san` 76、`flowtest_san` 45、
++> `sysinittest_san` 21）干净；13 项“先红后绿”变异检查，记录变红断言位置。
++> **原生 CMake/CTest 路径未执行（本机无 GoogleTest），单独列为未验证。**
++> ⚠ **状态：已实施，待独立复核关闭**（本地软件验证完成，独立复核未完成）。
++> ⚠ **实机运动尚未验证**：本批未发送任何运动/停止帧，真实停止行为、
++> 真实丢包、`0xDD` 交叉核对均未验证；只读复测的控制帧计数仍须保持 0。
++> ⚠ 界面核对未执行（headless）；不声称“物理停止已确认”。
++>
+ > 本文件继续作为缺口登记总表使用。**其余条目仍未处置**，其中 Q-B3 经复核
+ > **不属 C-002 范围**（其卡点是 `distanceBand` / `illumBand` 无生产者），需单独立项。
+ 
+--- /dev/null	2026-09-22 16:01:10.800486225 +0800
++++ AircraftPoseSystem/src/data/TurntableDiagnostics.h	2026-10-19 18:57:52.670562904 +0800
+@@ -0,0 +1,117 @@
++#pragma once
++
++// ============================================================================
++//  src/data/TurntableDiagnostics.h
++//
++//  依据：裁决 C-23、SYS-10 §12/§13、评审（2026-10-19）
++//
++//  作用：转台后端对上层公开的**诊断快照**，与冻结的 `TurntableState`
++//  并列，不改变 `ITurntableController::state()` 的签名。
++//
++//  ⚠ 三个概念在本文件中被刻意分开，任何时候都不得合并成一个“已停止”：
++//    1. stopFrameDelivered   —— 停止帧已交给传输层（**不代表设备收到**）；
++//    2. stopObservedStationary —— 停止后连续新鲜样本满足静止判据
++//                                （**本系统观测到的事实**）；
++//    3. 协议制动/停止确认    —— 需要设备明确反馈，本批**没有证据**，
++//                                故本结构体不提供该字段，也不得用
++//                                stopObservedStationary 冒充它。
++//
++//  ⚠ WorkMode 的可信度只允许四态。回复 0x00 但与查询字节不同，只能
++//    证明“报文不同”，不能证明它是独立、有效的工作模式回复 —— 记
++//    Unknown。本批没有可放行运动的协议证据，WorkMode 不作为运动/静止
++//    判据，运动状态只由新鲜角度样本得出。
++// ============================================================================
++
++#include <cstdint>
++#include <string>
++
++#include "data/TurntableSample.h"
++
++namespace aircraft
++{
++namespace data
++{
++
++/// 工作模式回复的可信度。
++enum class WorkModeTrust : std::uint8_t
++{
++    Unknown = 0,      ///< 有地址正确的回复，但无法证明其独立性/有效性
++    EchoOnly = 1,     ///< 只收到与查询帧逐字节相同的回复（回显歧义）
++    ReplyNonZero = 2, ///< 回复的 data2 != 0（明确不是常规模式）
++    NoReply = 3,      ///< 没有任何地址正确的回复
++};
++
++/// 最近一条运动命令的终结结果。
++enum class TurntableCommandOutcome : std::uint8_t
++{
++    None = 0,       ///< 尚无命令
++    Delivered = 1,  ///< 两轴指令均已交付（收到回显）
++    Superseded = 2, ///< 被更新的运动命令覆盖
++    Cancelled = 3,  ///< 被停止屏障取消
++    Failed = 4,     ///< 发送/回显失败，或被门禁拒绝
++};
++
++/// 首因诊断（完整保存，不只存码）。
++struct TurntableFault
++{
++    /// 错误码（ENG-09 §5.27 的 kErr* 常量；0 = 无故障）。
++    int code = 0;
++
++    /// 人读描述。
++    std::string message;
++
++    /// 触发该故障的结构化上下文（例如 "axis=horizontal;attempt=3"）。
++    std::string context;
++
++    /// 发生时刻，ns，CLOCK_MONOTONIC。
++    std::uint64_t timestampNs = 0;
++};
++
++/// 转台诊断快照。
++struct TurntableDiagnostics
++{
++    /// 最近一轮样本。`sample.valid == false` 时角值不可用。
++    TurntableSample sample;
++
++    /// 样本是否未超过 `sample_stale_ms`（由读取时刻计算）。
++    bool sampleFresh = false;
++
++    /// 停止帧是否已交给传输层。**不等于**设备已收到或已停止。
++    bool stopFrameDelivered = false;
++
++    /// 停止后是否在规定观测窗口内观察到静止。
++    bool stopObservedStationary = false;
++
++    /// 运动是否处于不确定状态（停止未交付 / 未观察到静止 /
++    /// 看门狗到期），在显式 stop() 或成功 initialize() 之前不清除。
++    bool motionUncertain = false;
++
++    /// 错误是否已锁存。
++    bool errorLatched = false;
++
++    /// 工作模式回复可信度。
++    WorkModeTrust workModeTrust = WorkModeTrust::Unknown;
++
++    /// 首因诊断：第一次故障的完整记录，不随后续升级而改写。
++    TurntableFault firstFault;
++
++    /// 最近一条运动命令的序号（0 = 尚无命令）。
++    std::uint64_t lastCommandSeq = 0;
++
++    /// 最近一条运动命令的终结结果。
++    TurntableCommandOutcome lastCommandOutcome =
++        TurntableCommandOutcome::None;
++
++    /// 终结结果的人读说明。
++    std::string lastCommandMessage;
++
++    /// 最近一次停止请求的序号与完成序号（控制器屏障用）。
++    std::uint64_t stopRequestSeq = 0;
++    std::uint64_t stopCompletedSeq = 0;
++
++    /// 运动门禁当前是否在拒绝运动（只读模式或 WorkMode 证据不足）。
++    bool motionInhibited = false;
++};
++
++}  // namespace data
++}  // namespace aircraft
+--- /dev/null	2026-09-22 16:01:10.800486225 +0800
++++ AircraftPoseSystem/src/data/TurntableSample.h	2026-10-19 18:57:48.458475933 +0800
+@@ -0,0 +1,60 @@
++#pragma once
++
++// ============================================================================
++//  src/data/TurntableSample.h
++//
++//  依据：SYS-10 §6.4（样本采集与到位判据）、§13（状态）、
++//        评审 C2/C4（2026-10-19）、裁决 C-23
++//
++//  作用：一次轮询周期产出的**两轴同轮**样本。
++//
++//  ⚠ 为什么不能继续只发布两个角度原子量：
++//    `azimuth_` 与 `elevation_` 各自更新时，一次丢包会让“新的方位角”
++//    与“上一周期的俯仰角”同时出现在快照里。两个值都合法、都有限，
++//    但**不属于同一时刻** —— 由它们算出的到位判据、或写入结果包的
++//    转台状态，都是拼接出来的事实。本结构体用 cycleId + 采样时刻 +
++//    valid 把“同一轮、同一时刻”变成可检查的不变量。
++//
++//  ⚠ valid=false 时 azimuth/elevation **没有意义**，不得被上层使用。
++//    这不是“值为 0”，而是“本轮没有可信读数”。
++// ============================================================================
++
++#include <cstdint>
++
++namespace aircraft
++{
++namespace data
++{
++
++/// 样本来源，便于结果包与日志区分“设备读数”与“本地默认值”。
++enum class TurntableSampleSource : std::uint8_t
++{
++    None = 0,  ///< 尚无样本
++    Poll = 1,  ///< 一次轮询周期内同时取得的两轴角
++};
++
++/// 同一轮询周期内同时取得的两轴角。
++struct TurntableSample
++{
++    /// 方位角，单位 deg（ENG-09 §2.2）。
++    double azimuth = 0.0;
++
++    /// 俯仰角，单位 deg。
++    double elevation = 0.0;
++
++    /// 本轮样本的取得时刻，ns，CLOCK_MONOTONIC。
++    /// 这是**主机侧完成两轴解析的时刻**，不是设备的曝光/采样时刻。
++    std::uint64_t sampleTimestampNs = 0;
++
++    /// 单调递增的轮询周期编号（从 1 开始）。两轴共享同一个编号。
++    std::uint64_t cycleId = 0;
++
++    /// 两轴是否都取得了地址正确、数值合法的回复。
++    /// 任一轴缺失/非法/地址错 ⇒ false，且本轮的角值不得发布。
++    bool valid = false;
++
++    TurntableSampleSource source = TurntableSampleSource::None;
++};
++
++}  // namespace data
++}  // namespace aircraft
+--- /dev/null	2026-09-22 16:01:10.800486225 +0800
++++ AircraftPoseSystem/src/device/turntable/ITurntableDiagnostics.h	2026-10-19 21:33:56.176897192 +0800
+@@ -0,0 +1,35 @@
++#pragma once
++
++// ============================================================================
++//  src/device/turntable/ITurntableDiagnostics.h
++//
++//  依据：裁决 C-23（2026-10-19）
++//
++//  作用：与冻结的 `ITurntableController` **并列**的诊断接口。
++//
++//  ⚠ 为什么不给 `ITurntableController` 增加 `lastError()`/`diagnostics()`：
++//    该接口的方法面在 SYS-06 中冻结（`initialize()/move()/state()/stop()`）。
++//    诊断是“可信化”新引入的能力，用并列接口承载，生产者（真实后端）
++//    实现它，消费者（装配点、测量总控）按可选指针接收 —— 虚拟后端、
++//    测试桩都不必被迫实现。这样既不破坏冻结签名，也不让“没有诊断能力”
++//    看起来像“没有故障”。
++// ============================================================================
++
++#include "data/TurntableDiagnostics.h"
++
++namespace aircraft
++{
++namespace device
++{
++
++class ITurntableDiagnostics
++{
++public:
++    virtual ~ITurntableDiagnostics() = default;
++
++    /// 取一致快照。实现方**不得**在此做 I/O 或等待 I/O 锁。
++    virtual data::TurntableDiagnostics diagnostics() const = 0;
++};
++
++}  // namespace device
++}  // namespace aircraft
+--- /dev/null	2026-09-22 16:01:10.800486225 +0800
++++ AircraftPoseSystem/tests/run_tests.sh	2026-10-19 22:00:15.646914512 +0800
+@@ -0,0 +1,67 @@
++#!/usr/bin/env bash
++# ============================================================================
++#  tests/run_tests.sh
++#
++#  仓库内的**原生测试入口**（C-23 / A5）：配置 → 构建 → CTest。
++#
++#  与 `/tmp/gtshim/build_tests.sh` 的关系：
++#    · 本脚本是首选路径，要求真实 GoogleTest；
++#    · 缺少 GoogleTest 时**明确失败并给出安装提示**，不得静默跳过 ——
++#      静默跳过会产出一个"0 failed"的空结果，比失败更危险；
++#    · `/tmp/gtshim` 仅作为离线回退（垫片不是 GTest，见其文件头）。
++#
++#  ⚠ 为什么不在脚本里按文件名通配汇总二进制：`/tmp/gtshim` 历史上堆着
++#    故意带红的变异件，通配会把它们算进"通过"。CTest 只执行**本次配置
++#    注册**的目标，不存在这个风险；本脚本用它作为唯一执行器。
++#
++#  用法：
++#      bash tests/run_tests.sh              # build_tests/ 下配置并全量运行
++#      BUILD_DIR=/tmp/aps-build bash tests/run_tests.sh
++#      APS_HAVE_IMVSDK=1 bash tests/run_tests.sh   # 需要 SDK 变体时
++# ============================================================================
++set -euo pipefail
++
++ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
++BUILD_DIR="${BUILD_DIR:-$ROOT/build_tests}"
++SDK="${APS_HAVE_IMVSDK:-0}"
++JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
++
++echo "[run_tests] 源码目录：$ROOT"
++echo "[run_tests] 构建目录：$BUILD_DIR（APS_HAVE_IMVSDK=$SDK）"
++
++cmake -S "$ROOT" -B "$BUILD_DIR" \
++    -DBUILD_TESTING=ON \
++    -DAPS_HAVE_IMVSDK="$SDK"
++
++# ---- GoogleTest 检测 -------------------------------------------------------
++# tests/CMakeLists.txt 在缺 GTest 时直接 return()，**不会** add_subdirectory
++# 任何测试子目录。故判据是"tests/ 下存在第二层 CTestTestfile.cmake"，
++# 而不是"存在任何一个 CTestTestfile"——顶层安装自检
++# （install_check / install_launch_check）与 GTest 无关，永远会生成
++# build/tests/CTestTestfile.cmake，不能拿来当测试已启用的证据。
++if ! find "$BUILD_DIR/tests" -mindepth 2 -name CTestTestfile.cmake \
++        -print -quit 2>/dev/null | grep -q .; then
++    cat >&2 <<'EOF'
++
++[run_tests] 错误：未找到 GoogleTest，测试目标没有被生成。
++
++  这与"测试全部通过"是两件事：本脚本拒绝在缺少测试的情况下返回 0。
++  安装（Ubuntu / UOS 系）：
++      sudo apt install libgtest-dev cmake
++  或从源码构建后安装到 /usr/local。
++  安装完成后重新执行本脚本（无需清理构建目录）。
++
++  离线回退：bash /tmp/gtshim/build_tests.sh（垫片，不是真实 GTest）。
++EOF
++    exit 1
++fi
++
++cmake --build "$BUILD_DIR" -j"$JOBS"
++
++# 只跑 aps_add_test 注册的 `test_*`。install_check / install_launch_check
++# 是安装包自检（依赖本机部署环境），不属于本脚本的"测试通过"判据；
++# 混进来会让"没装相机"看起来像"测试失败"。
++echo "[run_tests] 执行 CTest（test_* 目标）"
++ctest --test-dir "$BUILD_DIR" -R "^test_" --output-on-failure --no-tests=error
++
++echo "[run_tests] 全部已注册测试通过"

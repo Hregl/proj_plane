@@ -111,19 +111,33 @@ bool deviceAzimuthToSoftware(std::uint16_t raw, double& out);
 
 /// 软件水平角 → 设备无符号角（0～35999）。
 /// `180.00` 与 `−180.00` 是同一物理点，编码均为 18000；读回为 `+180`。
+///
+/// ⚠ 输入非有限时返回 0xFFFF（越界哨兵）。**生产路径必须使用
+///    `...Checked` 版本**：0xFFFF 不是合法角，但把它当成角发出去，
+///    设备侧的错误会比本地拒绝晚一步才被发现。
 std::uint16_t softwareAzimuthToDevice(double deg);
+
+/// 带检查的水平角编码。非有限输入返回 false 且不写 out。
+bool softwareAzimuthToDeviceChecked(double deg, std::uint16_t& out);
 
 /// 角度 ×100 编码。
 /// @param signedAxis true = 垂直轴（有符号，直接 ×100）；false = 水平轴
 ///        （先规整到 [0, 360) 再 ×100）。
 std::uint16_t encodeAngle100(double deg, bool signedAxis);
 
+/// 带检查的角度编码。非有限输入返回 false 且不写 out。
+bool encodeAngle100Checked(double deg, bool signedAxis, std::uint16_t& out);
+
 /// 由垂直角原始 16 位值还原软件角（有符号）。
 double deviceElevationToSoftware(std::uint16_t raw);
 
 /// 速度换算：`rpm10 = round(degPerSec * 10 / 6)`（1 r/min = 6 °/s）。
 /// 负值按 0 处理；结果夹在 0～255（指令只有一个字节）。
+/// 非有限输入返回 0（调用方应先用 ...Checked）。
 std::uint8_t speedDegPerSecToRpm10(double degPerSec);
+
+/// 带检查的速度换算。非有限输入返回 false。
+bool speedDegPerSecToRpm10Checked(double degPerSec, std::uint8_t& out);
 
 // ---------------------------------------------------------------------------
 //  指令构造
@@ -139,13 +153,26 @@ PelcoDFrame makeQueryWorkMode(std::uint8_t address);
 PelcoDFrame makeStop(std::uint8_t address);
 
 /// 表 3.5：绝对定位，设备内部默认速度（use_speed_control=false）。
+///
+/// 非有限角 ⇒ 返回无效帧（`data3 = data4 = 0xFF`），调用方不得发送。
+/// 生产路径使用 `...Checked`。
 PelcoDFrame makeAbsolutePosition(std::uint8_t address, bool horizontal,
                                  double angleDeg);
+
+/// 带检查的表 3.5 定位帧构造。角度非有限时返回 false 且不写 out。
+bool makeAbsolutePositionChecked(std::uint8_t address, bool horizontal,
+                                 double angleDeg, PelcoDFrame& out);
 
 /// 表 3.65：绝对定位并携带转速（use_speed_control=true）。
 PelcoDFrame makeAbsolutePositionWithSpeed(std::uint8_t address,
                                           bool horizontal, double angleDeg,
                                           double speedDegPerSec);
+
+/// 带检查的表 3.65 定位帧构造。角度或速度非有限时返回 false。
+bool makeAbsolutePositionWithSpeedChecked(std::uint8_t address,
+                                          bool horizontal, double angleDeg,
+                                          double speedDegPerSec,
+                                          PelcoDFrame& out);
 
 }  // namespace device
 }  // namespace aircraft

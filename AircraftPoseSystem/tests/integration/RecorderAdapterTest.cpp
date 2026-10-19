@@ -632,14 +632,19 @@ TEST(RecorderAdapter, EmptyConfigDirStillSavesButMustReportWhy)
 ///   配置目录），而真实部署下第 8 个文件会一直缺失 —— 且只在复盘时才发现。
 ///   本用例把"部署侧给了什么"与"落盘侧要什么"对起来。
 ///
-/// ⚠ 依赖 cwd 为仓库根（`build_tests.sh` 会 `cd "$ROOT"`）。找不到配置目录
-///   时**报失败而不是跳过**：静默跳过正是本批要消灭的失败模式。
+/// ⚠ 仓库路径由编译期宏 `APS_SOURCE_DIR` 给出，**不依赖 cwd**：CTest 与
+///   垫片两条执行路径都定义该宏（CMake 侧同时把 WORKING_DIRECTORY 设为
+///   仓库根，双重保证）。找不到配置目录时**报失败而不是跳过**：静默跳过
+///   正是本批要消灭的失败模式。
+#ifndef APS_SOURCE_DIR
+#error "RecorderAdapterTest 需要 APS_SOURCE_DIR 编译期定义"
+#endif
 TEST(RecorderAdapter, RepoConfigMatchesTheNamesTheRecorderExpects)
 {
-    const std::string repoCfg = "config";
+    const std::string repoCfg = std::string(APS_SOURCE_DIR) + "/config";
     ASSERT_TRUE(pathExists(repoCfg))
         << "未找到 " << repoCfg
-        << " —— 本用例需在仓库根运行（build_tests.sh 已 cd \"$ROOT\"）";
+        << " —— 检查 APS_SOURCE_DIR 是否指向仓库根";
 
     std::vector<std::string> onDisk;
     for (const std::string& name : listDir(repoCfg))

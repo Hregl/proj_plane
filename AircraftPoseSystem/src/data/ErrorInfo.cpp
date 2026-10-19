@@ -54,6 +54,16 @@ const char* errorCodeName(int code)
         return "ErrTurntableOverTravel";
     case kErrAlignRetryExhausted:
         return "ErrAlignRetryExhausted";
+    case kErrTurntableInvalidCommand:
+        return "ErrTurntableInvalidCommand";
+    case kErrTurntableStopNotDelivered:
+        return "ErrTurntableStopNotDelivered";
+    case kErrTurntableStopNotObserved:
+        return "ErrTurntableStopNotObserved";
+    case kErrTurntableMotionInhibited:
+        return "ErrTurntableMotionInhibited";
+    case kErrTurntableMotionWatchdog:
+        return "ErrTurntableMotionWatchdog";
 
     // ---- 触发 / 同步段 ----
     case kErrTriggerDegraded:

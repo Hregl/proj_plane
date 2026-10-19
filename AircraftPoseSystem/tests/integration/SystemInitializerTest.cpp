@@ -1664,6 +1664,24 @@ struct CountingTurntable : aircraft::device::ITurntableController
     int stopCalls = 0;
 };
 
+/// shutdown 用例的转台替身：计数放在共享状态里，对象被
+/// `shutdownDevices()` 释放后仍可读取"停了几次"。
+struct ShutdownTrackingTurntable : aircraft::device::ITurntableController
+{
+    std::shared_ptr<int> stopCalls;
+
+    bool initialize() override { return true; }
+    bool move(const aircraft::data::TurntableCommand&) override { return true; }
+    aircraft::data::TurntableState state() override { return {}; }
+    void stop() override
+    {
+        if (stopCalls)
+        {
+            ++(*stopCalls);
+        }
+    }
+};
+
 }  // namespace
 
 TEST(SystemInitializerTest, 场景T_注入工厂优先于协议且对象被实际装配)
@@ -1696,6 +1714,66 @@ TEST(SystemInitializerTest, 场景T_注入工厂优先于协议且对象被实�
     ASSERT_TRUE(ctx.turntable != nullptr);
     EXPECT_NE(dynamic_cast<CountingTurntable*>(ctx.turntable.get()), nullptr)
         << "装配的不是注入工厂造出的对象";
+}
+
+TEST(SystemInitializerTest, 场景A3_shutdown停止转台释放触发与相机且幂等)
+{
+    std::string err;
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    Harness h;
+    auto stopCalls = std::make_shared<int>(0);
+    h.ctx.turntableFactory =
+        [stopCalls](const aircraft::data::TurntableConfig&,
+                    std::string&) -> std::unique_ptr<
+            aircraft::device::ITurntableController> {
+            auto t = std::make_unique<ShutdownTrackingTurntable>();
+            t->stopCalls = stopCalls;
+            return t;
+        };
+
+    ASSERT_TRUE(h.build()) << "全虚拟配置本应启动成功：" << h.init->errorText();
+    ASSERT_NE(h.ctx.turntable, nullptr);
+    ASSERT_NE(h.ctx.trigger, nullptr);
+    EXPECT_TRUE(h.ctx.trigger->enabled());
+
+    // 启动后的生命周期证据：三路都已 initialize → start。
+    const std::shared_ptr<aircraft::device::ICameraBackend> rows[] = {
+        h.ctx.backend25, h.ctx.backend50, h.ctx.backend100};
+    for (const auto& b : rows)
+    {
+        ASSERT_EQ(joinLog(backendLogOf(b).entries), "initialize -> start");
+    }
+
+    h.init->shutdown();
+
+    // 1. 关闭入口：ready_ 不再为真，tick 不再推进。
+    EXPECT_FALSE(h.init->ready());
+
+    // 2. 转台：停止一次后释放（析构 join worker）。
+    EXPECT_EQ(*stopCalls, 1);
+    EXPECT_TRUE(h.ctx.turntable == nullptr);
+
+    // 3. 触发器：disable 后释放。
+    EXPECT_TRUE(h.ctx.trigger == nullptr);
+
+    // 4. 相机：每路都 stop → close（这是 closeBackends 的可见结果）。
+    for (const auto& b : rows)
+    {
+        EXPECT_EQ(joinLog(backendLogOf(b).entries),
+                  "initialize -> start -> stop -> close");
+    }
+
+    // 5. 幂等：重复调用不再停转台、不再重复 stop/close。
+    h.init->shutdown();
+    EXPECT_EQ(*stopCalls, 1);
+    for (const auto& b : rows)
+    {
+        EXPECT_EQ(joinLog(backendLogOf(b).entries),
+                  "initialize -> start -> stop -> close");
+    }
+
+    // 6. 析构兜底也不得再触发一次（Harness 负责销毁 init 与 ctx）。
 }
 
 }  // namespace

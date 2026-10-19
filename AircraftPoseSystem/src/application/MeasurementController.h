@@ -453,7 +453,20 @@ private:
     void applyRecovery(const Recovery& recovery, uint64_t nowNs);
 
     /// 直接进入 FAILED 并记录错误（error.timestampNs 由本函数补齐）。
+    ///
+    /// ⚠ 这是任务的**唯一终止收口**：任务超时、终态失败、算法失败、
+    ///    人工取消全部经过这里。收口内先请求一次停止（幂等），
+    ///    再组装失败包 —— 停止结果与失败原因来自同一次终止事实。
     void failWith(data::ErrorInfo error, uint64_t nowNs);
+
+    /// 请求转台停止（**每个任务至多一次**）。
+    ///
+    /// ⚠ 幂等标志在 `startMeasurement()` 清零：同一任务里 tick 超时、
+    ///    恢复策略失败、人工取消可能连续触发，但停止只应请求一次。
+    ///    停止结果（帧是否交付、是否观测到静止、是否不确定）由
+    ///    `buildRecord()` 从可选的 `ITurntableDiagnostics` 读取，
+    ///    不在调用线程臆测。
+    void requestTurntableStopOnce();
 
     /// handleFailure() 的入口段：补时间戳 → `lastError_` → `pendingCause_`
     /// →（首次失败时）记入 `failureTrace_.firstFailedState/firstError`。
@@ -577,6 +590,9 @@ private:
     AlignmentController alignment_;
 
     // ---- 任务级运行数据 ---------------------------------------------------
+
+    /// 本次任务的失败收口是否已请求过转台停止（C-23，任务级幂等）。
+    bool stopRequestedForTask_ = false;
 
     /// 本次任务的记录（SAVE 的落盘对象）。
     data::MeasurementTask task_;

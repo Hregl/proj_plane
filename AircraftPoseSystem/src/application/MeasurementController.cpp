@@ -41,6 +41,7 @@
 #include <string>
 
 #include "data/MonotonicClock.h"
+#include "device/turntable/ITurntableDiagnostics.h"
 
 namespace aircraft
 {
@@ -310,6 +311,10 @@ void MeasurementController::startMeasurement(uint64_t nowNs)
     pendingCause_     = data::ErrorInfo{};
     firstFailureSeen_ = false;
 
+    // 停止请求的幂等标志是**任务级**的：上一次任务的停止请求不得让
+    // 本次任务的失败收口跳过停止（C-23）。
+    stopRequestedForTask_ = false;
+
     // ④ 任务期间启用硬件触发；任务结束时在 onEnteredState() 里关闭。
     //    §7.5〔引用无效·依据待裁决·见 Q-D2〕 规定的"触发失效 → 降级为软触发（3001）"由设备层的
     //    CameraSynchronizer 判定并上报（ENG-05 §10），本类不重复推断 ——
@@ -339,17 +344,14 @@ void MeasurementController::stopMeasurement()
 
     const uint64_t nowNs = data::monotonicNowNs();
 
-    // 先让机构停下来，再改软件状态。
-    //
-    // 顺序不可颠倒：转台此刻可能正在运动，若先把状态置为 FAILED 而
-    // 停止命令因任何原因未发出，操作者会看到一个"已停止"的界面与一个
-    // 仍在转动的机构。先发停止命令使"界面显示停止"成为事实的**结果**
-    // 而不是对事实的**声明**。
-    turntable_.stop();
-
     // SYS-08 §7.3：9003 = 人工取消。§7.3 原文强调"SEARCH 状态可由人工终止"
     //（因为 SEARCH 不设次数上限，没有人工出口就只能等 T_task）；
     // 其余状态的人工终止未被禁止，且从安全角度必须允许。
+    //
+    // ⚠ 停止**不在这里**单独发：failWith() 是任务的唯一终止收口，
+    //    它在落失败包之前请求一次停止（幂等）。若在此处再停一次，
+    //    "tick 超时 / 恢复失败 / 人工取消"三条路径就会各插一遍停止，
+    //    失败包里的停止事实也会因插入点不同而分叉。
     failWith(data::ErrorInfo{data::kErrManualCancel, "人工取消测量任务", nowNs},
              nowNs);
 }
@@ -1144,6 +1146,23 @@ data::MeasurementRecord MeasurementController::buildRecord() const
     record.bestFrame       = bestFrame_;
     record.statistics      = statistics_;
     record.turntable       = turntable_.state();
+
+    // 停止事实（C-23）：诊断接口是**可选**能力，虚拟转台没有它。
+    // 没有诊断时保持"未请求/未交付/未观测"的默认值，而不是猜一个。
+    record.stopRequested = stopRequestedForTask_;
+    if (stopRequestedForTask_)
+    {
+        if (const auto* diag =
+                dynamic_cast<const device::ITurntableDiagnostics*>(&turntable_))
+        {
+            const data::TurntableDiagnostics d = diag->diagnostics();
+            record.stopFrameDelivered      = d.stopFrameDelivered;
+            record.stopObservedStationary  = d.stopObservedStationary;
+            record.motionUncertain         = d.motionUncertain;
+            record.turntableMotionInhibited = d.motionInhibited;
+        }
+    }
+
     record.selectedCamera  = selectedCamera_;
     record.selectedScore   = selection_.score;
     record.selectedQuality = bestQuality_;
@@ -1922,6 +1941,14 @@ void MeasurementController::failWith(data::ErrorInfo error, uint64_t nowNs)
     failureTrace_.finalFailedState = stateMachine_.state();
     failureTrace_.finalError       = error;
 
+    // 先请求规定的停止处理，再记录结果（C-23）。
+    //
+    // ⚠ 停止的**结果**不从这一次调用的返回值推断：`stop()` 只负责
+    //    把停止请求交给设备层。帧是否交付、观测窗口内是否看到静止、
+    //    是否锁存 motionUncertain，由 `ITurntableDiagnostics` 给出，
+    //    并在 saveFailurePackage() 组装记录时读取。
+    requestTurntableStopOnce();
+
     // 失败包落盘（裁决 C-007 §2.3）。
     //
     // ⚠ 必须在 transitionTo(FAILED) **之前**：onEnteredState() 在终态会
@@ -1938,6 +1965,19 @@ void MeasurementController::failWith(data::ErrorInfo error, uint64_t nowNs)
         note("无法进入 FAILED：" + stateMachine_.lastError().message
              + "（原错误：" + error.message + "）");
     }
+}
+
+void MeasurementController::requestTurntableStopOnce()
+{
+    if (stopRequestedForTask_)
+    {
+        return;
+    }
+    stopRequestedForTask_ = true;
+
+    // 只读/运动禁用模式下设备层不产生任何控制帧，stop() 是无帧 no-op；
+    // 这里仍然调用，使"失败收口请求过停止"这件事有唯一入口。
+    turntable_.stop();
 }
 
 void MeasurementController::note(const std::string& text)

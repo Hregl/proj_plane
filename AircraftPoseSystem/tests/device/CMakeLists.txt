@@ -33,3 +33,12 @@ aps_add_test(test_pelco_d
         data
         device
 )
+
+# PelcoDTurntableControllerTest.cpp 含真实 Qt 事件循环用例
+# （QtEventLoopDispatchesStopWhileMoveInFlight）：需要 QCoreApplication/QTimer。
+if(TARGET Qt5::Core)
+    target_link_libraries(test_pelco_d PRIVATE Qt5::Core)
+else()
+    message(STATUS
+        "[APS] test_pelco_d：Qt5::Core 未生成，Qt 事件循环用例将无法编译")
+endif()

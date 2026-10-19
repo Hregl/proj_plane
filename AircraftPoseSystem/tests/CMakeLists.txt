@@ -72,7 +72,7 @@ include(GoogleTest)
 #   显式列举换来的是：文件缺失时配置期直接报错。
 # ----------------------------------------------------------------------------
 function(aps_add_test name)
-    cmake_parse_arguments(ARG "" "" "SOURCES;DEPENDS" ${ARGN})
+    cmake_parse_arguments(ARG "" "WORKING_DIRECTORY" "SOURCES;DEPENDS" ${ARGN})
 
     if(NOT ARG_SOURCES)
         message(FATAL_ERROR "[APS] aps_add_test(${name})：未指定 SOURCES")
@@ -115,10 +115,17 @@ function(aps_add_test name)
     #   · 测试需要显示环境或真实设备
     #   这两种情形下会让"编译通过"这一步莫名失败。
     # 该选项 3.18 才引入，故加版本判断以兼容 min 3.16。
+    # WORKING_DIRECTORY：个别用例要读仓库级资产（如 config/）。
+    # 显式写进 CTest 注册，避免“只有从正确目录手工启动才通过”。
+    set(_wd_arg "")
+    if(ARG_WORKING_DIRECTORY)
+        set(_wd_arg WORKING_DIRECTORY "${ARG_WORKING_DIRECTORY}")
+    endif()
+
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.18)
-        gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST)
+        gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST ${_wd_arg})
     else()
-        gtest_discover_tests(${name})
+        gtest_discover_tests(${name} ${_wd_arg})
     endif()
 endfunction()
 

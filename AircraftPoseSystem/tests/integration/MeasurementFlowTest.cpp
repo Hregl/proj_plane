@@ -134,6 +134,11 @@ public:
     double elevation = 0.0;
     int    moveCount = 0;
 
+    /// stop() 被调用的次数。失败收口只应请求一次（C-23 / A3）。
+    /// 本桩不实现 ITurntableDiagnostics —— 失败包里的停止事实
+    /// 因此是"未请求诊断能力"的默认值，而不是猜测。
+    int    stopCount = 0;
+
     /// 把转台**静置**在给定角度（同时写入目标角）。
     ///
     /// ⚠ 必须同时写 targetAz_/targetEl_：state() 在"无待执行指令"时会用
@@ -203,6 +208,7 @@ public:
 
     void stop() override
     {
+        ++stopCount;
         pending_ = 0;
         targetAz_ = azimuth;
         targetEl_ = elevation;
@@ -1298,6 +1304,14 @@ TEST(MeasurementFlowTest, 用例1_任务时限_桩恒不检出在Ttask内以9001
     // SEARCH 不设次数上限，计数只反映"搜了多少次"。
     EXPECT_GT(h.controller_->attempts(S::SEARCH), 1);
     EXPECT_EQ(h.controller_->rollbackCount(), 0);
+
+    // 失败收口（C-23 / A3）：T_task 超时只请求一次停止；失败包如实
+    // 记录"请求过停止"，但不伪造"帧已交付"（虚拟转台无诊断能力）。
+    EXPECT_EQ(h.turntable_.stopCount, 1);
+    ASSERT_EQ(h.recorder_.saveCalls, 1);
+    EXPECT_TRUE(h.recorder_.lastRecord.stopRequested);
+    EXPECT_FALSE(h.recorder_.lastRecord.stopFrameDelivered);
+    EXPECT_FALSE(h.recorder_.lastRecord.stopObservedStationary);
 }
 
 // ===========================================================================
@@ -1732,6 +1746,9 @@ TEST(MeasurementFlowTest, 转台故障直接FAILED且不重试)
     // 不重试的量化体现：ALIGN 只进入过一次（尝试 1 次即失败）。
     EXPECT_LE(h.controller_->attempts(S::ALIGN), 1);
     EXPECT_EQ(h.controller_->rollbackCount(), 0);
+
+    // 硬件故障同样经过唯一收口：只请求一次停止。
+    EXPECT_EQ(h.turntable_.stopCount, 1);
 }
 
 TEST(MeasurementFlowTest, 转台指令下发失败按瞬态重试)
@@ -1826,6 +1843,15 @@ TEST(MeasurementFlowTest, 人工取消以9003终止并让转台停下)
 
     h.controller_->stopMeasurement();
     EXPECT_EQ(h.controller_->state(), S::FAILED);
+    EXPECT_EQ(h.controller_->lastError().code, aircraft::data::kErrManualCancel);
+
+    // 人工取消与超时走同一收口：只请求一次停止，失败包记录停止事实。
+    EXPECT_EQ(h.turntable_.stopCount, 1);
+    EXPECT_TRUE(h.recorder_.lastRecord.stopRequested);
+
+    // 同一任务内重复取消不得再请求停止（任务级幂等）。
+    h.controller_->stopMeasurement();
+    EXPECT_EQ(h.turntable_.stopCount, 1);
     EXPECT_EQ(h.controller_->lastError().code, aircraft::data::kErrManualCancel);
 
     // 取消之后可以重新开始（FAILED → IDLE → SEARCH）。
