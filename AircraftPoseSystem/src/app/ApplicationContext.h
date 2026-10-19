@@ -48,6 +48,8 @@
 //    不认识这些类型就没有办法装配。其他任何模块这么做都会破坏 ENG-01 §18。
 // ============================================================================
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <functional>
 #include <memory>
@@ -61,6 +63,7 @@
 #include "device/camera/ICameraBackend.h"
 #include "device/camera/MultiCameraManager.h"
 #include "device/trigger/VirtualTriggerController.h"
+#include "data/SyntheticTargetGeometry.h"
 #include "data/TurntableConfig.h"
 #include "device/turntable/ITurntableController.h"
 #include "infrastructure/config/ConfigManager.h"
@@ -76,6 +79,41 @@ namespace aircraft
 {
 namespace app
 {
+
+/// 运行形态元数据（批次 B2）。
+///
+/// ⚠ 这些量**不是算法的输入**：它们只回答"本次运行为什么形态、图像是谁
+///   渲染的、真值从哪来"。装配点（SystemInitializer）在构造适配器时填入。
+///   `truthAircraftToShip` 只用于渲染与事后比较，**不得**进入求解器。
+struct RunMetadata
+{
+    /// system.yaml 的 run_mode。
+    std::string runMode = "hardware_readonly";
+
+    /// 机型类型（C-003）。仿真为 "synthetic"；真实机型库尚未实施，
+    /// 其余形态留空（如实表达"事实尚不存在"）。
+    std::string modelType;
+
+    /// 真值来源；空表示本次运行没有独立真值。
+    std::string truthSource;
+
+    /// 逐项声明非真实组件（相机/转台/触发/场景/检测器……）。
+    std::string componentRealism;
+
+    /// 每路相机的后端名，顺序 CAM25 / CAM50 / CAM100。
+    std::vector<std::string> cameraBackends;
+
+    /// 本次**实际装载**的标定参数文本，顺序 CAM25 / CAM50 / CAM100 / RIG。
+    /// 由装配点从 `ctx_.rig->calibration()` 生成（渲染场景与求解器用的是
+    /// 同一份对象），使结果包可脱离包外文件核对内参/外参。
+    std::vector<std::string> calibrationParameters;
+
+    /// 是否存在独立真值；false 时 `truthAircraftToShip` 无意义。
+    bool hasTruth = false;
+
+    /// 渲染场景使用的真值（aircraftToShip）。
+    data::Transform truthAircraftToShip;
+};
 
 /// `application::IRecorderSink` → `infrastructure::Recorder` 的适配器。
 ///
@@ -97,8 +135,12 @@ class RecorderSinkAdapter : public application::IRecorderSink
 public:
     /// @param recorder 由 ApplicationContext 持有，生命周期长于本对象
     ///                 （析构顺序见文件头说明）。
-    explicit RecorderSinkAdapter(infrastructure::Recorder& recorder)
+    /// @param metadata 运行形态元数据；默认值即"现场只读、无真值"，
+    ///                 与批次 B 之前的行为逐字相同。
+    explicit RecorderSinkAdapter(infrastructure::Recorder& recorder,
+                                 RunMetadata metadata = {})
         : recorder_(recorder)
+        , metadata_(std::move(metadata))
     {
     }
 
@@ -112,22 +154,96 @@ public:
         // （引用计数），不复制像素，代价是三个原子操作。
         data::MeasurementRecord filled = record;
 
-        filled.calibrationId = recorder_.calibrationId();
-        filled.modelId       = recorder_.modelId();
+        // ---- 外部事实的合并（四类情形，统一按同一规则）-------------------
+        //
+        // 装配点与记录方都可能持有同一字段的值。规则只有一条：
+        //   · 装配值空、记录有值            → 保留记录值；
+        //   · 装配值有值、记录空            → 按装配权威补齐；
+        //   · 两边都有且相同                → 一致；
+        //   · 两边都有且不同                → 采用装配值，并逐条留下诊断。
+        // 冲突时**不得**把两个来源的值拼成一条身份（例如 model_id 取记录、
+        // model_type 取装配）。冲突不改写“包已发布”这一事实，但必须可见。
+        std::vector<std::string> conflicts;
+        mergeString(filled.calibrationId, recorder_.calibrationId(),
+                    "calibration_id", conflicts);
+        mergeString(filled.modelId, recorder_.modelId(),
+                    "model_id", conflicts);
+
+        // ---- 运行形态（批次 B2）-------------------------------------------
+        //
+        // ⚠ `modelType` 不再固定留空：仿真路径下装配点会给出 "synthetic"，
+        //   而 Recorder 据此判定 `model_type` 这一项"缺不缺"。空串仍表示
+        //   "类型事实不存在"（真实机型库尚未实施），不是遗漏。
+        //
+        // ⚠ 装配点没提供 modelType（非仿真路径）时保留记录值：
+        //   `RecorderAdapter.LeavesModelTypeEmptyUntilC003Lands` 的正对照
+        //   （"production" 必须活着穿过适配器）依赖这一点。
+        mergeString(filled.runMode, metadata_.runMode, "run_mode", conflicts);
+        mergeString(filled.modelType, metadata_.modelType, "model_type", conflicts);
+        mergeString(filled.truthSource, metadata_.truthSource,
+                    "truth_source", conflicts);
+        mergeString(filled.componentRealism, metadata_.componentRealism,
+                    "component_realism", conflicts);
+        mergeList(filled.cameraBackends, metadata_.cameraBackends,
+                  "camera_backends", conflicts);
+        mergeList(filled.calibrationParameters, metadata_.calibrationParameters,
+                  "calibration_parameters", conflicts);
+
+        // ---- 身份一致性：model_id / model_type / 版本必须同源 -------------
+        //
+        // 合并后三者应来自同一次装配：`recorder_` 的 modelId 与
+        // feature_version 在 SystemInitializer 中由**同一个模型对象**给出；
+        // `metadata_.modelType` 只在仿真路径、且在装载模型 id 等于合成 id
+        // 之后才被填入。这里再核一次，防止未来出现“id 是合成、类型是
+        // production”这类拼接。不一致时**不猜**：清空 model_type，
+        // 让 `missing_required_fields` 如实报缺，并留下诊断。
+        if (!filled.modelType.empty() && !filled.modelId.empty()
+            && filled.modelType == data::synthetic::modelType()
+            && filled.modelId != data::synthetic::modelId())
+        {
+            conflicts.push_back(
+                "model_type/model_id: 类型=synthetic 但 model_id=\"" +
+                filled.modelId +
+                "\"；拒绝拼装身份，model_type 置空（按必填缺失处理）");
+            filled.modelType.clear();
+        }
+
+        // 真值比较只在**解算成功**时有意义。失败包仍写入真值本身
+        // （场景的固有事实，供复盘），但不给出误差 —— 见 Recorder.cpp
+        // 中 `truth.error` 的写出条件。
+        if (metadata_.hasTruth)
+        {
+            filled.hasTruth = true;
+            filled.truthAircraftToShip = metadata_.truthAircraftToShip;
+            if (filled.task.result.success)
+            {
+                filled.truthRotationErrorDeg =
+                    rotationErrorDeg(metadata_.truthAircraftToShip.rotation,
+                                     filled.task.result.aircraftToShip.rotation);
+                const cv::Vec3d d =
+                    filled.task.result.aircraftToShip.translation
+                    - metadata_.truthAircraftToShip.translation;
+                filled.truthTranslationErrorM =
+                    std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            }
+        }
 
         // 软件版本：编译期宏（cmake/BuildOptions.cmake 注入）。
         // 这是全工程**第一处**真正读取 `APS_VERSION_*` 的地方 ——
         // 在此之前两个宏已定义但零引用（README §6 第 26 行），
         // 即 ENG-08 §16 的"版本基线可见"实际上没有实现。
-        filled.softwareVersion = std::string(APS_VERSION_STRING) + "-"
-                               + std::string(APS_VERSION_STAGE);
+        mergeString(filled.softwareVersion,
+                    std::string(APS_VERSION_STRING) + "-"
+                        + std::string(APS_VERSION_STAGE),
+                    "software_version", conflicts);
 
-        // ⚠ `modelType` 此处**留空**，不是遗漏：C-003 定义的
-        // `synthetic` / `production` 两种机型库尚未实施，
-        // `TargetModelManager` 只提供 modelId / modelVersion，没有类型概念。
-        // 留空是"事实尚不存在"的如实表达；一旦 C-003 落地，
-        // 补齐点就在这三行旁边（不要挪到控制器里 —— 它读不到模型库）。
+        // ⚠ `modelType` 的补齐点就在这里（见上方"运行形态"一段），
+        //   不挪到控制器里 —— 它读不到模型库。空串表示"类型事实不存在"：
+        //   C-003 的 `production` 机型库尚未实施，`TargetModelManager`
+        //   目前只有 modelId / modelVersion，没有类型概念；仿真路径的类型
+        //   由装配点按 `data::synthetic::modelType()` 显式给出。
 
+        filled.metadataConflicts = std::move(conflicts);
         return recorder_.save(filled);
     }
 
@@ -140,7 +256,68 @@ public:
     const std::string& lastErrorText() const { return recorder_.lastErrorText(); }
 
 private:
+    /// 合并一个字符串事实（规则见 save() 内注释）。
+    ///
+    /// `assemblyValue` 为空表示装配点没有这项事实（**不是**“事实为空”）。
+    /// 两边冲突时采用装配值并记一条诊断；不抛异常、不阻断落盘。
+    static void mergeString(std::string&              target,
+                            const std::string&        assemblyValue,
+                            const char*               field,
+                            std::vector<std::string>& conflicts)
+    {
+        if (assemblyValue.empty() || target == assemblyValue)
+        {
+            return;
+        }
+        if (target.empty())
+        {
+            target = assemblyValue;
+            return;
+        }
+        conflicts.push_back(std::string(field) + ": record=\"" + target
+                            + "\" vs assembly=\"" + assemblyValue
+                            + "\"; 采用装配值");
+        target = assemblyValue;
+    }
+
+    /// 合并一组有序事实（如每路后端、每路标定参数）。
+    ///
+    /// 整组按一个单元处理：要么保留记录整组，要么采用装配整组；
+    /// 不允许逐位置混拼（否则 CAM50 可能来自装配、CAM100 来自记录）。
+    static void mergeList(std::vector<std::string>&       target,
+                          const std::vector<std::string>& assemblyValue,
+                          const char*                     field,
+                          std::vector<std::string>&       conflicts)
+    {
+        if (assemblyValue.empty() || target == assemblyValue)
+        {
+            return;
+        }
+        if (target.empty())
+        {
+            target = assemblyValue;
+            return;
+        }
+        conflicts.push_back(std::string(field) + ": record 与 assembly 均为非空"
+                            "且整组不同；采用装配整组（不做逐位置拼接）");
+        target = assemblyValue;
+    }
+
+    /// 两个旋转之差的角度，单位 deg：`angle(R_a^T · R_b)`。
+    ///
+    /// 用矩阵迹公式而不是欧拉角逐项相减：后者在 ±180° 附近会给出
+    /// "两个几乎相同的姿态相差 360°"这类假误差，且依赖分解顺序。
+    static double rotationErrorDeg(const cv::Matx33d& a,
+                                   const cv::Matx33d& b)
+    {
+        const cv::Matx33d r = a.t() * b;
+        double c = (r(0, 0) + r(1, 1) + r(2, 2) - 1.0) * 0.5;
+        c = std::max(-1.0, std::min(1.0, c));
+        return std::acos(c) * 180.0 / CV_PI;
+    }
+
     infrastructure::Recorder& recorder_;
+    RunMetadata               metadata_;
 };
 
 /// 装配结果的持有者。**构造不做任何 I/O、不读文件、不开设备**。

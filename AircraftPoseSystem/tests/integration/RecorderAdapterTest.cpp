@@ -456,6 +456,232 @@ TEST(RecorderAdapter, LeavesModelTypeEmptyUntilC003Lands)
         << "modelType 已填上，缺项表却不是空 —— 上一半的'空'因此不可信";
 }
 
+/// 元数据合并的四类情形必须显式、可追溯；身份三要素不得跨来源拼接。
+///
+/// ⚠ 为什么不能只测“空值不覆盖”：
+///   · 装配值空、记录有值 → 保留记录值（来源由记录方负责）；
+///   · 装配值有值、记录空 → 按装配权威补齐；
+///   · 两边都有且不同   → 采用装配值，并留下诊断；
+///   · 两边都空         → 按必填规则报缺。
+///   若只修第一种，冲突会被“后写覆盖先写”悄悄吞掉，包里的值仍然合法，
+///   但读者无法知道它来自哪个来源。更糟的是把 model_id 取记录、
+///   model_type 取装配，拼出一条从未存在过的身份。
+TEST(RecorderAdapter, MetadataMergeRulesAreExplicitAndNeverStitchIdentities)
+{
+    using aircraft::app::RunMetadata;
+
+    Fixture fx("merge");
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = fx.out.path();
+
+    auto saveWith = [&](const aircraft::data::MeasurementRecord& r,
+                        const RunMetadata& meta,
+                        const std::string& modelId) -> std::string
+    {
+        Recorder rec(sys, fx.cfg.path(), "SYNTHETIC-NO-CALIBRATION",
+                     modelId, "feat_v1");
+        RecorderSinkAdapter adapter(rec, meta);
+        return adapter.save(r) ? adapter.lastPackageDir() : std::string();
+    };
+
+    auto readStrings = [](const cv::FileNode& seq) {
+        std::vector<std::string> out;
+        if (seq.isSeq())
+        {
+            for (const cv::FileNode& n : seq)
+            {
+                std::string s;
+                n >> s;
+                out.push_back(s);
+            }
+        }
+        return out;
+    };
+    auto anyContains = [](const std::vector<std::string>& v,
+                          const std::string& needle) {
+        for (const std::string& s : v)
+        {
+            if (s.find(needle) != std::string::npos)
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // ---- 情形一：装配值空，记录有值 → 保留记录值 ----
+    {
+        aircraft::data::MeasurementRecord r = recordWithSentinels();
+        r.task.taskId    = "measurement_merge_keep";
+        r.calibrationId  = "";
+        r.modelId        = "";
+        r.softwareVersion = "";
+        r.runMode        = "recorded_mode";
+        r.truthSource    = "recorded_truth";
+        r.modelType      = "production";
+
+        RunMetadata meta;  // 全部字段清空 = 装配点没有提供这些事实
+        meta.runMode.clear();
+        // truth_source 只写在 truth 块内，故需让记录走“有真值”的分支。
+        // 真值本身来自记录/装配均可；这里只考察 source 的合并。
+        meta.hasTruth = true;
+        const std::string dir = saveWith(r, meta, kAdapterModelId);
+        ASSERT_FALSE(dir.empty());
+        cv::FileStorage fs(joinPath(dir, "result.json"),
+                           cv::FileStorage::READ);
+        ASSERT_TRUE(fs.isOpened());
+        std::string v;
+        fs["run_mode"] >> v;
+        EXPECT_EQ(v, "recorded_mode") << "装配值空时不得清掉记录值";
+        fs["truth"]["source"] >> v;
+        EXPECT_EQ(v, "recorded_truth");
+        fs["model_type"] >> v;
+        EXPECT_EQ(v, "production");
+        EXPECT_EQ(readStrings(fs["metadata_conflicts"]).size(), 0u)
+            << "没有装配值就不存在冲突";
+    }
+
+    // ---- 情形二：装配值有值、记录空 → 按装配权威补齐 ----
+    {
+        aircraft::data::MeasurementRecord r = recordWithSentinels();
+        r.task.taskId     = "measurement_merge_fill";
+        r.calibrationId   = "";
+        r.modelId         = "";
+        r.softwareVersion = "";
+        r.runMode         = "";
+        r.truthSource     = "";
+        r.modelType       = "";
+
+        RunMetadata meta;
+        meta.runMode         = "simulation";
+        meta.modelType       = aircraft::data::synthetic::modelType();
+        meta.truthSource     = aircraft::data::synthetic::truthSource();
+        meta.componentRealism = "camera=virtual";
+        meta.cameraBackends  = {"virtual", "virtual", "virtual"};
+        meta.calibrationParameters = {"CAM25: id=SYNTHETIC-NO-CALIBRATION"};
+        const std::string dir = saveWith(
+            r, meta, aircraft::data::synthetic::modelId());
+        ASSERT_FALSE(dir.empty());
+        cv::FileStorage fs(joinPath(dir, "result.json"),
+                           cv::FileStorage::READ);
+        ASSERT_TRUE(fs.isOpened());
+        std::string v;
+        fs["run_mode"] >> v;
+        EXPECT_EQ(v, "simulation");
+        fs["model_type"] >> v;
+        EXPECT_EQ(v, "synthetic");
+        fs["model_id"] >> v;
+        EXPECT_EQ(v, aircraft::data::synthetic::modelId());
+        EXPECT_EQ(readStrings(fs["calibration_parameters"]).size(), 1u);
+        EXPECT_EQ(readStrings(fs["metadata_conflicts"]).size(), 0u);
+    }
+
+    // ---- 情形三：两边都有且不同 → 采用装配值并留下诊断 ----
+    {
+        aircraft::data::MeasurementRecord r = recordWithSentinels();
+        r.task.taskId     = "measurement_merge_conflict";
+        r.calibrationId   = "RECORD-CALIB";
+        r.modelId         = "RECORD-MODEL";
+        r.softwareVersion = "RECORD-VERSION";
+        r.runMode         = "recorded_mode";
+        r.modelType       = "production";
+
+        RunMetadata meta;
+        meta.runMode   = "simulation";
+        meta.modelType = aircraft::data::synthetic::modelType();
+        const std::string dir = saveWith(
+            r, meta, aircraft::data::synthetic::modelId());
+        ASSERT_FALSE(dir.empty());
+        cv::FileStorage fs(joinPath(dir, "result.json"),
+                           cv::FileStorage::READ);
+        ASSERT_TRUE(fs.isOpened());
+
+        std::string v;
+        fs["run_mode"] >> v;
+        EXPECT_EQ(v, "simulation") << "冲突时应采用装配值";
+        fs["model_type"] >> v;
+        EXPECT_EQ(v, "synthetic") << "冲突时应采用装配值";
+        fs["model_id"] >> v;
+        EXPECT_EQ(v, aircraft::data::synthetic::modelId())
+            << "model_id 必须采用装配值，不能与记录值拼接";
+
+        const std::vector<std::string> conflicts =
+            readStrings(fs["metadata_conflicts"]);
+        EXPECT_TRUE(anyContains(conflicts, "model_type"))
+            << "model_type 冲突没有留下诊断";
+        EXPECT_TRUE(anyContains(conflicts, "model_id"))
+            << "model_id 冲突没有留下诊断";
+        EXPECT_TRUE(anyContains(conflicts, "run_mode"));
+        // 诊断必须同时给出两个来源的值，而不是只说“冲突了”。
+        EXPECT_TRUE(anyContains(conflicts, "RECORD-MODEL"));
+        EXPECT_TRUE(anyContains(conflicts, "production"));
+    }
+
+    // ---- 情形四：两边都空 → 必填规则报缺，而不是编一个值 ----
+    {
+        aircraft::data::MeasurementRecord r = recordWithSentinels();
+        r.task.taskId     = "measurement_merge_empty";
+        r.calibrationId   = "";
+        r.modelId         = "";
+        r.softwareVersion = "";
+        r.runMode         = "";
+        r.truthSource     = "";
+        r.modelType       = "";
+
+        RunMetadata meta;
+        meta.runMode.clear();
+        const std::string dir = saveWith(r, meta, "");
+        ASSERT_FALSE(dir.empty());
+        cv::FileStorage fs(joinPath(dir, "result.json"),
+                           cv::FileStorage::READ);
+        ASSERT_TRUE(fs.isOpened());
+        std::string v;
+        fs["model_type"] >> v;
+        EXPECT_TRUE(v.empty()) << "两边都空时不得编造 model_type：" << v;
+        const std::vector<std::string> missing =
+            readStrings(fs["missing_required_fields"]);
+        EXPECT_TRUE(anyContains(missing, "model_type"));
+    }
+
+    // ---- 身份三要素不得跨资产拼接 ----
+    //
+    // 装配点给出 model_id=production_xxx，却声称 model_type=synthetic：
+    // 这是两个不同资产的字段。适配器不得写出 `production_xxx + synthetic`
+    // 这种从未存在过的组合；应清空 model_type 并留下诊断，让必填规则报缺。
+    {
+        aircraft::data::MeasurementRecord r = recordWithSentinels();
+        r.task.taskId     = "measurement_merge_stitch";
+        r.calibrationId   = "";
+        r.modelId         = "";
+        r.softwareVersion = "";
+        r.runMode         = "";
+        r.truthSource     = "";
+        r.modelType       = "";
+
+        RunMetadata meta;
+        meta.runMode   = "simulation";
+        meta.modelType = aircraft::data::synthetic::modelType();
+        const std::string dir = saveWith(r, meta, "production_aircraft_xxx");
+        ASSERT_FALSE(dir.empty());
+        cv::FileStorage fs(joinPath(dir, "result.json"),
+                           cv::FileStorage::READ);
+        ASSERT_TRUE(fs.isOpened());
+        std::string v;
+        fs["model_id"] >> v;
+        EXPECT_EQ(v, "production_aircraft_xxx");
+        fs["model_type"] >> v;
+        EXPECT_TRUE(v.empty())
+            << "不同资产的 model_id 与 model_type 被拼成了一条身份：" << v;
+        const std::vector<std::string> conflicts =
+            readStrings(fs["metadata_conflicts"]);
+        EXPECT_TRUE(anyContains(conflicts, "拒绝拼装身份"));
+        const std::vector<std::string> missing =
+            readStrings(fs["missing_required_fields"]);
+        EXPECT_TRUE(anyContains(missing, "model_type"))
+            << "拒绝拼接后必须按必填缺失如实登记";
+    }
+}
+
 /// 适配器**不得**动测量事实。
 ///
 /// ⚠ 与上一条互补：上一条防"该改的没改"，这一条防"不该改的改了"。

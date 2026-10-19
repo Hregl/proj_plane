@@ -39,6 +39,7 @@
 // ============================================================================
 
 #include <string>
+#include <vector>
 
 #include "data/CameraRole.h"
 #include "data/FailureTrace.h"
@@ -46,6 +47,7 @@
 #include "data/MeasurementStatistics.h"
 #include "data/MeasurementTask.h"
 #include "data/MultiCameraFrame.h"
+#include "data/Transform.h"
 #include "data/TurntableState.h"
 
 namespace aircraft
@@ -141,6 +143,63 @@ struct MeasurementRecord
     /// 没有它，历史结果无法与"当时的算法行为"对应——
     /// 而算法会改，结果数值也会随之改变。
     std::string softwareVersion;
+
+    // ---- 运行形态与真值对照（批次 B2）------------------------------------
+    //
+    // ⚠ 下面这些字段**不是算法的输入**。它们由装配点（SystemInitializer）
+    //   在落盘前填入，只回答"这次结果是哪一种形态跑出来的、离独立真值多远"。
+    //   任何把 truthAircraftToShip 交给求解器的做法都会把验收变成
+    //   "把答案抄回答案"；本工程的数据流中不存在这样的路径
+    //   （求解器只接收图像、模型与标定）。
+
+    /// system.yaml 的 run_mode（"simulation" / "hardware_readonly"）。
+    std::string runMode;
+
+    /// 真值来源；空表示本次运行没有独立真值（现场只读运行时即如此）。
+    std::string truthSource;
+
+    /// 逐项声明本次运行中**非真实**的组件（相机/转台/触发/检测器……），
+    /// 避免把 COMPLETE 误读为真实测量链已验收。
+    std::string componentRealism;
+
+    /// 每路相机的后端名（"virtual" / "imv"），按 CAM25 / CAM50 / CAM100
+    /// 顺序。空表示未填（旧记录）。
+    std::vector<std::string> cameraBackends;
+
+    /// 本次实际装载的标定**参数**（不是标识字符串），四项按
+    /// CAM25 / CAM50 / CAM100 / RIG 顺序，每项是稳定顺序的文本。
+    ///
+    /// ⚠ 为什么在 `calibrationId` 之外还要写参数：
+    ///   标识相同不能证明参数相同。仿真配置写的是 `synthetic-m1`，而实际
+    ///   装载的是 `SYNTHETIC-NO-CALIBRATION` 的默认内参；若只写标识，
+    ///   复核者无法核对“渲染与求解用的是同一份内参”。写实际参数后，
+    ///   结果包自身即可回答这个问题，不依赖包外文件。
+    std::vector<std::string> calibrationParameters;
+
+    /// 元数据合并时发现的冲突（逐条含字段名、记录值、装配值与处置）。
+    ///
+    /// ⚠ 合并规则（四类，不得省略）：
+    ///   · 装配值空 + 记录有值       → 保留记录值（来源由记录方负责）；
+    ///   · 装配值有值 + 记录空       → 按装配权威补齐；
+    ///   · 两边都有值且相同          → 视为一致；
+    ///   · 两边都有值且不同          → **采用装配值**并在此留下诊断，
+    ///                                 绝不把两个来源的字段拼成一条身份。
+    /// 空数组表示本次没有发生冲突；有冲突不改变“包已发布”，但读者必须
+    /// 能看出哪个字段、哪两个值、最后采用了谁。
+    std::vector<std::string> metadataConflicts;
+
+    /// 是否存在独立真值。false 时下面三个字段无意义。
+    bool hasTruth = false;
+
+    /// 渲染场景使用的独立真值（aircraftToShip）。
+    Transform truthAircraftToShip;
+
+    /// 解算结果与真值的旋转差（两旋转矩阵的夹角），单位 **deg**。
+    /// 在落盘前由适配器计算，**不参与** VALIDATE 判定。
+    double truthRotationErrorDeg = 0.0;
+
+    /// 解算结果与真值的平移差，单位 **m**。
+    double truthTranslationErrorM = 0.0;
 };
 
 }  // namespace data

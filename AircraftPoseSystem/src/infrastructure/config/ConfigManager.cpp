@@ -447,6 +447,10 @@ bool ConfigManager::load(const std::string& configDir)
         system_.modelDir  = r.text(g["model_dir"], "model_dir", "models");
         system_.logLevel  = r.integer(g["log_level"], "log_level", 0);
 
+        // 运行模式（批次 B2）。缺键取 hardware_readonly 并登记默认值：
+        // 既有的现场配置在升级后不会被静默当成 simulation。
+        system_.runMode = r.text(g["run_mode"], "run_mode", "hardware_readonly");
+
         if (system_.logDir.empty())    { errors_.push_back("system.log_dir 为空"); }
         if (system_.outputDir.empty()) { errors_.push_back("system.output_dir 为空"); }
         if (system_.modelDir.empty())  { errors_.push_back("system.model_dir 为空"); }
@@ -455,6 +459,15 @@ bool ConfigManager::load(const std::string& configDir)
             errors_.push_back("system.log_level 越界：" +
                               std::to_string(system_.logLevel) +
                               "（允许 0=DEBUG 1=INFO 2=WARN 3=ERROR 4=OFF）");
+        }
+        if (system_.runMode != "simulation"
+            && system_.runMode != "hardware_readonly")
+        {
+            errors_.push_back(
+                "system.run_mode 非法：" + system_.runMode +
+                "（允许 \"simulation\" / \"hardware_readonly\"）。"
+                "本版不实现 hardware_controlled / formal_measurement，"
+                "故这两个取值也不接受；运动授权不属于配置项。");
         }
     }
 

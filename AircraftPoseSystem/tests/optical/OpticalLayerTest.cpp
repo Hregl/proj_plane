@@ -38,6 +38,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -138,6 +139,32 @@ protected:
         removeFile("cam50_to_rig.yaml");
         removeFile("cam100_to_rig.yaml");
         removeFile("rig_to_ship.yaml");
+    }
+
+    /// 用任意矩阵覆写一个内参文件（R10 非法标定用例）。
+    void writeIntrinsicRaw(const std::string& name, int w, int h,
+                           const cv::Mat& k, const cv::Mat& d)
+    {
+        cv::FileStorage fs(path(name), cv::FileStorage::WRITE);
+        fs << "image_width"    << w;
+        fs << "image_height"   << h;
+        fs << "camera_matrix"  << k;
+        fs << "distortion"     << d;
+    }
+
+    /// 用任意旋转/平移覆写一个外参文件（R10 非法标定用例）。
+    void writeExtrinsicRaw(const std::string& name,
+                           const cv::Mat& rotation,
+                           const cv::Mat& translation,
+                           const std::string& calibId = std::string())
+    {
+        cv::FileStorage fs(path(name), cv::FileStorage::WRITE);
+        if (!calibId.empty())
+        {
+            fs << "calibration_id" << calibId;
+        }
+        fs << "rotation"       << rotation;
+        fs << "translation_mm" << translation;
     }
 
 private:
@@ -385,6 +412,148 @@ TEST_F(CalibrationDirFixture, MissingRigToShipFileFailsStartup)
     // 都停在 rig 系（相机机架）而非舰体系 —— 数值上看起来仍然"合理"。
     EXPECT_FALSE(cm.load(dir()));
     EXPECT_FALSE(cm.loaded());
+}
+
+// ---------------------------------------------------------------------------
+//  R10：非法标定必须拒绝装载，不得回退单位阵/零平移
+// ---------------------------------------------------------------------------
+
+TEST_F(CalibrationDirFixture, RejectsNonOrthogonalRotation)
+{
+    // 剪切矩阵：3x3、有限、det 恰为 +1，但 R·Rᵀ ≠ I。
+    // 用 det=1 的构造是为了**单独**检验正交性判据：若误写成 det=0 的
+    // 欧拉角矩阵，det 判据也会拦下它，正交性断言就失去鉴别力。
+    cv::Mat bad = (cv::Mat_<double>(3, 3) << 1.0, 0.5, 0.0,
+                                             0.0, 1.0, 0.0,
+                                             0.0, 0.0, 1.0);
+    writeExtrinsicRaw("cam25_to_rig.yaml", bad,
+                      (cv::Mat_<double>(3, 1) << 0.0, 0.0, 0.0));
+
+    CalibrationManager cm;
+    EXPECT_FALSE(cm.load(dir()));
+    EXPECT_FALSE(cm.loaded());
+    EXPECT_NE(cm.lastErrorText().find("正交"), std::string::npos);
+
+    // 拒绝必须是**整体**拒绝：不得留下“标识为空但内部已是单位阵”的
+    // 半装载状态供下游误用。非法外参本身也不得残留在 calibration() 里。
+    EXPECT_TRUE(cm.calibrationId().empty())
+        << "非法标定不得留下可被当作有效版本的标识";
+    EXPECT_DOUBLE_EQ(cm.calibration().cam25.cameraToRig.rotation(0, 1), 0.0)
+        << "非法外参（剪切项 0.5）残留在 calibration() 中";
+}
+
+TEST_F(CalibrationDirFixture, RejectsReflectionRotation)
+{
+    // 正交但 det = -1：这是镜面反射，不是旋转。
+    cv::Mat reflection = (cv::Mat_<double>(3, 3) << 1.0, 0.0, 0.0,
+                                                    0.0, 1.0, 0.0,
+                                                    0.0, 0.0, -1.0);
+    writeExtrinsicRaw("cam25_to_rig.yaml", reflection,
+                      (cv::Mat_<double>(3, 1) << 0.0, 0.0, 0.0));
+
+    CalibrationManager cm;
+    EXPECT_FALSE(cm.load(dir()));
+    EXPECT_NE(cm.lastErrorText().find("det"), std::string::npos);
+}
+
+TEST_F(CalibrationDirFixture, RejectsNonFiniteTranslation)
+{
+    cv::Mat rot = (cv::Mat_<double>(3, 3) << 1.0, 0.0, 0.0,
+                                             0.0, 1.0, 0.0,
+                                             0.0, 0.0, 1.0);
+    const double inf = std::numeric_limits<double>::infinity();
+    cv::Mat t = (cv::Mat_<double>(3, 1) << inf, 0.0, 0.0);
+    writeExtrinsicRaw("cam25_to_rig.yaml", rot, t);
+
+    CalibrationManager cm;
+    EXPECT_FALSE(cm.load(dir()));
+    EXPECT_NE(cm.lastErrorText().find("非有限"), std::string::npos);
+}
+
+TEST_F(CalibrationDirFixture, RejectsNonPositiveFocalLength)
+{
+    cv::Mat k = (cv::Mat_<double>(3, 3) << 0.0, 0.0, 640.0,
+                                           0.0, 1000.0, 512.0,
+                                           0.0, 0.0, 1.0);
+    cv::Mat d = cv::Mat::zeros(1, 5, CV_64F);
+    writeIntrinsicRaw("cam25.yaml", 1280, 1024, k, d);
+
+    CalibrationManager cm;
+    EXPECT_FALSE(cm.load(dir()));
+    EXPECT_NE(cm.lastErrorText().find("fx/fy"), std::string::npos);
+}
+
+TEST_F(CalibrationDirFixture, RejectsBadHomogeneousRow)
+{
+    cv::Mat k = (cv::Mat_<double>(3, 3) << 1000.0, 0.0, 640.0,
+                                           0.0, 1000.0, 512.0,
+                                           0.1, 0.0, 1.0);
+    cv::Mat d = cv::Mat::zeros(1, 5, CV_64F);
+    writeIntrinsicRaw("cam25.yaml", 1280, 1024, k, d);
+
+    CalibrationManager cm;
+    EXPECT_FALSE(cm.load(dir()));
+    EXPECT_NE(cm.lastErrorText().find("齐次末行"), std::string::npos);
+}
+
+TEST_F(CalibrationDirFixture, RejectsPrincipalPointOutsideImage)
+{
+    cv::Mat k = (cv::Mat_<double>(3, 3) << 1000.0, 0.0, 5000.0,
+                                           0.0, 1000.0, 512.0,
+                                           0.0, 0.0, 1.0);
+    cv::Mat d = cv::Mat::zeros(1, 5, CV_64F);
+    writeIntrinsicRaw("cam25.yaml", 1280, 1024, k, d);
+
+    CalibrationManager cm;
+    EXPECT_FALSE(cm.load(dir()));
+    EXPECT_NE(cm.lastErrorText().find("主点"), std::string::npos);
+}
+
+TEST_F(CalibrationDirFixture, RejectsNonFiniteDistortion)
+{
+    cv::Mat k = (cv::Mat_<double>(3, 3) << 1000.0, 0.0, 640.0,
+                                           0.0, 1000.0, 512.0,
+                                           0.0, 0.0, 1.0);
+    const double inf = std::numeric_limits<double>::infinity();
+    cv::Mat d = (cv::Mat_<double>(1, 5) << inf, 0.0, 0.0, 0.0, 0.0);
+    writeIntrinsicRaw("cam25.yaml", 1280, 1024, k, d);
+
+    CalibrationManager cm;
+    EXPECT_FALSE(cm.load(dir()));
+    EXPECT_NE(cm.lastErrorText().find("非有限"), std::string::npos);
+}
+
+TEST_F(CalibrationDirFixture, RejectsWrongShapeCameraMatrix)
+{
+    cv::Mat k = (cv::Mat_<double>(2, 3) << 1000.0, 0.0, 640.0,
+                                           0.0, 1000.0, 512.0);
+    cv::Mat d = cv::Mat::zeros(1, 5, CV_64F);
+    writeIntrinsicRaw("cam25.yaml", 1280, 1024, k, d);
+
+    CalibrationManager cm;
+    EXPECT_FALSE(cm.load(dir()));
+    EXPECT_NE(cm.lastErrorText().find("3x3"), std::string::npos);
+}
+
+TEST_F(CalibrationDirFixture, MissingDistortionWarnsButStillLoads)
+{
+    // 缺畸变系数是"显式的针孔假设"，不是非法值：允许装载但必须留痕。
+    cv::Mat k = (cv::Mat_<double>(3, 3) << 1000.0, 0.0, 640.0,
+                                           0.0, 1000.0, 512.0,
+                                           0.0, 0.0, 1.0);
+    writeIntrinsicRaw("cam25.yaml", 1280, 1024, k, cv::Mat());
+
+    CalibrationManager cm;
+    ASSERT_TRUE(cm.load(dir())) << cm.lastErrorText();
+    bool warned = false;
+    for (const std::string& w : cm.lastWarnings())
+    {
+        if (w.find("distortion 缺失") != std::string::npos)
+        {
+            warned = true;
+        }
+    }
+    EXPECT_TRUE(warned);
 }
 
 TEST(CalibrationManagerTest, EmptyDirFailsStartup)

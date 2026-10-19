@@ -36,6 +36,7 @@
 
 #include <gtest/gtest.h>
 
+#include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -145,6 +146,32 @@ std::vector<unsigned char> readBytes(const std::string& path)
     std::ifstream in(path, std::ios::binary);
     return std::vector<unsigned char>((std::istreambuf_iterator<char>(in)),
                                       std::istreambuf_iterator<char>());
+}
+
+/// 目录下的条目名（不含 "." / ".."），已排序。
+///
+/// R11 用两条事实判事务是否收尾：
+///   · 成功 ⇒ 目录里**只有**最终结果包；
+///   · 失败 ⇒ 目录里**什么都没有**（既无目标目录，也无 `.aps_tmp_*`）。
+std::vector<std::string> listNames(const std::string& dir)
+{
+    std::vector<std::string> names;
+    DIR* d = ::opendir(dir.c_str());
+    if (d == nullptr)
+    {
+        return names;
+    }
+    while (const dirent* entry = ::readdir(d))
+    {
+        const std::string name = entry->d_name;
+        if (name != "." && name != "..")
+        {
+            names.push_back(name);
+        }
+    }
+    ::closedir(d);
+    std::sort(names.begin(), names.end());
+    return names;
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +327,17 @@ aircraft::data::MeasurementRecord fixtureFailureRecord()
                         300ULL, r.failure.firstError});
 
     return r;
+}
+
+/// 本次 save **尝试发布**的最终目录（不经过 Recorder 的状态）。
+///
+/// R11 之后 `lastPackageDir()` 在失败时为空（终态目录从未出现）——
+/// 因此"失败时没有写出某个文件"的判据必须落到**目标路径本身不存在**上，
+/// 而不是 `joinPath("", "cam25.raw")` 这种恒为真的相对路径。
+std::string targetDirOf(const TempDir& out,
+                        const aircraft::data::MeasurementRecord& record)
+{
+    return joinPath(out.path(), record.task.taskId);
 }
 
 /// 记录 → 落盘 → 返回结果目录。失败时返回空串。
@@ -604,8 +642,12 @@ TEST(RecorderPackageTest, Mono12FrameWithoutRawPayloadIsRefusedNotSilentlyDowngr
         << "12 位帧丢了原始载荷却保存成功 —— 这份包里的 cam25.raw 其实是一张"
            "8U 显示图，而元数据按 Mono12 描述它（事后**无法**分辨）";
 
-    const std::string dir = rec.lastPackageDir();
-    ASSERT_FALSE(dir.empty());
+    // R11：失败时**没有发布**任何目录 —— lastPackageDir 为空，
+    // 目标路径本身不存在。
+    const std::string dir = targetDirOf(out, record);
+    EXPECT_TRUE(rec.lastPackageDir().empty())
+        << "保存失败却报告了一个结果目录：R11 事务被绕过";
+    ASSERT_FALSE(pathExists(dir)) << "失败包被发布了：" << dir;
 
     // 错误必须**点名是哪一路、为什么** —— 只说"保存失败"就无法排查。
     EXPECT_TRUE(rec.lastErrorText().find("cam25.raw") != std::string::npos)
@@ -891,7 +933,8 @@ TEST(RecorderPackageTest, RawCarrierShorterThanItsOwnDeclaredLengthIsRefused)
     EXPECT_FALSE(rec.save(record));
     EXPECT_TRUE(rec.lastErrorText().find("载体") != std::string::npos)
         << rec.lastErrorText();
-    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+    EXPECT_FALSE(pathExists(joinPath(targetDirOf(out, record), "cam25.raw")))
+        << "保存失败却发布了结果目录 —— 半包（R11）";
 }
 
 // ===========================================================================
@@ -955,7 +998,8 @@ TEST(RecorderPackageTest, CompactSizeMatchesTrueButLengthActuallyWrongIsStillRef
     EXPECT_TRUE(rec.lastErrorText().find("expected_compact_bytes=") !=
                 std::string::npos)
         << rec.lastErrorText();
-    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+    EXPECT_FALSE(pathExists(joinPath(targetDirOf(out, record), "cam25.raw")))
+        << "保存失败却发布了结果目录 —— 半包（R11）";
 }
 
 TEST(RecorderPackageTest, CompactSizeMatchesFalseWhileFourFactsAgreeIsStillRefused)
@@ -983,7 +1027,8 @@ TEST(RecorderPackageTest, CompactSizeMatchesFalseWhileFourFactsAgreeIsStillRefus
     EXPECT_TRUE(rec.lastErrorText().find("compact_size_matches=false") !=
                 std::string::npos)
         << rec.lastErrorText();
-    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+    EXPECT_FALSE(pathExists(joinPath(targetDirOf(out, record), "cam25.raw")))
+        << "保存失败却发布了结果目录 —— 半包（R11）";
 }
 
 TEST(RecorderPackageTest, BigEndianDeclaredRawPayloadIsRefused)
@@ -1009,7 +1054,8 @@ TEST(RecorderPackageTest, BigEndianDeclaredRawPayloadIsRefused)
     EXPECT_FALSE(rec.save(record));
     EXPECT_TRUE(rec.lastErrorText().find("BigEndian") != std::string::npos)
         << rec.lastErrorText();
-    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+    EXPECT_FALSE(pathExists(joinPath(targetDirOf(out, record), "cam25.raw")))
+        << "保存失败却发布了结果目录 —— 半包（R11）";
 }
 
 TEST(RecorderPackageTest, Mono8DeclaredWithThreeChannelImageIsRefused)
@@ -1044,7 +1090,8 @@ TEST(RecorderPackageTest, Mono8DeclaredWithThreeChannelImageIsRefused)
         << rec.lastErrorText();
     EXPECT_TRUE(rec.lastErrorText().find("Mono8") != std::string::npos)
         << rec.lastErrorText();
-    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+    EXPECT_FALSE(pathExists(joinPath(targetDirOf(out, record), "cam25.raw")))
+        << "保存失败却发布了结果目录 —— 半包（R11）";
 }
 
 TEST(RecorderPackageTest, FallbackMetadataDescribesTheImageActuallyWritten)
@@ -1162,7 +1209,8 @@ TEST(RecorderPackageTest, RawPolicyContradictingCaptureFormatIsRefused)
     EXPECT_FALSE(rec.save(record))
         << "rawPolicy 与 captureFormat 矛盾必须拒绝保存，"
            "而不是把矛盾的元数据写进结果包";
-    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+    EXPECT_FALSE(pathExists(joinPath(targetDirOf(out, record), "cam25.raw")))
+        << "保存失败却发布了结果目录 —— 半包（R11）";
 }
 
 TEST(RecorderPackageTest, RawFormatContradictingCaptureFormatIsRefused)
@@ -1207,7 +1255,8 @@ TEST(RecorderPackageTest, RawFormatContradictingCaptureFormatIsRefused)
 
     EXPECT_FALSE(rec.save(record))
         << "载荷声明的格式与帧的采集格式不一致必须拒绝保存";
-    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+    EXPECT_FALSE(pathExists(joinPath(targetDirOf(out, record), "cam25.raw")))
+        << "保存失败却发布了结果目录 —— 半包（R11）";
 }
 
 TEST(RecorderPackageTest, MsbAlignedRawPayloadIsRefused)
@@ -1241,7 +1290,8 @@ TEST(RecorderPackageTest, MsbAlignedRawPayloadIsRefused)
     EXPECT_FALSE(rec.save(record))
         << "声明为 MsbAligned 的载荷本批不支持，必须拒绝保存 —— "
            "按低位对齐去读它会得到整体偏移的数值，而图看起来是正常的";
-    EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), "cam25.raw")));
+    EXPECT_FALSE(pathExists(joinPath(targetDirOf(out, record), "cam25.raw")))
+        << "保存失败却发布了结果目录 —— 半包（R11）";
 }
 
 // ===========================================================================
@@ -1264,7 +1314,12 @@ TEST(RecorderPackageTest, MissingFieldTableFollowsTheRecordNotAHardcodedList)
     // 同一份记录，只把 modelType 填上 → 缺项表必须变空。
     // 这是与"写死的 6 项清单"的关键区别：旧实现无论记录里有没有值，
     // 都报同样一份清单，于是"这次真的缺"与"本来就没有承载者"无法区分。
-    record.modelType = "production";
+    //
+    // ⚠ R11 起同一 taskId 的第二个包会被拒绝（不覆盖已有结果），故这里
+    //   显式换一个任务号 —— 本用例比较的是两份**不同任务**的缺项表，
+    //   而不是在验证"覆盖"。
+    record.modelType  = "production";
+    record.task.taskId = "measurement_123456790";
     const std::string dirB = saveRecord(out, "config", record);
     ASSERT_FALSE(dirB.empty());
 
@@ -1723,8 +1778,8 @@ TEST(RecorderPackageTest, FrameCarryingDataInTheWrongSlotIsRefused)
         // 元数据被拒"的包是最坏的一种（它看起来完整）。
         for (const char* raw : {"cam25.raw", "cam50.raw", "cam100.raw"})
         {
-            EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), raw)))
-                << raw << " 在拒绝之前就被写出来了";
+            EXPECT_FALSE(pathExists(joinPath(targetDirOf(out, record), raw)))
+                << raw << " 在拒绝之前就被写出来了（目标目录不应存在）";
         }
     }
 
@@ -1754,8 +1809,8 @@ TEST(RecorderPackageTest, FrameCarryingDataInTheWrongSlotIsRefused)
         // 否则会留下一份"两路合法、一路按槽位写错了"的包。
         for (const char* raw : {"cam25.raw", "cam50.raw", "cam100.raw"})
         {
-            EXPECT_FALSE(pathExists(joinPath(rec.lastPackageDir(), raw)))
-                << raw << " 在拒绝之前就被写出来了";
+            EXPECT_FALSE(pathExists(joinPath(targetDirOf(out, record), raw)))
+                << raw << " 在拒绝之前就被写出来了（目标目录不应存在）";
         }
     }
 
@@ -1985,4 +2040,158 @@ TEST(RecorderPackageTest, Mono10FrameIsSavedWithItsOwnBitDepthAndDecodesPerPosit
                    "元数据声明的位深与实际做的位移不一致（>>2 写成了 >>4）";
         }
     }
+}
+
+// ===========================================================================
+//  10 R11 保存事务：失败不发布半包、不覆盖已有结果
+// ===========================================================================
+//
+//  ⚠ 这三条判的是**文件系统里的事实**，不是返回值：
+//    · 失败 ⇒ 目标目录不存在、暂存目录也被清理（输出目录为空）；
+//    · 已存在 ⇒ 旧包的**字节不变**，本次保存不发布；
+//    · 成功 ⇒ 目录里只有最终包，没有 `.aps_tmp_*` 残留。
+//    只断言 save() 的返回值无法区分"从未发布"与"发布了然后删掉一半"。
+
+TEST(RecorderPackageTest, FailedSaveLeavesNeitherFinalNorStagingDirectory)
+{
+    TempDir out("r11fail");
+
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    // 有数据的帧放在错误槽位 ⇒ writeResultJson 在写下任何文件之前拒绝。
+    // 本用例复核的不是"拒绝"（已有专门用例），而是**拒绝之后文件系统的样子**：
+    // 目标目录不得出现，暂存目录不得残留。
+    record.bestFrame.cam50.role = CameraRole::CAM25;
+
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+    Recorder rec(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+
+    ASSERT_FALSE(rec.save(record));
+    EXPECT_TRUE(rec.lastPackageDir().empty())
+        << "失败时不应报告结果目录（目标目录从未发布）";
+    EXPECT_FALSE(pathExists(targetDirOf(out, record)))
+        << "保存失败却发布了目标目录 —— 半包（R11）";
+
+    const std::vector<std::string> entries = listNames(out.path());
+    EXPECT_TRUE(entries.empty())
+        << "输出目录残留 " << entries.size()
+        << " 个条目（暂存目录未清理，或目标目录被发布）";
+}
+
+TEST(RecorderPackageTest, ExistingPackageIsNeverOverwritten)
+{
+    TempDir out("r11exists");
+
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const std::string target = targetDirOf(out, record);
+
+    // ---- 先放一份"上一次测量"的包（只放 result.json 即可）----
+    ASSERT_EQ(::mkdir(target.c_str(), 0755), 0);
+    const std::string sentinel = joinPath(target, "result.json");
+    {
+        std::ofstream s(sentinel, std::ios::out | std::ios::trunc);
+        ASSERT_TRUE(s.is_open());
+        s << "{\"package\":\"OLD\"}\n";
+    }
+    ASSERT_TRUE(pathExists(sentinel));
+    const std::vector<unsigned char> before = readBytes(sentinel);
+
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+    Recorder rec(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+
+    EXPECT_FALSE(rec.save(record))
+        << "目标结果目录已存在时必须失败，而不是覆盖已有结果";
+    EXPECT_NE(rec.lastErrorText().find("拒绝覆盖"), std::string::npos)
+        << rec.lastErrorText();
+    EXPECT_TRUE(rec.lastPackageDir().empty());
+
+    // ---- 旧包逐字节未变 ----
+    const std::vector<unsigned char> after = readBytes(sentinel);
+    EXPECT_TRUE(before == after) << "已有结果被覆盖了";
+    EXPECT_NE(std::string(after.begin(), after.end()).find("OLD"),
+              std::string::npos);
+
+    // ---- 本次的暂存目录已清理：输出目录里只剩旧包 ----
+    const std::vector<std::string> entries = listNames(out.path());
+    ASSERT_EQ(entries.size(), 1u)
+        << "rename 失败后暂存目录没有清理，或本次写进了已有包";
+    EXPECT_EQ(entries[0], record.task.taskId);
+}
+
+/// ⚠ 这一条与上面"旧包非空"的用例分工不同，不能合并：
+///   普通 `rename()` 改名到一个**非空**目录同样会以 ENOTEMPTY 失败 ——
+///   所以只有"目标是一个**空目录**"时，`rename()` 会成功并**替换**它，
+///   而 `RENAME_NOREPLACE` 会失败。空目录并非假想：旧版本失败保存、
+///   外部脚本预建目录、或上次清理只留下了目录本身，都会产生它。
+///   本用例是"不覆盖"判据从 `rename` 升到 `renameat2(RENAME_NOREPLACE)`
+///   的**唯一**鉴别点。
+TEST(RecorderPackageTest, ExistingEmptyDirectoryIsNotReplaced)
+{
+    TempDir out("r11emptytarget");
+
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    const std::string target = targetDirOf(out, record);
+    ASSERT_EQ(::mkdir(target.c_str(), 0755), 0);
+    ASSERT_TRUE(pathExists(target));
+    ASSERT_TRUE(listNames(target).empty()) << "前提：目标是一个空目录";
+
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+    Recorder rec(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+
+    EXPECT_FALSE(rec.save(record))
+        << "空目标目录同样属于'已有结果'，不得被本次发布替换";
+    EXPECT_TRUE(rec.lastPackageDir().empty());
+
+    // 目标仍是空目录，没有被写入任何文件。
+    EXPECT_TRUE(listNames(target).empty())
+        << "空目标目录被写入了内容 —— 普通 rename 替换掉了它";
+    EXPECT_EQ(listNames(out.path()).size(), 1u)
+        << "暂存目录未清理";
+}
+
+TEST(RecorderPackageTest, SuccessfulSavePublishesOnlyTheFinalDirectory)
+{
+    TempDir out("r11ok");
+
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+    Recorder rec(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+
+    ASSERT_TRUE(rec.save(record)) << rec.lastErrorText();
+    EXPECT_EQ(rec.lastPackageDir(), targetDirOf(out, record));
+    EXPECT_TRUE(pathExists(joinPath(rec.lastPackageDir(), "result.json")));
+
+    const std::vector<std::string> entries = listNames(out.path());
+    ASSERT_EQ(entries.size(), 1u)
+        << "成功发布后输出目录里还有别的条目（暂存目录残留？）";
+    EXPECT_EQ(entries[0], record.task.taskId);
+    EXPECT_EQ(entries[0].find(".aps_tmp_"), std::string::npos);
+}
+
+TEST(RecorderPackageTest, SecondSaveOfTheSameTaskCannotReplaceTheFirst)
+{
+    TempDir out("r11twice");
+
+    aircraft::data::MeasurementRecord record = fixtureRecord();
+    aircraft::data::SystemConfig sys;
+    sys.outputDir = out.path();
+
+    Recorder first(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+    ASSERT_TRUE(first.save(record)) << first.lastErrorText();
+    const std::string resultPath =
+        joinPath(first.lastPackageDir(), "result.json");
+    ASSERT_TRUE(pathExists(resultPath));
+    const std::vector<unsigned char> before = readBytes(resultPath);
+
+    Recorder second(sys, "config", record.calibrationId, record.modelId, "feat_v1");
+    EXPECT_FALSE(second.save(record))
+        << "同一任务第二次保存必须被拒绝 —— 不得替换第一次的完整结果";
+    EXPECT_TRUE(second.lastPackageDir().empty());
+
+    const std::vector<unsigned char> after = readBytes(resultPath);
+    EXPECT_TRUE(before == after) << "第一次的结果被第二次保存改写了";
+    EXPECT_EQ(listNames(out.path()).size(), 1u);
 }

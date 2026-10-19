@@ -41,6 +41,7 @@
 // ============================================================================
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -59,6 +60,8 @@ namespace aircraft
 {
 namespace device
 {
+
+class SyntheticTargetScene;
 
 /// 虚拟相机后端：无硬件时合成图像（SYS-06 §4）。
 class VirtualCameraBackend : public ICameraBackend
@@ -118,7 +121,21 @@ public:
     /// 设置合成目标相对**图像中心**的像素偏移（见 TargetOffset.h：
     /// 偏移量必须相对图像中心，否则对准判据恒真）。
     /// 默认 (0,0) 即目标已在中心。
+    ///
+    /// ⚠ 设置 `SyntheticTargetScene` 后，图像中的目标由场景投影决定，
+    ///   本偏移**不再生效**。两者是互斥的两种渲染方式。
     void setTargetPixelOffset(double dx, double dy);
+
+    /// 安装可选的合成目标场景（批次 B 的最小模拟成功流程）。
+    ///
+    /// 未设置（默认 nullptr）时本类行为完全不变：渐变 + 网格 + 矩形目标。
+    /// 设置后，`grab()` 仍画背景与中心十字，但目标改为场景按**真值位姿**
+    /// 投影出的直角 L 形 —— 图像内容与模型点表来自同一份
+    /// `data::SyntheticTargetGeometry.h`。
+    ///
+    /// ⚠ 传 nullptr 恢复默认矩形目标。
+    /// ⚠ 场景由调用方持有（`shared_ptr`），生命周期不短于本后端。
+    void setSyntheticScene(std::shared_ptr<const SyntheticTargetScene> scene);
 
     /// 设置设备时间戳相对主机时间戳的滞后，单位 ns。
     /// 用于验证 ImageFrame 的两个时间戳字段语义不同
@@ -188,6 +205,9 @@ private:
     /// 合成目标的像素偏移（相对图像中心）。
     double targetOffsetX_ = 0.0;
     double targetOffsetY_ = 0.0;
+
+    /// 可选合成场景；为空时使用默认矩形目标（见 setSyntheticScene）。
+    std::shared_ptr<const SyntheticTargetScene> syntheticScene_;
 
     /// 实际使用的图像尺寸（在构造函数中由 config_ 解析并回退）。
     int width_  = 0;

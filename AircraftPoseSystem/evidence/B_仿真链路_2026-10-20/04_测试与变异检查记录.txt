@@ -1,0 +1,191 @@
+B 批 测试与变异检查记录（2026-10-20）
+============================================================
+
+一、源码版本
+------------------------------------------------------------
+A 批固定提交：5c786b962634bb99833b49813e433dd96429c9c7
+  （[fix][turntable]: C-23 转台可信化软件修复批（待独立复核））
+B 批基线：上述 A 批提交。
+B 批源码快照：本目录随 B 批提交一同进入版本库；固定 SHA 用
+  git log -1 --format=%H -- evidence/B_仿真链路_2026-10-20
+  取得。B 批未推送远端。
+
+二、构建
+------------------------------------------------------------
+命令：
+  cmake --build build -j8          # APS_HAVE_IMVSDK=1
+  cmake --build build_nosdk -j8    # 无 SDK
+结果：两条构建树均以退出码 0 完成，日志尾部均为
+  [100%] Built target AircraftPoseSystem
+构建产物不入库。
+
+三、测试执行路径（原生与垫片分列）
+------------------------------------------------------------
+原生 GoogleTest / CTest：**未安装、未执行**。
+  CMake 在缺 GoogleTest 时短路测试目标，故本记录**不把原生路径**
+  当作已验证据。
+本次实际执行路径：GTest 垫片
+  /tmp/gtshim/build_tests.sh
+  （重建全部测试二进制；被测库由上面的构建树提供）
+逐套件单独运行，未用通配汇总：
+  LD_LIBRARY_PATH=$PWD/build/imvsdk_runtime /tmp/gtshim/<suite>
+日志：/tmp/b_final_suites.log（最终逐套件输出）
+说明：垫片只验证“能编译、断言能执行”，不等同于真实 GoogleTest
+  的完整语义；这一限制在 A 批证据中同样保留。
+
+四、逐套件用例数（总计 454，失败断言 0，异常 0）
+------------------------------------------------------------
+  AlgorithmStageTest        23
+  AlignmentControllerTest   21
+  DeviceLayerTest           83
+  OpticalLayerTest          47
+  PelcoDTest                76
+  PipelineTest              29
+  PreviewLayerTest          40
+  RecorderAdapterTest        8
+  RecorderPackageTest       29
+  StateMachineTest          27
+  flowtest                  45
+  sysinittest               26
+  ---------------------------------
+  合计                     454
+每个套件结束时均为：
+  垫片内失败断言数：0，异常用例数：0
+
+五、R08：冲突路径无重复对应，统计与实际输入一致
+------------------------------------------------------------
+用例：tests/algorithm/PipelineTest.cpp:1404
+  TEST(PosePipeline, DescriptorMatcherDoesNotDuplicateCadPointOnConflict)
+构造：A 类与 B 类落在同一像素、但三维点不同（真冲突）。
+断言：
+  · stats.totalCandidates == 2
+  · stats.droppedByConflict == 1
+  · stats.cadCount == 1，stats.textureCount == 0
+  · stats.matchCount == 1
+  · out.size() == 1（冲突时 B 类点没有被重复加入）
+  · matchCount == out.size()
+  · cadCount + textureCount == out.size()
+  · 对 out 做两两比较，不存在 (imagePoint, objectPoint) 完全相同的重复项
+结论：冲突路径输出集合无重复；统计量描述的是**实际交给 PnP 的集合**，
+  不是候选生成过程中的中间计数。
+
+六、R10：非法标定被拒绝，且没有静默换成单位阵
+------------------------------------------------------------
+用例（tests/optical/OpticalLayerTest.cpp）：
+  RejectsNonOrthogonalRotation（421）
+  RejectsReflectionRotation（445）
+  RejectsNonFiniteTranslation（459）
+  RejectsNonPositiveFocalLength（473）
+  RejectsBadHomogeneousRow（486）
+  RejectsPrincipalPointOutsideImage（499）
+  RejectsNonFiniteDistortion（512）
+  RejectsWrongShapeCameraMatrix（526）
+其中 RejectsNonOrthogonalRotation 另断言：
+  · cm.calibrationId().empty()（没有以半加载状态留下 id）
+  · cm.calibration().cam25.cameraToRig.rotation(0,1) == 0.0
+    （没有把非法旋转的一部分写进标定对象）
+判据：旋转有限、正交、det≈+1；内参形状/有限性/正焦距/齐次末行；
+  畸变与图像坐标一致。非法输入拒绝加载，不回落单位阵。
+未使用“正定”这一不适用于旋转矩阵的措辞。
+
+七、R11：写入失败不发布半包，已有结果不被覆盖
+------------------------------------------------------------
+用例（tests/integration/RecorderPackageTest.cpp）：
+  FailedSaveLeavesNeitherFinalNorStagingDirectory（2055）
+    - save() 失败后 lastPackageDir() 为空；
+    - 目标目录不存在；
+    - 输出目录为空（暂存目录 `.aps_tmp_*` 已清理）。
+  ExistingPackageIsNeverOverwritten（2081）
+    - 预先放置旧包 result.json；
+    - save() 必须失败，错误文本含“拒绝覆盖”；
+    - 旧包逐字节未变；
+    - 输出目录只剩旧包，本次暂存目录已清理。
+  ExistingEmptyDirectoryIsNotReplaced（2129）
+  SuccessfulSavePublishesOnlyTheFinalDirectory（2154）
+    - 成功包目录里只有最终包，没有暂存残留。
+  SecondSaveOfTheSameTaskCannotReplaceTheFirst（2174）
+判据落在**文件系统事实**上，不只断言 save() 返回值；
+“失败不发布半包”与“成功/失败同一保存事务”同时成立。
+本批没有承诺“断电持久性”——父目录同步等不在此结论内。
+
+八、元数据合并规则与不同源负例
+------------------------------------------------------------
+用例：tests/integration/RecorderAdapterTest.cpp:469
+  TEST(RecorderAdapter, MetadataMergeRulesAreExplicitAndNeverStitchIdentities)
+覆盖四类情形：
+  1. 装配值为空、记录有值 → 保留记录值并确认来源；
+  2. 装配有值、记录为空 → 按装配权威补齐；
+  3. 两侧都有值且冲突 → 采用装配权威，并把两侧值和字段名
+     写进 metadata_conflicts，不静默拼接；
+  4. 两侧都为空 → 按必填字段规则处理（进入 missing_required_fields）。
+另加“禁止拼装身份”负例：
+  · 记录 modelId=production_aircraft_xxx、装配 modelType=synthetic；
+  · 结果包 model_type 必须为空，metadata_conflicts 必须含
+    “拒绝拼装身份”，missing_required_fields 必须含 model_type。
+边界：字符串合并成功不等于身份有效；本用例不跨资产拼
+  model_id / model_type / 版本号。
+
+不同源启动负例：
+  tests/integration/SystemInitializerTest.cpp:2527
+  TEST(SystemInitializerTest, 场景S_模型标识相同但点表不同源时拒绝启动)
+  · 两个变体：点表整体放大 2 倍；单点移动 0.25 m；
+  · model_id 保持不变，只改内容；
+  · 断言 build 失败、错误文本含“模型标识相同不等于点表内容相同”
+    与“不同源”；
+  · 断言 ctx.recorder == nullptr、ctx.controller == nullptr，
+    把失败阶段钉在 buildAlgorithm() 的同源校验，
+    排除“启动后由 PnP 偶然报错”或无关故障让测试通过。
+边界：只证明这两个选定反例被拦下，不宣称所有错误模型都会使 PnP 失败
+  （例如模型整体缩放可能被估计平移吸收）。
+
+九、独立真值与相机参数核对（正例内）
+------------------------------------------------------------
+用例：tests/integration/SystemInitializerTest.cpp:2146
+  TEST(SystemInitializerTest, 场景S_仿真运行模式走通生产链并落盘真值对照)
+  · 真值来自预设场景 defaultTruthAircraftToShip()，不进入求解器；
+  · 包内 truth.aircraftToShip 与预设真值逐元素比对（旋转/平移）；
+  · 测试侧用 trace 公式**独立重算**旋转/平移误差，与包内 truth.error
+    在 1e-3 内一致——不复用生产误差函数；
+  · 包内 calibration_id 必须等于实际装载标定的 id，
+    即 SYNTHETIC-NO-CALIBRATION；
+  · 包内 calibration_parameters 必须含 CAM25/CAM50/CAM100/RIG 四项，
+    且 fx 等于 (1280/2)/tan(22.5°)=1545.096679919、图像 1280x1024、
+    外参单位阵；
+  · 再与求解器实际持有的 ctx_.rig->calibration() 逐项比对；
+  · 用同一份实际标定独立重建场景并投影六点，应落回设计像素
+    （480,400）…（480,500），容差 0.5 px。
+结论：渲染与求解使用的是同一份实际参数，不只是 calibration_id 字符串相同。
+
+十、变异检查（先红后绿；恢复用 Edit，未用 cp -p）
+------------------------------------------------------------
+M1  只比 model_id、不比点表内容
+    位置：src/app/SystemInitializer.cpp 的同源校验
+    预期转红：场景S_模型标识相同但点表不同源时拒绝启动
+    实测：SystemInitializerTest.cpp:2567/2570/2574/2580/2582 共 5 条红
+M2  冲突时静默保留记录值，不采用装配权威
+    位置：src/app/ApplicationContext.h 的 mergeString 冲突分支
+    预期转红：MetadataMergeRules... 的冲突情形，以及
+      OverwritesTheExternalFactsTheControllerCannotKnow 的覆盖断言
+    实测：RecorderAdapterTest.cpp:372/374/375/377/380/383/601/603/605/
+      610/612/614/616/617 共 14 条红
+M3  不记录实际标定参数
+    位置：src/app/SystemInitializer.cpp 的 runMeta.calibrationParameters
+    预期转红：正例的 calibration_parameters 断言
+    实测：SystemInitializerTest.cpp:2236
+      (calibParams.size()) == (4u) 红（1 条）
+M4  关闭“禁止拼装身份”守卫
+    位置：src/app/ApplicationContext.h 的 model_type/model_id 守卫
+    预期转红：MetadataMergeRules... 的拼装负例
+    实测：RecorderAdapterTest.cpp:673/677/680 共 3 条红
+
+恢复后核对：
+  · grep -rn "MUTATION-CHECK" src tests 无命中；
+  · 两条构建树重新构建通过；
+  · 12 个套件逐个重跑全部 0 失败（即第四节）。
+每次变异前重建被测库，再重建垫片测试，避免“垫片链接旧库”造成假绿。
+
+十一、本批结论边界
+------------------------------------------------------------
+B 批指定合成场景已完成应用级成功流程及自动结果包验证；
+通用场景适用性、测量精度、实机链路不在该结论范围内。
+文档与证据收尾后，待独立源码复核。

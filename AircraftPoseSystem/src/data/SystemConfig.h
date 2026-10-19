@@ -43,6 +43,19 @@ struct SystemConfig
     /// 日志级别。取值与 infrastructure/logger 的级别枚举一致，
     /// 加载时须做范围校验（ENG-10 §5.3：超范围启动失败）。
     int logLevel = 0;
+
+    /// 运行模式（批次 B2）。取值：
+    ///   "simulation"        —— 三路相机全虚拟 + 虚拟转台 + 虚拟触发，
+    ///                          且图像来自同一份合成几何；启动时做一致性
+    ///                          校验，任一真实部件即拒绝启动；
+    ///   "hardware_readonly" —— 现场只读运行（默认）。本模式**不**授予
+    ///                          任何运动能力，运动准入仍由 C-23 的
+    ///                          SendPolicy 固定为 ReadOnly。
+    ///
+    /// ⚠ 本字段只解决"这次运行属于哪一种形态、结果包如何标注"，
+    ///   **不是**运动授权开关。把它当成"打开真实运动"的入口是错的：
+    ///   生产装配路径上没有任何键能构造 MotionEnabled。
+    std::string runMode = "hardware_readonly";
 };
 
 }  // namespace data

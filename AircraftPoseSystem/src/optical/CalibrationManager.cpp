@@ -63,29 +63,53 @@ constexpr double kMmToM = 1.0 / 1000.0;
 /// CalibrationManager::loadDefaults() 的说明。
 constexpr double kSyntheticHorizontalFovDeg = 45.0;
 
-/// 把 cv::Mat 读成 3x3 旋转矩阵，失败时返回单位阵并记录警告。
+/// 数值校验的容差。标定文件经 YAML 文本往返后仍有 ~1e-6 的相对误差，
+/// 而把欧拉角误写成矩阵（R10 要拦的情形）误差量级为 1e-1，两者相距很远。
+constexpr double kRotationTolerance = 1e-3;
+constexpr double kHomogeneousTolerance = 1e-6;
+
+bool allFinite(const cv::Mat& m64)
+{
+    for (int r = 0; r < m64.rows; ++r)
+    {
+        const double* row = m64.ptr<double>(r);
+        for (int c = 0; c < m64.cols; ++c)
+        {
+            if (!std::isfinite(row[c]))
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/// 把 cv::Mat 读成 3x3 旋转矩阵并校验有限性/正交性/det≈+1。
 ///
-/// 用 cv::Matx33d（ENG-09 §5.1）而非 cv::Mat：
-/// Transform::rotation 的类型是 cv::Matx33d，若此处返回 cv::Mat
-/// 再隐式转换，尺寸不符时 opencv 会在运行期抛异常（而非编译期报错）。
-/// 先转成定长类型使尺寸错误在赋值处立即可见。
-cv::Matx33d readRotation(const cv::FileStorage& fs,
-                         const std::string&  context,
-                         std::vector<std::string>& warnings)
+/// R10：非法旋转**拒绝装载**，不再回退单位阵。回退单位阵会把一个
+/// 格式错误的标定变成"看起来有效"的单位外参，而所有下游数值仍然合理。
+bool readRotation(const cv::FileStorage& fs,
+                  const std::string&  context,
+                  cv::Matx33d&        out,
+                  std::string&        error)
 {
     cv::Mat m;
     fs[kFieldRotation] >> m;
 
-    if (m.rows != 3 || m.cols != 3)
+    if (m.empty() || m.rows != 3 || m.cols != 3 || m.channels() != 1)
     {
-        warnings.push_back(context + "：rotation 不是 3x3，回退为单位阵");
-        return cv::Matx33d::eye();
+        error = context + "：rotation 缺失或不是单通道 3x3";
+        return false;
     }
 
     cv::Mat m64;
     m.convertTo(m64, CV_64F);
+    if (!allFinite(m64))
+    {
+        error = context + "：rotation 含非有限值";
+        return false;
+    }
 
-    cv::Matx33d out;
     for (int r = 0; r < 3; ++r)
     {
         for (int c = 0; c < 3; ++c)
@@ -93,33 +117,168 @@ cv::Matx33d readRotation(const cv::FileStorage& fs,
             out(r, c) = m64.at<double>(r, c);
         }
     }
-    return out;
+
+    const cv::Matx33d shouldBeIdentity = out * out.t();
+    double maxOrthoError = 0.0;
+    for (int r = 0; r < 3; ++r)
+    {
+        for (int c = 0; c < 3; ++c)
+        {
+            const double expected = (r == c) ? 1.0 : 0.0;
+            maxOrthoError =
+                std::max(maxOrthoError,
+                         std::fabs(shouldBeIdentity(r, c) - expected));
+        }
+    }
+    if (maxOrthoError > kRotationTolerance)
+    {
+        error = context + "：rotation 不是正交矩阵（max |R·Rᵀ−I| = " +
+                std::to_string(maxOrthoError) + "）";
+        return false;
+    }
+
+    const double det = cv::determinant(cv::Mat(out));
+    if (std::fabs(det - 1.0) > kRotationTolerance)
+    {
+        error = context + "：rotation 的 det 不是 +1（det = " +
+                std::to_string(det) + "）";
+        return false;
+    }
+    return true;
 }
 
 /// 读平移量并**在此处**完成毫米→米换算。
 ///
 /// 这是 ENG-09 §2.3 要求的唯一转换点。整个工程只有这一个地方
 /// 出现 `* kMmToM` 作用在标定平移上。
-cv::Vec3d readTranslationMetres(const cv::FileStorage& fs,
-                                const std::string&  context,
-                                std::vector<std::string>& warnings)
+///
+/// R10：缺失/形状错误/非有限值一律拒绝装载，不再回退零平移。
+bool readTranslationMetres(const cv::FileStorage& fs,
+                           const std::string&  context,
+                           cv::Vec3d&          out,
+                           std::string&        error)
 {
     cv::Mat t;
     fs[kFieldTranslationMm] >> t;
 
-    if (t.total() != 3)
+    if (t.empty() || t.total() != 3 || t.channels() != 1)
     {
-        warnings.push_back(context +
-            "：translation_mm 不是 3 个元素，回退为零平移");
-        return cv::Vec3d(0.0, 0.0, 0.0);
+        error = context + "：translation_mm 缺失或不是 3 个元素";
+        return false;
     }
 
     cv::Mat t64;
     t.convertTo(t64, CV_64F);
+    if (!allFinite(t64))
+    {
+        error = context + "：translation_mm 含非有限值";
+        return false;
+    }
+
     const double* p = t64.ptr<double>();
 
     // ⚠⚠ 毫米 → 米。此处是全工程唯一的换算点（ENG-09 §2.3）。
-    return cv::Vec3d(p[0] * kMmToM, p[1] * kMmToM, p[2] * kMmToM);
+    out = cv::Vec3d(p[0] * kMmToM, p[1] * kMmToM, p[2] * kMmToM);
+    return true;
+}
+
+/// 内参 + 畸变的装载校验（R10）。
+///
+/// 判据是**数值/结构**的，不是"正定"：
+///   · image_width/height > 0（畸变与主点的坐标一致性需要分辨率）；
+///   · camera_matrix 单通道 3x3、全有限、fx>0、fy>0；
+///   · 齐次末行 [0,0,1]（容差 1e-6）；
+///   · 主点在画幅内（cx∈[0,W)、cy∈[0,H)）——这是"内参与图像坐标一致"
+///     的最小可执行判据；
+///   · distortion 缺失 ⇒ 警告并按无畸变（针孔）处理；存在则必须是
+///     1×N / N×1（N∈{4,5,8}）且全有限。
+bool loadIntrinsic(const cv::FileStorage& fs,
+                   const std::string&  context,
+                   data::CameraCalibration& calib,
+                   std::vector<std::string>& warnings,
+                   std::string&        error)
+{
+    fs[kFieldImageWidth]  >> calib.imageWidth;
+    fs[kFieldImageHeight] >> calib.imageHeight;
+    if (calib.imageWidth <= 0 || calib.imageHeight <= 0)
+    {
+        error = context + "：image_width/height 缺失或非正，无法校验内参一致性";
+        return false;
+    }
+
+    cv::Mat k;
+    fs[kFieldCameraMatrix] >> k;
+    if (k.empty() || k.rows != 3 || k.cols != 3 || k.channels() != 1)
+    {
+        error = context + "：camera_matrix 缺失或不是单通道 3x3";
+        return false;
+    }
+
+    cv::Mat k64;
+    k.convertTo(k64, CV_64F);
+    if (!allFinite(k64))
+    {
+        error = context + "：camera_matrix 含非有限值";
+        return false;
+    }
+
+    const double fx = k64.at<double>(0, 0);
+    const double fy = k64.at<double>(1, 1);
+    if (!(fx > 0.0) || !(fy > 0.0))
+    {
+        error = context + "：camera_matrix 的 fx/fy 必须为正（fx=" +
+                std::to_string(fx) + ", fy=" + std::to_string(fy) + "）";
+        return false;
+    }
+
+    if (std::fabs(k64.at<double>(2, 0)) > kHomogeneousTolerance ||
+        std::fabs(k64.at<double>(2, 1)) > kHomogeneousTolerance ||
+        std::fabs(k64.at<double>(2, 2) - 1.0) > kHomogeneousTolerance)
+    {
+        error = context + "：camera_matrix 的齐次末行不是 [0,0,1]";
+        return false;
+    }
+
+    const double cx = k64.at<double>(0, 2);
+    const double cy = k64.at<double>(1, 2);
+    if (cx < 0.0 || cx >= static_cast<double>(calib.imageWidth) ||
+        cy < 0.0 || cy >= static_cast<double>(calib.imageHeight))
+    {
+        error = context + "：主点不在画幅内（cx=" + std::to_string(cx) +
+                ", cy=" + std::to_string(cy) + "；画幅 " +
+                std::to_string(calib.imageWidth) + "x" +
+                std::to_string(calib.imageHeight) + "）";
+        return false;
+    }
+    calib.cameraMatrix = k64;
+
+    cv::Mat d;
+    fs[kFieldDistortion] >> d;
+    if (d.empty())
+    {
+        // 无畸变系数 = 假定理想针孔。这不是致命的，但必须记录：
+        // 无视畸变会让边缘视场的反投影误差随视场角增大。
+        warnings.push_back(context + "：distortion 缺失，按无畸变处理");
+        calib.distortion = cv::Mat::zeros(1, 5, CV_64F);
+        return true;
+    }
+
+    if (d.channels() != 1 || (d.rows != 1 && d.cols != 1) ||
+        (d.total() != 4 && d.total() != 5 && d.total() != 8))
+    {
+        error = context + "：distortion 形状非法（须为 1×N/N×1，N∈{4,5,8}）";
+        return false;
+    }
+
+    cv::Mat d64;
+    d.convertTo(d64, CV_64F);
+    if (!allFinite(d64))
+    {
+        error = context + "：distortion 含非有限值";
+        return false;
+    }
+    calib.distortion = d64.reshape(1, 1);  // 统一成 1×N，便于下游使用
+    return true;
 }
 
 }  // namespace
@@ -156,6 +315,15 @@ bool CalibrationManager::load(const std::string& calibrationDir)
         &calibration_.cam100.cameraToRig};
     const char* roleName[3] = {"CAM25", "CAM50", "CAM100"};
 
+    // R10：任何非法标定都拒绝装载，且不保留半装载状态。
+    auto fail = [this](const std::string& message) {
+        lastErrorText_   = message;
+        calibration_     = data::OpticalRigCalibration{};
+        calibrationId_.clear();
+        loaded_          = false;
+        return false;
+    };
+
     // ---- 1 内参 ----
     for (int i = 0; i < 3; ++i)
     {
@@ -165,44 +333,16 @@ bool CalibrationManager::load(const std::string& calibrationDir)
         if (!fs.isOpened())
         {
             // ENG-10 §5.3 第一类：文件缺失 → 启动失败。
-            lastErrorText_ = "标定文件缺失或无法打开：" + path;
-            return false;
+            return fail("标定文件缺失或无法打开：" + path);
         }
 
         const std::string ctx = std::string(roleName[i]) + " 内参 (" +
                                 kFileIntrinsic[i] + ")";
 
-        fs[kFieldImageWidth]  >> intrinsics[i]->imageWidth;
-        fs[kFieldImageHeight] >> intrinsics[i]->imageHeight;
-
-        // 字段缺失：用默认值 + 记录警告（ENG-10 §5.3 第二类），不返回 false。
-        // 与"文件缺失"的区别在于：文件在，说明标定过程跑过；
-        // 某个字段没写通常是工具版本差异，可以用默认值兜住。
-        if (intrinsics[i]->imageWidth <= 0 || intrinsics[i]->imageHeight <= 0)
+        std::string error;
+        if (!loadIntrinsic(fs, ctx, *intrinsics[i], warnings_, error))
         {
-            warnings_.push_back(ctx + "：image_width/height 缺失或非法，"
-                                      "已回退为 0（须由相机实际分辨率补正）");
-        }
-
-        fs[kFieldCameraMatrix] >> intrinsics[i]->cameraMatrix;
-        fs[kFieldDistortion]   >> intrinsics[i]->distortion;
-
-        if (intrinsics[i]->cameraMatrix.rows != 3 ||
-            intrinsics[i]->cameraMatrix.cols != 3)
-        {
-            warnings_.push_back(ctx + "：camera_matrix 不是 3x3，"
-                                      "回退为单位阵（该相机结果不可信）");
-            intrinsics[i]->cameraMatrix = cv::Mat::eye(3, 3, CV_64F);
-        }
-
-        if (intrinsics[i]->distortion.empty())
-        {
-            // 无畸变系数 = 假定理想针孔。这不是致命的，
-            // 但必须记录：无视畸变会让边缘视场的反投影误差
-            // 随视场角增大，而 SYS-07 §12 的重投影误差判据
-            // 可能仍能通过（外点被 RANSAC 剔除掉了）。
-            warnings_.push_back(ctx + "：distortion 缺失，按无畸变处理");
-            intrinsics[i]->distortion = cv::Mat::zeros(1, 5, CV_64F);
+            return fail(error);
         }
 
         // 内参矩阵的数值单位是**像素**，不涉及毫米→米转换。
@@ -220,15 +360,22 @@ bool CalibrationManager::load(const std::string& calibrationDir)
         cv::FileStorage fs(path, cv::FileStorage::READ);
         if (!fs.isOpened())
         {
-            lastErrorText_ = "标定文件缺失或无法打开：" + path;
-            return false;
+            return fail("标定文件缺失或无法打开：" + path);
         }
 
         const std::string ctx = std::string(roleName[i]) + " 外参 (" +
                                 kFileExtrinsic[i] + ")";
 
-        extrinsics[i]->rotation    = readRotation(fs, ctx, warnings_);
-        extrinsics[i]->translation = readTranslationMetres(fs, ctx, warnings_);
+        std::string error;
+        cv::Matx33d rotation;
+        cv::Vec3d translation;
+        if (!readRotation(fs, ctx, rotation, error) ||
+            !readTranslationMetres(fs, ctx, translation, error))
+        {
+            return fail(error);
+        }
+        extrinsics[i]->rotation    = rotation;
+        extrinsics[i]->translation = translation;
     }
 
     // ---- 3 外参 Rig → Ship ----
@@ -238,14 +385,21 @@ bool CalibrationManager::load(const std::string& calibrationDir)
         cv::FileStorage fs(path, cv::FileStorage::READ);
         if (!fs.isOpened())
         {
-            lastErrorText_ = "标定文件缺失或无法打开：" + path;
-            return false;
+            return fail("标定文件缺失或无法打开：" + path);
         }
 
         const std::string ctx = std::string("Rig→Ship 外参 (") + kFileRigToShip + ")";
 
-        calibration_.rigToShip.rotation    = readRotation(fs, ctx, warnings_);
-        calibration_.rigToShip.translation = readTranslationMetres(fs, ctx, warnings_);
+        std::string error;
+        cv::Matx33d rotation;
+        cv::Vec3d translation;
+        if (!readRotation(fs, ctx, rotation, error) ||
+            !readTranslationMetres(fs, ctx, translation, error))
+        {
+            return fail(error);
+        }
+        calibration_.rigToShip.rotation    = rotation;
+        calibration_.rigToShip.translation = translation;
 
         // 标定版本标识：ENG-09 §6.8 要求写入结果包以支持离线复现。
         // 它在**标定文件**里而非仅配置里，使"文件内容与标识"绑定 ——

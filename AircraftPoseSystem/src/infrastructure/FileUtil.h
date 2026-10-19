@@ -39,9 +39,11 @@
 // ============================================================================
 
 #include <cerrno>
+#include <dirent.h>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 namespace aircraft
 {
@@ -142,6 +144,56 @@ inline std::string joinPath(const std::string& dir, const std::string& name)
         return dir + name;
     }
     return dir + "/" + name;
+}
+
+/// 递归删除一棵目录树（R11 保存事务的失败清理）。
+///
+/// ⚠ 只允许传入**本次 save 自己创建的唯一暂存目录**。本函数会删除路径下的
+///   全部内容 —— 它是"事务失败后不留半包"的手段，不是通用的清理工具。
+///   调用点不得对共享目录、outputDir 根或任何通配路径调用它。
+///
+/// ⚠ 用 `lstat` 而不是 `stat`：暂存目录里若有符号链接，删除的是链接本身，
+///   绝不跟随到链接目标去删（那是把清理变成越界删除的唯一途径）。
+///
+/// @return 目录本就不存在（ENOENT）视为成功；任一删除失败返回 false。
+inline bool removeTree(const std::string& path)
+{
+    struct stat st {};
+    if (::lstat(path.c_str(), &st) != 0)
+    {
+        return errno == ENOENT;
+    }
+    if (!S_ISDIR(st.st_mode))
+    {
+        return ::unlink(path.c_str()) == 0;
+    }
+
+    DIR* dir = ::opendir(path.c_str());
+    if (dir == nullptr)
+    {
+        return false;
+    }
+
+    bool ok = true;
+    while (const dirent* entry = ::readdir(dir))
+    {
+        const std::string name = entry->d_name;
+        if (name == "." || name == "..")
+        {
+            continue;
+        }
+        if (!removeTree(joinPath(path, name)))
+        {
+            ok = false;
+        }
+    }
+    ::closedir(dir);
+
+    if (::rmdir(path.c_str()) != 0)
+    {
+        ok = false;
+    }
+    return ok;
 }
 
 }  // namespace fileutil

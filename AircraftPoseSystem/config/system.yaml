@@ -38,3 +38,11 @@ system:
    # 现场运行取 1：INFO 足以覆盖启动、设备状态与状态机迁移；
    # 排障时改 0 可拿到逐帧细节（日志量约增大两个数量级）。
    log_level: 1
+   # 运行模式：
+   #   "hardware_readonly" —— 现场只读运行（默认，本仓库当前取值）。
+   #   "simulation"        —— 三路虚拟相机 + 虚拟转台 + 虚拟触发，
+   #                          图像与机型库来自同一份合成几何。
+   #                          SystemInitializer 启动时校验，任一真实部件即拒绝。
+   # ⚠ 这不是运动授权开关：转台发送门禁仍由 C-23 固定为只读，
+   #   没有任何配置键能打开 MotionEnabled。运动测试须另行书面授权。
+   run_mode: "hardware_readonly"

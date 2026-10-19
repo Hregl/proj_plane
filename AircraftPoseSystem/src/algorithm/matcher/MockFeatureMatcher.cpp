@@ -220,7 +220,9 @@ bool DescriptorFeatureMatcher::match(
                                       - merged[j].imagePoint);
             if (d <= kConflictRadiusPx)
             {
-                out.push_back(merged[j]);        // 保留 B 类
+                // 这里只标记 A 类点被剔除；B 类点统一在 ③ 组装时加入。
+                // 若在此也 push 一次，同一 B 类点会在 out 中出现两次，
+                // 使 matchCount 与参与 PnP 的对应集不一致（R08）。
                 ++stats.droppedByConflict;
                 break;                           // 该 A 类点已被剔除
             }

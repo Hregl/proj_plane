@@ -246,6 +246,30 @@ private:
     ///         `errorText_`，**调用方负责** `rollbackDevices()`。
     bool verifyExplicitImvChannels(const char* stage);
 
+    /// `run_mode=simulation` 的**一致性校验**（批次 B2）。
+    ///
+    /// 判据（任一不满足即启动失败，**不得**静默降级）：
+    ///   · 三路相机 `backend` 均为 `"virtual"`；
+    ///   · 触发源 `trigger.source == "virtual"`；
+    ///   · 转台协议 `turntable.protocol == "sdk"`（VirtualTurntable）。
+    ///
+    /// ⚠ 屏幕上是"仿真"，就不能有任何真实部件在回路里：允许"真实相机 +
+    ///   虚拟转台"这类混合，会让结果包里的 `run_mode=simulation` 与
+    ///   实际采集条件不一致 —— 这正是本批要消除的误读。
+    bool validateRunMode();
+
+    /// 为三路虚拟相机安装同一份合成场景（批次 B1）。
+    ///
+    /// 只在 `run_mode=simulation` 时执行；其余形态直接返回 true。
+    /// 每路使用**同一个** `aircraftToShip` 真值，按各自的 `cameraToRig`
+    /// 与内参反解出 `aircraftToCamera` —— 三路看到的是同一个物理目标。
+    ///
+    /// ⚠ 本函数建立的是"图像侧与模型侧同源"的前提：渲染用的点表来自
+    ///   `data::SyntheticTargetGeometry.h`，机型库必须由**同一份**点表
+    ///   生成。因此仿真下还要求机型库已加载且 `modelId` 与合成几何一致
+    ///   （见 buildAlgorithm）。
+    bool installSyntheticScenes();
+
     /// 整次启动失败时**逐路回滚**已建立的设备资源（011-A1，§3.4）。
     ///
     /// 顺序＝建立顺序的**逆序**：先 stop()（停流）再 close()（关设备 +

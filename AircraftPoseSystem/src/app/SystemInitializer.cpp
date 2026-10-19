@@ -42,8 +42,10 @@
 #include "app/SystemInitializer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <memory>
 #include <sstream>
@@ -53,8 +55,10 @@
 #include "algorithm/pipeline/PosePipeline.h"
 #include "data/ErrorInfo.h"
 #include "data/MonotonicClock.h"
+#include "data/SyntheticTargetGeometry.h"
 #include "device/camera/ICameraBackend.h"
 #include "device/camera/ImvCameraBackend.h"
+#include "device/camera/SyntheticTargetScene.h"
 #include "device/camera/VirtualCameraBackend.h"
 #include "device/turntable/PelcoDTurntableController.h"
 #include "device/turntable/VirtualTurntable.h"
@@ -172,6 +176,98 @@ std::string resultText(const data::OperationResult& r)
     {
         out += "，清理失败 " + data::sdkFailureText(*r.cleanupError);
     }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+//  标定参数文本（结果包 `calibration_parameters` 的来源）
+// ---------------------------------------------------------------------------
+//
+// ⚠ 为什么写参数而不只写 `calibration_id`：
+//   标识相同不代表内容相同。仿真配置里写的是 `synthetic-m1`，实际装载
+//   却是 `SYNTHETIC-NO-CALIBRATION` 的默认内参；只凭标识无法回答
+//   “渲染场景与求解器是否用了同一份内参”。把**实际装载**的参数写进包内，
+//   复核者可以不看包外文件直接核对。
+//
+// ⚠ 顺序固定为 CAM25 / CAM50 / CAM100 / RIG，每项内部字段顺序固定；
+//   本函数只描述事实，不做任何校验或补默认值 —— 校验在 CalibrationManager。
+//   数值用 fixed 9 位小数，足够分辨合成默认值与文件标定，且不引入
+//   平台相关的格式差异。
+std::string fmtDouble(double v)
+{
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(9) << v;
+    return os.str();
+}
+
+std::string fmtTransform(const data::Transform& t)
+{
+    std::ostringstream os;
+    os << "R=[";
+    for (int r = 0; r < 3; ++r)
+    {
+        for (int c = 0; c < 3; ++c)
+        {
+            if (r != 0 || c != 0)
+            {
+                os << ",";
+            }
+            os << fmtDouble(t.rotation(r, c));
+        }
+    }
+    os << "]; t=[" << fmtDouble(t.translation[0]) << ","
+       << fmtDouble(t.translation[1]) << ","
+       << fmtDouble(t.translation[2]) << "]";
+    return os.str();
+}
+
+std::string fmtCameraCalibration(const char* name,
+                                 const std::string& id,
+                                 const data::CameraCalibration& c)
+{
+    std::ostringstream os;
+    os << name << ": id=" << id;
+    if (c.cameraMatrix.rows == 3 && c.cameraMatrix.cols == 3
+        && c.cameraMatrix.type() == CV_64F)
+    {
+        os << " fx=" << fmtDouble(c.cameraMatrix.at<double>(0, 0))
+           << " fy=" << fmtDouble(c.cameraMatrix.at<double>(1, 1))
+           << " cx=" << fmtDouble(c.cameraMatrix.at<double>(0, 2))
+           << " cy=" << fmtDouble(c.cameraMatrix.at<double>(1, 2));
+    }
+    else
+    {
+        os << " K=<invalid>";
+    }
+    os << " image=" << c.imageWidth << "x" << c.imageHeight;
+    os << " dist=[";
+    if (c.distortion.type() == CV_64F)
+    {
+        const std::size_t n = c.distortion.total();
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            if (i != 0)
+            {
+                os << ",";
+            }
+            os << fmtDouble(c.distortion.at<double>(
+                static_cast<int>(i)));
+        }
+    }
+    os << "] cameraToRig{" << fmtTransform(c.cameraToRig) << "}";
+    return os.str();
+}
+
+std::vector<std::string> calibrationParameterTexts(
+    const data::OpticalRigCalibration& rig, const std::string& id)
+{
+    std::vector<std::string> out;
+    out.reserve(4);
+    out.push_back(fmtCameraCalibration("CAM25", id, rig.cam25));
+    out.push_back(fmtCameraCalibration("CAM50", id, rig.cam50));
+    out.push_back(fmtCameraCalibration("CAM100", id, rig.cam100));
+    out.push_back(std::string("RIG: id=") + id + " rigToShip{"
+                  + fmtTransform(rig.rigToShip) + "}");
     return out;
 }
 
@@ -311,6 +407,17 @@ bool SystemInitializer::loadConfigAndLogger()
 
     log("app", "=== AircraftPoseSystem V2.1 启动 ===");
     log("app", ctx_.config->summary());
+
+    // 运行形态的白名单已在 ConfigManager 校验；这里校验**部件形态**与
+    // 运行模式是否自洽。放在开设备之前：仿真声明配真实部件时，
+    // 不应该先打开相机再报错。
+    if (!validateRunMode())
+    {
+        std::fprintf(stderr, "[ERROR] %s\n", errorText_.c_str());
+        log("app", "启动失败：" + errorText_);
+        return false;
+    }
+    log("app", "运行模式：" + sys.runMode);
 
     return true;
 }
@@ -542,6 +649,135 @@ bool SystemInitializer::verifyExplicitImvChannels(const char* stage)
     return true;
 }
 
+bool SystemInitializer::validateRunMode()
+{
+    const data::SystemConfig& sys = ctx_.config->system();
+    if (sys.runMode != "simulation")
+    {
+        // hardware_readonly 不额外约束部件形态：现场只读运行本来就可能
+        // 混合真实/虚拟通道（ENG-08 §3 的过渡形态）。
+        return true;
+    }
+
+    const data::CameraConfig& c25  = ctx_.config->camera(data::CameraRole::CAM25);
+    const data::CameraConfig& c50  = ctx_.config->camera(data::CameraRole::CAM50);
+    const data::CameraConfig& c100 = ctx_.config->camera(data::CameraRole::CAM100);
+    const struct
+    {
+        const data::CameraConfig* cfg;
+    } slots[] = {{&c25}, {&c50}, {&c100}};
+    for (const auto& slot : slots)
+    {
+        if (slot.cfg->backend != "virtual")
+        {
+            errorText_ =
+                "run_mode=simulation 要求三路相机全部为虚拟后端，但通道 " +
+                slot.cfg->cameraId + " 配置为 \"" + slot.cfg->backend +
+                "\"。拒绝启动：混合真实部件的运行不能标为 simulation"
+                "（结果包会与实际采集条件不符）。";
+            return false;
+        }
+    }
+
+    if (ctx_.config->trigger().source != "virtual")
+    {
+        errorText_ =
+            "run_mode=simulation 要求 trigger.source=\"virtual\"，当前为 \"" +
+            ctx_.config->trigger().source +
+            "\"。拒绝启动：硬触发会引入真实时序部件。";
+        return false;
+    }
+
+    if (ctx_.config->turntable().protocol != "sdk")
+    {
+        errorText_ =
+            "run_mode=simulation 要求 turntable.protocol=\"sdk\""
+            "（VirtualTurntable），当前为 \"" +
+            ctx_.config->turntable().protocol +
+            "\"。拒绝启动：任何真实转台协议都不属于 simulation。";
+        return false;
+    }
+
+    return true;
+}
+
+bool SystemInitializer::installSyntheticScenes()
+{
+    if (ctx_.config->system().runMode != "simulation")
+    {
+        return true;
+    }
+
+    // 同一份舰体系真值给三路；各路的 aircraftToCamera 由场景按标定反解。
+    const data::Transform truth =
+        device::SyntheticTargetScene::defaultTruthAircraftToShip();
+    const data::OpticalRigCalibration rigCalib = ctx_.rig->calibration();
+
+    struct Slot
+    {
+        data::CameraRole                             role;
+        const data::CameraConfig*                    cfg;
+        const std::shared_ptr<device::ICameraBackend>* backend;
+    };
+    const Slot slots[] = {
+        {data::CameraRole::CAM25, &ctx_.config->camera(data::CameraRole::CAM25),
+         &ctx_.backend25},
+        {data::CameraRole::CAM50, &ctx_.config->camera(data::CameraRole::CAM50),
+         &ctx_.backend50},
+        {data::CameraRole::CAM100,
+         &ctx_.config->camera(data::CameraRole::CAM100), &ctx_.backend100}};
+
+    for (const Slot& slot : slots)
+    {
+        // 仿真一致性校验已保证配置为 virtual；这里再核**实际对象**——
+        // 测试注入的 backendFactory 可以绕过配置，返回任意后端。
+        auto* virtualBackend =
+            dynamic_cast<device::VirtualCameraBackend*>(slot.backend->get());
+        if (virtualBackend == nullptr)
+        {
+            errorText_ =
+                "run_mode=simulation 下通道 " + slot.cfg->cameraId +
+                " 的实际后端不是 VirtualCameraBackend（可能由注入的工厂提供）。"
+                "合成场景无法安装，拒绝启动。";
+            return false;
+        }
+
+        const data::CameraCalibration& calib =
+            slot.role == data::CameraRole::CAM25
+                ? rigCalib.cam25
+                : (slot.role == data::CameraRole::CAM50 ? rigCalib.cam50
+                                                        : rigCalib.cam100);
+        if (slot.cfg->width != calib.imageWidth
+            || slot.cfg->height != calib.imageHeight)
+        {
+            errorText_ =
+                "run_mode=simulation 的通道 " + slot.cfg->cameraId +
+                " 分辨率 " + std::to_string(slot.cfg->width) + "x" +
+                std::to_string(slot.cfg->height) +
+                " 与标定图像尺寸 " + std::to_string(calib.imageWidth) + "x" +
+                std::to_string(calib.imageHeight) +
+                " 不一致。渲染投影会与相机内参错位，拒绝启动。";
+            return false;
+        }
+
+        auto scene = std::make_shared<const device::SyntheticTargetScene>(
+            rigCalib, slot.role, truth);
+        if (!scene->valid())
+        {
+            errorText_ =
+                "run_mode=simulation 下通道 " + slot.cfg->cameraId +
+                " 的合成场景无效（内参矩阵缺失/非 CV_64F，或图像尺寸无效）。";
+            return false;
+        }
+        virtualBackend->setSyntheticScene(std::move(scene));
+    }
+
+    log("app", std::string("合成场景：三路虚拟相机已安装同一份几何（") +
+                   data::synthetic::modelId() + "），真值 " +
+                   "aircraftToShip 已就绪（仅用于渲染与事后比较）");
+    return true;
+}
+
 bool SystemInitializer::buildDevices()
 {
     // ┌────────────────────────────────────────────────────────────────────┐
@@ -573,6 +809,15 @@ bool SystemInitializer::buildDevices()
     if (!ctx_.backend100)
     {
         errorText_ = "CAM100 后端装配失败：" + backendError;
+        return false;
+    }
+
+    // ---- 合成场景（批次 B1；仅 run_mode=simulation）----------------------
+    //
+    // 必须在 `initializeAll()` 之前安装：场景只是渲染配置，但"打开设备时
+    // 图像从哪来"应在启动时就确定下来，而不是在第一次 grab() 时才分叉。
+    if (!installSyntheticScenes())
+    {
         return false;
     }
 
@@ -979,6 +1224,81 @@ bool SystemInitializer::buildAlgorithm()
              "本次运行的姿态结果不可用");
     }
 
+    // ---- 仿真一致性：图像侧与模型侧必须同源（批次 B1/B2）-----------------
+    //
+    // 渲染用的六点几何写在 `data/SyntheticTargetGeometry.h`，机型库必须由
+    // **同一份**点表生成。若仿真下加载的是别的模型，CAD 结构点会投到
+    // 与画面无关的位置 —— 要么定位失败，要么解出一个与图像无关的姿态，
+    // 而两者都不会报"模型配错了"。
+    if (sys.runMode == "simulation")
+    {
+        if (!ctx_.modelsAvailable)
+        {
+            errorText_ =
+                "run_mode=simulation 要求机型库可用（model_dir=" +
+                sys.modelDir +
+                "），否则图像侧有目标、求解侧无三维点，整条链不可复核。"
+                "拒绝启动。";
+            return false;
+        }
+        if (ctx_.models->modelId() != data::synthetic::modelId())
+        {
+            errorText_ =
+                "run_mode=simulation 的机型库必须是同一份合成几何生成的模型"
+                "（期望 model_id=\"" +
+                std::string(data::synthetic::modelId()) + "\"，实际为 \"" +
+                ctx_.models->modelId() +
+                "\"）。拒绝启动：画面与模型点表不同源。";
+            return false;
+        }
+
+        // ⚠ model_id 相同**不等于**点表内容相同：模型文件可以被改名、
+        //   也可以被整体缩放/改点而保留同一 id。只比 id 会让“画面一套、
+        //   模型另一套”通过启动，随后 PnP 或重投影才以别的原因失败。
+        //   这里逐点比几何内容（位置、序号、类型），坐标容差 1e-5 m：
+        //   `points3d.yaml` 以 6 位小数写出，远小于该容差；而任何有测量
+        //   意义的改动（厘米/米级）都会被拦下。
+        //   注意：本检查只证明“启动时加载的点表与渲染几何一致”，
+        //   不宣称所有错误模型都会使 PnP 失败（例如整体缩放在某些位姿下
+        //   可能被平移吸收）。
+        const std::vector<data::ModelPoint3D> expectedPoints =
+            data::synthetic::modelPoints();
+        const data::TargetModel loadedModel =
+            ctx_.models->get(data::CameraRole::CAM25);
+        bool sameGeometry = loadedModel.points3d.size() == expectedPoints.size();
+        if (sameGeometry)
+        {
+            for (std::size_t i = 0; i < expectedPoints.size(); ++i)
+            {
+                const data::ModelPoint3D& a = loadedModel.points3d[i];
+                const data::ModelPoint3D& b = expectedPoints[i];
+                const cv::Point3f d = a.position - b.position;
+                const double dist = std::sqrt(
+                    static_cast<double>(d.x) * d.x
+                    + static_cast<double>(d.y) * d.y
+                    + static_cast<double>(d.z) * d.z);
+                if (a.id != b.id || a.featureType != b.featureType
+                    || dist > 1e-5)
+                {
+                    sameGeometry = false;
+                    break;
+                }
+            }
+        }
+        if (!sameGeometry)
+        {
+            errorText_ =
+                "run_mode=simulation 的机型库 model_id 虽为 \"" +
+                ctx_.models->modelId() +
+                "\"，但 points3d 内容与画面几何不同源（点数 " +
+                std::to_string(loadedModel.points3d.size()) + "，期望 " +
+                std::to_string(expectedPoints.size()) +
+                "；逐点位置容差 1e-5 m）。拒绝启动："
+                "模型标识相同不等于点表内容相同。";
+            return false;
+        }
+    }
+
     // ---- 历史匹配统计 ----
     // 路径固定在 runtime/ 下。**SystemConfig 中没有该字段**（冻结文档
     // 未定义），故此处按 ENG-10 §4 的约定写死相对路径，并登记待裁决
@@ -1061,6 +1381,30 @@ bool SystemInitializer::buildAlgorithm()
             *ctx_.models, ctx_.rig->calibration(), ctx_.stats.get());
     }
 
+    // ---- 合成粗先验（批次 B1）---------------------------------------------
+    //
+    // CAD 结构点定位需要"模型点大致投在哪"；生产路径的粗姿态来自转台
+    // 指向（本仓库尚未接通真实转台闭环）。仿真提供一个**显式标记**的
+    // 合成先验：与场景默认真值同向（迎头），只在 run_mode=simulation
+    // 下注入。真值本身**不**进入求解器 —— 先验用的是固定常数，不是
+    // 场景实例持有的真值对象。
+    //
+    // ⚠ 不把 IPPE 等平面初始化解顺手加入生产算法（计划 B1.4）：若仿真
+    //   出现二义性，用先验选解，而不是改生产 PnP 的行为。
+    if (sys.runMode == "simulation")
+    {
+        ctx_.pipeline->setCoarseAttitude(
+            0.0, device::SyntheticTargetScene::coarseElevationDeg(),
+            device::SyntheticTargetScene::coarseDistanceM());
+        log("app", "粗姿态：synthetic 先验 elevation=" +
+                       std::to_string(
+                           device::SyntheticTargetScene::coarseElevationDeg()) +
+                       " deg, distance=" +
+                       std::to_string(
+                           device::SyntheticTargetScene::coarseDistanceM()) +
+                       " m（coarse_prior=synthetic）");
+    }
+
     log("app", std::string("算法链：") +
                    (mockScale
                         ? "MockTargetDetector / **MockTargetScaleEstimator** / "
@@ -1092,7 +1436,33 @@ bool SystemInitializer::buildApplication()
 
     // ---- 适配器 ----
     // 顺序约束：controller 的构造需要 sink 的地址，sink 需要 recorder 的引用。
-    ctx_.recorderSink = std::make_unique<RecorderSinkAdapter>(*ctx_.recorder);
+    //
+    // 运行形态元数据在这里一次性填好：装配点是唯一同时知道
+    // run_mode / 各路后端 / 场景真值的地方（ENG-01 §14）。
+    RunMetadata runMeta;
+    runMeta.runMode = ctx_.config->system().runMode;
+    runMeta.cameraBackends = {
+        ctx_.config->camera(data::CameraRole::CAM25).backend,
+        ctx_.config->camera(data::CameraRole::CAM50).backend,
+        ctx_.config->camera(data::CameraRole::CAM100).backend};
+
+    // 实际装载的标定参数：`ctx_.rig` 是求解器使用的同一份对象，
+    // `installSyntheticScenes()` 的渲染也取自它，故包内参数与渲染/求解
+    // 用的是同一来源，而不是同名配置。
+    runMeta.calibrationParameters = calibrationParameterTexts(
+        ctx_.rig->calibration(), ctx_.calibration->calibrationId());
+    if (runMeta.runMode == "simulation")
+    {
+        runMeta.modelType        = data::synthetic::modelType();
+        runMeta.truthSource      = data::synthetic::truthSource();
+        runMeta.componentRealism = data::synthetic::componentRealism();
+        runMeta.hasTruth         = true;
+        runMeta.truthAircraftToShip =
+            device::SyntheticTargetScene::defaultTruthAircraftToShip();
+    }
+
+    ctx_.recorderSink =
+        std::make_unique<RecorderSinkAdapter>(*ctx_.recorder, runMeta);
 
     // ---- 测量总控 ----
     // 构造参数全部是协作者，不含任何配置读盘 —— 配置已在前面读入并注入。

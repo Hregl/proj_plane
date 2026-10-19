@@ -13,9 +13,17 @@
 
 #include "infrastructure/recorder/Recorder.h"
 
+#include <atomic>
+#include <cerrno>
+#include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <sstream>
+
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <opencv2/core.hpp>
 
@@ -588,6 +596,63 @@ bool copyFile(const std::string& from, const std::string& to)
     return out.good();
 }
 
+/// 本次保存的暂存目录名（R11）。
+///
+/// ⚠ 必须**每次唯一**：同一任务被并发保存时，两个 Recorder 各自写自己的
+///   暂存目录，最后由 `renameat2(RENAME_NOREPLACE)` 决出唯一发布者。
+///   若暂存名固定，第二个 save 会直接写进第一个的暂存目录 —— 两个写者
+///   交错写同一棵树，而那不是"事务"，是数据竞争。
+///   pid + 单调计数 + 墙钟纳秒三者并用：pid 区分进程，计数区分同进程内
+///   的并发调用，纳秒值兜住"重启后 pid 复用且计数从头开始"的窗口。
+std::string stagingName(const std::string& packageName)
+{
+    static std::atomic<unsigned long> counter{0};
+    const long long ns =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    return ".aps_tmp_" + packageName + "_" + std::to_string(::getpid()) + "_" +
+           std::to_string(++counter) + "_" + std::to_string(ns);
+}
+
+/// 把暂存目录**原子**发布为最终结果目录，且**绝不覆盖**已有条目。
+///
+/// 判据取 `renameat2(..., RENAME_NOREPLACE)`，而不是"先 stat 目标、不存在
+/// 再 rename"：后者有一个检查与改名之间的窗口，两个并发保存（或上一次
+/// 未退出的进程）都能通过检查，后一个 rename 会**覆盖**前一个 ——
+/// 覆盖后的包看起来仍然完整，但它是另一次测量的结果。RENAME_NOREPLACE
+/// 把"目标不存在"与"改名"合成一个内核原子操作，窗口不存在。
+///
+/// ⚠ 这里保证的是**发布的原子性**：读者要么看到完整的最终目录，要么
+///   看不到它，绝不会看到半包。它**不是**断电持久性承诺 —— 本实现没有
+///   fsync 文件数据与父目录，掉电后即使 save() 返回 true，包也可能丢失
+///   或内容未落盘。两者是不同的事实，见 Recorder::save 的说明。
+bool publishNoReplace(const std::string& staging, const std::string& finalDir,
+                      std::string& error)
+{
+    if (::renameat2(AT_FDCWD, staging.c_str(), AT_FDCWD, finalDir.c_str(),
+                    RENAME_NOREPLACE) == 0)
+    {
+        return true;
+    }
+
+    const int saved = errno;
+    if (saved == EEXIST || saved == ENOTEMPTY)
+    {
+        error = "结果目录已存在，拒绝覆盖：" + finalDir;
+        return false;
+    }
+    if (saved == EINVAL || saved == ENOSYS || saved == ENOTSUP)
+    {
+        // 文件系统不支持"不覆盖的原子改名"时**不降级**为先检查再普通
+        // rename：那会静默放弃本事务唯一的并发保证。宁可明确失败。
+        error = "文件系统不支持 renameat2(RENAME_NOREPLACE)，无法原子地"
+                "发布并保证不覆盖已有结果：" + finalDir;
+        return false;
+    }
+    error = "发布结果包失败（renameat2: " + std::string(std::strerror(saved)) +
+            "）：" + finalDir;
+    return false;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -688,6 +753,27 @@ bool Recorder::writeResultJson(const data::MeasurementRecord& record,
     checkFinite("statistics.spread_px", record.statistics.spreadPx);
     checkFinite("turntable.azimuth", record.turntable.azimuth);
     checkFinite("turntable.elevation", record.turntable.elevation);
+    if (record.hasTruth)
+    {
+        for (int r = 0; r < 3; ++r)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                checkFinite("truth.aircraftToShip.rotation[" +
+                                std::to_string(r) + "][" + std::to_string(c) +
+                                "]",
+                            record.truthAircraftToShip.rotation(r, c));
+            }
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            checkFinite("truth.aircraftToShip.translation[" +
+                            std::to_string(i) + "]",
+                        record.truthAircraftToShip.translation[i]);
+        }
+        checkFinite("truth.error.rotation_deg", record.truthRotationErrorDeg);
+        checkFinite("truth.error.translation_m", record.truthTranslationErrorM);
+    }
 
     std::ostringstream os;
     os << "{\n";
@@ -700,6 +786,94 @@ bool Recorder::writeResultJson(const data::MeasurementRecord& record,
     os << "  \"calibration_id\": \"" << escapeJson(record.calibrationId) << "\",\n";
     os << "  \"software_version\": \"" << escapeJson(record.softwareVersion)
        << "\",\n";
+
+    // ---- 运行形态（批次 B2）-----------------------------------------------
+    //
+    // ⚠ `run_mode` 是"这份结果属于哪一种形态"的**事实**，不是准入开关。
+    //   simulation 的结果包保留正常的迁移历史，不得因为"是仿真"就清空；
+    //   读者要能判断"这条 COMPLETE 是在什么条件下达成的"。
+    os << "  \"run_mode\": \"" << escapeJson(record.runMode) << "\",\n";
+    os << "  \"component_realism\": \""
+       << escapeJson(record.componentRealism) << "\",\n";
+
+    const data::CameraRole cameraOrder[3] = {
+        data::CameraRole::CAM25, data::CameraRole::CAM50,
+        data::CameraRole::CAM100};
+    os << "  \"cameras\": [\n";
+    for (int i = 0; i < 3; ++i)
+    {
+        const std::string backend =
+            i < static_cast<int>(record.cameraBackends.size())
+                ? record.cameraBackends[static_cast<std::size_t>(i)]
+                : std::string();
+        os << "    {\"role\": \"" << roleName(cameraOrder[i])
+           << "\", \"backend\": \"" << escapeJson(backend)
+           << "\", \"real_or_virtual\": \""
+           << (backend == "virtual" ? "virtual" : "real") << "\"}"
+           << (i < 2 ? "," : "") << "\n";
+    }
+    os << "  ],\n";
+
+    // 实际装载的标定参数（不是标识）：渲染场景与求解器用的是同一份
+    // `OpticalRigCalibration`，把参数写进包内，复核者无需包外文件即可
+    // 核对“标识相同但参数不同”的情形。
+    os << "  \"calibration_parameters\": [";
+    for (std::size_t i = 0; i < record.calibrationParameters.size(); ++i)
+    {
+        os << (i == 0 ? "\n" : ",\n") << "    \""
+           << escapeJson(record.calibrationParameters[i]) << "\"";
+    }
+    os << (record.calibrationParameters.empty() ? "],\n" : "\n  ],\n");
+
+    // 元数据合并冲突：为空表示本次装配值与记录值没有冲突；非空时逐条
+    // 给出字段、两个来源的值与最终处置。该数组不参与“必含字段”判定。
+    os << "  \"metadata_conflicts\": [";
+    for (std::size_t i = 0; i < record.metadataConflicts.size(); ++i)
+    {
+        os << (i == 0 ? "\n" : ",\n") << "    \""
+           << escapeJson(record.metadataConflicts[i]) << "\"";
+    }
+    os << (record.metadataConflicts.empty() ? "],\n" : "\n  ],\n");
+
+    if (record.hasTruth)
+    {
+        os << "  \"truth\": {\n";
+        os << "    \"source\": \"" << escapeJson(record.truthSource) << "\",\n";
+        const data::Transform& truth = record.truthAircraftToShip;
+        os << "    \"aircraftToShip\": {\n";
+        os << "      \"rotation\": [\n";
+        for (int r = 0; r < 3; ++r)
+        {
+            os << "        [" << num(truth.rotation(r, 0), 9) << ", "
+               << num(truth.rotation(r, 1), 9) << ", "
+               << num(truth.rotation(r, 2), 9) << "]"
+               << (r < 2 ? "," : "") << "\n";
+        }
+        os << "      ],\n";
+        os << "      \"translation\": [" << num(truth.translation[0], 6)
+           << ", " << num(truth.translation[1], 6) << ", "
+           << num(truth.translation[2], 6) << "]\n";
+        os << "    }";
+        // 只有解算成功时误差才有意义。失败包里照写 `truth`（真值是场景的
+        // 固有事实，可用于复盘），但**不写** `error`：写三个 0 会被读成
+        // "与真值完全一致"，而实际上根本没有可比较的解算结果。
+        if (pose.success)
+        {
+            os << ",\n";
+            os << "    \"error\": {\n";
+            os << "      \"rotation_deg\": "
+               << num(record.truthRotationErrorDeg, 6) << ",\n";
+            os << "      \"translation_m\": "
+               << num(record.truthTranslationErrorM, 6) << "\n";
+            os << "    }\n";
+        }
+        else
+        {
+            os << "\n";
+        }
+        os << "  },\n";
+    }
+
     os << "  \"success\": " << jsonBool(pose.success) << ",\n";
     os << "  \"yaw\": " << num(pose.yaw, 6) << ",\n";
     os << "  \"pitch\": " << num(pose.pitch, 6) << ",\n";
@@ -1342,20 +1516,37 @@ bool Recorder::save(const data::MeasurementRecord& record)
     }
 
     const std::string dir = joinPath(outputDir_, name);
-    if (!makeDirectories(dir))
+
+    // ---- 保存事务（R11）----
+    //
+    // ① 全部文件先写进 outputDir 下的**唯一暂存目录**（与最终目录同一
+    //    文件系统，rename 因此是原子的）；
+    // ② 全部成功后才把暂存目录一次 rename 为最终目录；
+    // ③ 任一步失败 ⇒ 删除暂存目录，最终目录**从未出现**。
+    //
+    // 这样读者（界面、离线工具）永远只会看到"没有这个包"或"完整包"，
+    // 不会看到 result.json 已写、raw 还没写的半包。失败包与成功包走
+    // **同一事务**：失败包不因"反正是失败任务"而绕开原子发布。
+    //
+    // ⚠ 不覆盖已有结果：最终目录已存在时本次保存失败，不清理、不改写
+    //   已有内容（原子判据见 publishNoReplace）。
+    //
+    // ⚠ 不承诺断电持久性：本实现没有 fsync 文件数据与父目录。save()
+    //   返回 true 只表示"发布动作已在内核中完成且对读者可见"，
+    //   不表示"掉电后仍在"。断电持续性是独立验收项，未在本批验证。
+    const std::string staging = joinPath(outputDir_, stagingName(name));
+    if (!makeDirectories(staging))
     {
-        lastErrorText_ = "无法创建结果目录：" + dir;
+        lastErrorText_ = "无法创建暂存结果目录：" + staging;
         return false;
     }
-    lastPackageDir_ = dir;
 
     std::string error;
     bool        ok = true;
 
     // 各步**依次独立**执行，任一步失败都要把原因带出去；
-    // 但失败后**不再继续**（写一个字段全空的结果包比不写更危险：
-    // 它在目录里看起来是一份完整的测量结果）。
-    if (!writeResultJson(record, dir, error))
+    // 但失败后**不再继续**（暂存目录最终会被删除，不会发布半包）。
+    if (!writeResultJson(record, staging, error))
     {
         lastErrorText_ = error;
         ok             = false;
@@ -1364,27 +1555,27 @@ bool Recorder::save(const data::MeasurementRecord& record)
     // 摘要与全量，落在相邻的两步里，中途不会有机会被别的数据源改写。
     // 它**对所有任务都写**（成功任务写的是"路径 + 无根因"），
     // 理由见 writeResultJson 中 failure 块与 writeFailureJson 的说明。
-    if (ok && !writeFailureJson(record, dir, error))
+    if (ok && !writeFailureJson(record, staging, error))
     {
         lastErrorText_ = error;
         ok             = false;
     }
-    if (ok && !writeRawFrames(record.bestFrame, dir, error))
+    if (ok && !writeRawFrames(record.bestFrame, staging, error))
     {
         lastErrorText_ = error;
         ok             = false;
     }
-    if (ok && !writeTurntableJson(record.turntable, dir, error))
+    if (ok && !writeTurntableJson(record.turntable, staging, error))
     {
         lastErrorText_ = error;
         ok             = false;
     }
-    if (ok && !writeCalibrationId(dir, error))
+    if (ok && !writeCalibrationId(staging, error))
     {
         lastErrorText_ = error;
         ok             = false;
     }
-    if (ok && !writeConfigSnapshot(dir, error))
+    if (ok && !writeConfigSnapshot(staging, error))
     {
         lastErrorText_ = error;
         ok             = false;
@@ -1392,8 +1583,35 @@ bool Recorder::save(const data::MeasurementRecord& record)
     else if (ok && !error.empty() && lastErrorText_.empty())
     {
         // config_snapshot 不完整：结果有效但复现性受损，记在错误文本里
-        // 供调用方写日志（返回 true）。
+        // 供调用方写日志（返回 true）。它不是失败，故仍会发布。
         lastErrorText_ = error;
+    }
+
+    if (ok)
+    {
+        if (!publishNoReplace(staging, dir, error))
+        {
+            lastErrorText_ = error;
+            ok             = false;
+        }
+        else
+        {
+            // 只有发布成功后才暴露目录。失败时 lastPackageDir 为空，
+            // 因为最终目录**不存在** —— 不能指向一棵未发布的暂存树。
+            lastPackageDir_ = dir;
+        }
+    }
+
+    if (!ok)
+    {
+        // 失败清理：删除本次唯一的暂存目录。清理失败必须如实报告 ——
+        // 留下的暂存目录不会伪装成结果包（点号前缀 + .aps_tmp_），
+        // 但它占空间且是"事务没有收尾"的证据。
+        if (!fileutil::removeTree(staging))
+        {
+            lastErrorText_ += "；且暂存目录清理失败：" + staging;
+        }
+        lastPackageDir_.clear();
     }
 
     // ⚠ 入参改用 MeasurementRecord 之后，这张表不再由 Recorder 单方面

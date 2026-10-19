@@ -63,28 +63,39 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <opencv2/core.hpp>
+
+#include "algorithm/model/TargetModelManager.h"
 #include "app/ApplicationContext.h"
 #include "app/SystemInitializer.h"
 #include "data/CameraConfig.h"
+#include "data/CameraRole.h"
 #include "data/DeviceIdentity.h"
 #include "data/ErrorInfo.h"
 #include "data/MeasurementConfig.h"
 #include "data/MeasurementState.h"
 #include "data/MonotonicClock.h"
+#include "data/SyntheticTargetGeometry.h"
+#include "data/TargetModel.h"
 #include "data/TurntableConfig.h"
 #include "device/camera/ICameraBackend.h"
+#include "device/camera/SyntheticTargetScene.h"
 #include "device/camera/VirtualCameraBackend.h"
 #include "device/turntable/ITurntableController.h"
 #include "device/turntable/PelcoDTurntableController.h"
@@ -314,10 +325,15 @@ struct Harness
 
     /// 用真实 7 个 yaml 完整初始化。**不预注入任何桩** ——
     /// `initialize()` 无条件覆盖每个 `ctx.X`，预注入的对象必被销毁。
-    bool build()
+    ///
+    /// @param configDir 配置目录；默认即场景 A/B/D 共用的 "config"。
+    ///        仿真场景（场景 S）传入由仓库 yaml 改写出的独立目录 ——
+    ///        它不能覆盖工作目录里的 "config"，否则场景 A 的
+    ///        "models/ 不存在 ⇒ POSE_SOLVE 失败" 前提会被静默改掉。
+    bool build(const std::string& configDir = "config")
     {
         init = std::make_unique<SystemInitializer>(ctx);
-        return init->initialize("config") && init->ready() && ctx.controller != nullptr;
+        return init->initialize(configDir) && init->ready() && ctx.controller != nullptr;
     }
 };
 
@@ -1774,6 +1790,945 @@ TEST(SystemInitializerTest, 场景A3_shutdown停止转台释放触发与相机�
     }
 
     // 6. 析构兜底也不得再触发一次（Harness 负责销毁 init 与 ctx）。
+}
+
+// ===========================================================================
+//  场景 S：run_mode=simulation —— 同一合成场景贯穿生产链
+//
+//  ---- 这组用例证明什么 ----
+//
+//  批次 B 的验收句是："用同一合成场景证明'已知几何/相机/目标位姿 →
+//  模拟图像 → 实际检测/匹配/PnP → 与独立真值比较 → 应用自动落盘'整条链
+//  成立"。故本用例**不注入任何桩**、不直接给算法喂二维点：
+//    · 图像：`SyntheticTargetScene` 按真值位姿投影出直角 L 形目标；
+//    · 检测/匹配/PnP：生产链原样运行（CAD 结构点定位从图像里找角点）；
+//    · 落盘：走 `SystemInitializer` 装配出的 `RecorderSinkAdapter` / Recorder；
+//    · 比较：读回 result.json 里的 `truth.error`，与场景真值（场景固有事实）
+//      对照 —— 真值只用于渲染与验收，**从不**进入求解器。
+//
+//  ---- 为什么要改写配置 ----
+//
+//  四处改写全部来自仿真场景自身的物理/装配前提，而不是给算法放宽判据：
+//    · camera.yaml：合成标定按 CAM25 的尺寸生成内参并供三路共用
+//      （`CalibrationManager::loadDefaults`），三路分辨率不一致会让
+//      主点与图像错配 —— 故统一为 1280×1024；
+//    · system.yaml：`run_mode=simulation`，且 log/output/model 指向本用例
+//      专用路径。**不能**复用工作目录的 "models"：场景 A 依赖
+//      "models/ 不存在 ⇒ 机型库不可用 ⇒ POSE_SOLVE 失败"这一前提，
+//      在这里造出 models/ 会把那个前提静默改掉；
+//    · measurement.yaml：`min_feature_count` 8 → 4。PnP 的门槛是
+//      `max(4, min_feature_count)`，而合成几何只有 6 个 CAD 点 ——
+//      8 会让本可解算的六点解被自己的配置拒掉。仓库值不动
+//      （生产模型的点数尚未标定）；
+//    · validation.yaml：yaw 区间 [−120°, −60°]。默认真值在本工程的
+//      坐标约定与单位标定下分解为 yaw ≈ −90°（机头朝相机：
+//      R = Rx(−5°)·Ry(90°)·Rz(1.2°)）。`±5°` 是"侧向目标"的物理范围，
+//      与"迎头目标"不矛盾；这里改的是**场景的物理可达范围**，重投影/
+//      内点/置信度三项精度判据仍取仓库值。
+// ===========================================================================
+
+namespace
+{
+
+/// 把文本写到 `path`；失败返回 false（调用方必须断言，否则后续用例会在
+/// "文件根本没写出来"的前提下得到一个与被测代码无关的失败）。
+bool writeTextAt(const std::string& path, const std::string& text)
+{
+    std::ofstream out(path, std::ios::binary);
+    if (!out)
+    {
+        return false;
+    }
+    out << text;
+    return out.good();
+}
+
+/// 写一份由 `data::synthetic` 几何生成的机型库（SYS-12 §7 的目录布局）。
+///
+/// @param scaled 负例用：把点表整体放大 2 倍（model_id 不变）。
+///        这模拟"画面与模型不同源"——两者都能被各自加载，只有解算的
+///        重投影对不上。**不是**注入最终位姿，也不是让求解器读真值。
+/// @param perturbIndex 负例用：把该下标的点沿 x 移动 0.25 m（model_id 不变）。
+///        用于证明同源校验不是只看包围盒尺度，而是逐点比内容。
+bool writeSyntheticModelDir(const std::string& dir,
+                            bool               scaled,
+                            std::string&       err,
+                            int                perturbIndex = -1)
+{
+    if (!aircraft::infrastructure::fileutil::makeDirectories(dir))
+    {
+        err = "创建模型目录失败：" + dir;
+        return false;
+    }
+
+    std::vector<aircraft::data::ModelPoint3D> points =
+        aircraft::data::synthetic::modelPoints();
+    if (scaled)
+    {
+        for (aircraft::data::ModelPoint3D& p : points)
+        {
+            p.position *= 2.0f;
+        }
+    }
+    if (perturbIndex >= 0
+        && perturbIndex < static_cast<int>(points.size()))
+    {
+        points[static_cast<std::size_t>(perturbIndex)].position.x += 0.25f;
+    }
+
+    // model.yaml：模型身份与版本的**权威来源**（SYS-04 §6.3）。
+    // model_id 必须与 `data::synthetic::modelId()` 一致，否则
+    // `SystemInitializer::buildAlgorithm` 会拒绝启动（同源校验）。
+    std::ostringstream meta;
+    meta << "%YAML:1.0\n"
+         << "model_id: \"" << aircraft::data::synthetic::modelId() << "\"\n"
+         << "version: 1\n"
+         << "model_source: \"data/SyntheticTargetGeometry.h\"\n"
+         << "generated_at: \"2026-10-20T00:00:00\"\n"
+         << "feature_algorithm_version: \"none\"\n";
+    if (!writeTextAt(dir + "/model.yaml", meta.str()))
+    {
+        err = "写 model.yaml 失败：" + dir;
+        return false;
+    }
+
+    // points3d.yaml：点表。数值**逐点取自** `outline()`，不在此处另写一份。
+    std::ostringstream pts;
+    pts << "%YAML:1.0\n"
+        << "model_id: \"" << aircraft::data::synthetic::modelId() << "\"\n"
+        << "version: 1\n"
+        << "points:\n";
+    pts.setf(std::ios::fixed);
+    pts.precision(6);
+    for (const aircraft::data::ModelPoint3D& p : points)
+    {
+        pts << "  - { id: " << p.id << ", x: " << p.position.x
+            << ", y: " << p.position.y << ", z: " << p.position.z
+            << ", type: " << p.featureType << " }\n";
+    }
+    if (!writeTextAt(dir + "/points3d.yaml", pts.str()))
+    {
+        err = "写 points3d.yaml 失败：" + dir;
+        return false;
+    }
+
+    // 三个焦段的特征库：空库（N=0、D=0）是"尚无纹理特征"的合法状态，
+    // 也正是本场景要走的路径 —— B 类 CAD 结构点单独支撑 PnP。
+    aircraft::data::TargetModel model;
+    model.modelId = aircraft::data::synthetic::modelId();
+    model.points3d = points;
+
+    const aircraft::data::CameraRole roles[3] = {
+        aircraft::data::CameraRole::CAM25, aircraft::data::CameraRole::CAM50,
+        aircraft::data::CameraRole::CAM100};
+    const char* const names[3] = {
+        "feature25.bin", "feature50.bin", "feature100.bin"};
+    for (int i = 0; i < 3; ++i)
+    {
+        if (!aircraft::algorithm::TargetModelManager::saveFeatureLibrary(
+                dir + "/" + names[i], roles[i], model))
+        {
+            err = std::string("写特征库失败：") + names[i];
+            return false;
+        }
+    }
+    return true;
+}
+
+/// 由仓库 7 个 yaml 改写出一份 `run_mode=simulation` 的配置目录。
+/// @param modelDirName system.yaml 的 model_dir（相对进程 CWD）。
+/// @return 目录路径；空串 = 失败（原因写 `err`）。
+std::string makeSimulationConfigDir(const std::string& modelDirName,
+                                    std::string&       err)
+{
+    char        tmpl[] = "/tmp/aps_sim_cfg_XXXXXX";
+    char* const dir    = ::mkdtemp(tmpl);
+    if (dir == nullptr)
+    {
+        err = "mkdtemp 失败";
+        return std::string();
+    }
+    const std::string tmp = dir;
+
+    for (const char* const f : kConfigFiles)
+    {
+        std::string text;
+
+        if (std::string(f) == "camera.yaml")
+        {
+            text = allVirtualCameraYaml();
+            if (text.empty())
+            {
+                err = "未能定位 camera.yaml 的三路记录";
+                return std::string();
+            }
+            // 统一 1280×1024（CAM50/CAM100 已是该值；只改 CAM25）。
+            text = replaceInCameraRecord(text, "cam25", "width",
+                                         "      width: 1280");
+            if (text.empty())
+            {
+                err = "camera.yaml 的 cam25.width 未命中";
+                return std::string();
+            }
+            const std::string withHeight = replaceInCameraRecord(
+                text, "cam25", "height", "      height: 1024");
+            if (withHeight.empty())
+            {
+                err = "camera.yaml 的 cam25.height 未命中";
+                return std::string();
+            }
+            text = withHeight;
+        }
+        else if (std::string(f) == "system.yaml")
+        {
+            text = repoYaml("system.yaml");
+            const std::pair<const char*, std::string> edits[] = {
+                {"log_dir: \"logs\"",           "log_dir: \"sim_logs\""},
+                {"output_dir: \"output\"",      "output_dir: \"sim_output\""},
+                {"model_dir: \"models\"",
+                 "model_dir: \"" + modelDirName + "\""},
+                {"run_mode: \"hardware_readonly\"",
+                 "run_mode: \"simulation\""},
+            };
+            for (const auto& e : edits)
+            {
+                text = replaceOnce(text, e.first, e.second);
+                if (text.empty())
+                {
+                    err = std::string("system.yaml 未命中：") + e.first;
+                    return std::string();
+                }
+            }
+        }
+        else if (std::string(f) == "measurement.yaml")
+        {
+            text = replaceOnce(repoYaml("measurement.yaml"),
+                               "min_feature_count: 8",
+                               "min_feature_count: 4");
+            if (text.empty())
+            {
+                err = "measurement.yaml 未命中 min_feature_count";
+                return std::string();
+            }
+        }
+        else if (std::string(f) == "validation.yaml")
+        {
+            text = repoYaml("validation.yaml");
+            text = replaceOnce(text, "yaw_min: -5.0", "yaw_min: -120.0");
+            if (text.empty())
+            {
+                err = "validation.yaml 未命中 yaw_min";
+                return std::string();
+            }
+            text = replaceOnce(text, "yaw_max: 5.0", "yaw_max: -60.0");
+            if (text.empty())
+            {
+                err = "validation.yaml 未命中 yaw_max";
+                return std::string();
+            }
+        }
+        else
+        {
+            const std::string src = std::string(APS_SOURCE_DIR) + "/config/" + f;
+            text = readFile(src);
+            if (text.empty())
+            {
+                err = "读取失败：" + src;
+                return std::string();
+            }
+        }
+
+        if (!writeTextAt(tmp + "/" + f, text))
+        {
+            err = std::string("写 ") + f + " 失败：" + tmp;
+            return std::string();
+        }
+    }
+    return tmp;
+}
+
+/// 读回 result.json 里 `aircraftToShip.rotation` 与真值逐元素比较。
+void expectRotationNear(const cv::FileNode& rotNode,
+                        const cv::Matx33d&  expected,
+                        const char*         tag)
+{
+    ASSERT_TRUE(rotNode.isSeq()) << tag << "：rotation 不是数组";
+    ASSERT_EQ(rotNode.size(), 3u);
+    int r = 0;
+    for (const cv::FileNode& row : rotNode)
+    {
+        ASSERT_EQ(row.size(), 3u) << tag << "：rotation 行不是 3 元";
+        for (int c = 0; c < 3; ++c)
+        {
+            double v = 0.0;
+            row[c] >> v;
+            EXPECT_NEAR(v, expected(r, c), 1e-6)
+                << tag << "：truth rotation[" << r << "][" << c << "] 与场景真值不符";
+        }
+        ++r;
+    }
+}
+
+}  // namespace
+
+// ============================================================================
+//  夹具事实：六个合成点确实非共面。
+//
+//  为什么要有这条用例：注释里的“非共面”曾用“深度 39.5~40.5 m 不同”
+//  来支撑，但倾斜平板上的点同样有不同深度，那不是判据。这里直接从
+//  `outline()` 取实际坐标做 SVD，钉住实测值；坐标一旦改动而忘记复核，
+//  这条用例先红。
+//
+//  判据（不是从 Z 极差推断）：
+//    · σ3/σ1 不可忽略：本夹具实测 7.5455e-2；
+//    · 到最佳拟合平面的最大距离 max|d| 不可忽略：实测 0.4429 m。
+//  阈值取“明显大于数值噪声、又留出复核余量”的量级，只用于本夹具；
+//  它们不是 PnP 或定位器的判据，也不由此反推任何验收阈值。
+// ============================================================================
+TEST(SystemInitializerTest, 场景S_合成靶标六点非共面性可复核)
+{
+    const std::vector<cv::Point3f> pts = aircraft::data::synthetic::outline();
+    ASSERT_EQ(pts.size(), 6u);
+
+    cv::Mat centered(static_cast<int>(pts.size()), 3, CV_64F);
+    for (std::size_t i = 0; i < pts.size(); ++i)
+    {
+        centered.at<double>(static_cast<int>(i), 0) = pts[i].x;
+        centered.at<double>(static_cast<int>(i), 1) = pts[i].y;
+        centered.at<double>(static_cast<int>(i), 2) = pts[i].z;
+    }
+    // ⚠ 不能用 `cv::mean(Mat)`：单通道时它返回**全体元素**的均值，
+    //   不是逐列均值。这里要的是质心，必须按列求平均。
+    cv::Mat colMeans;
+    cv::reduce(centered, colMeans, 0, cv::REDUCE_AVG);
+    ASSERT_EQ(colMeans.rows, 1);
+    ASSERT_EQ(colMeans.cols, 3);
+    for (std::size_t i = 0; i < pts.size(); ++i)
+    {
+        for (int c = 0; c < 3; ++c)
+        {
+            centered.at<double>(static_cast<int>(i), c) -=
+                colMeans.at<double>(0, c);
+        }
+    }
+
+    cv::Mat w, u, vt;
+    cv::SVD::compute(centered, w, u, vt, cv::SVD::FULL_UV);
+    ASSERT_EQ(w.total(), 3u);
+    const double s1 = w.at<double>(0);
+    const double s3 = w.at<double>(2);
+    ASSERT_GT(s1, 0.0);
+
+    const double ratio = s3 / s1;
+    EXPECT_NEAR(s1, 8.546060674, 1e-6);
+    EXPECT_NEAR(s3, 0.644843763, 1e-6);
+    EXPECT_NEAR(ratio, 7.545509e-02, 1e-6)
+        << "σ3/σ1 变化：六点分布已不再是登记的非共面臂标，须重新复核";
+
+    // 最佳拟合平面过质心；Vt 第 3 行即法向。
+    const cv::Vec3d normal(vt.at<double>(2, 0),
+                           vt.at<double>(2, 1),
+                           vt.at<double>(2, 2));
+    double maxAbsDist = 0.0;
+    for (std::size_t i = 0; i < pts.size(); ++i)
+    {
+        const cv::Vec3d p(centered.at<double>(static_cast<int>(i), 0),
+                          centered.at<double>(static_cast<int>(i), 1),
+                          centered.at<double>(static_cast<int>(i), 2));
+        maxAbsDist = std::max(maxAbsDist, std::abs(p.dot(normal)));
+    }
+    EXPECT_NEAR(maxAbsDist, 0.442892, 1e-6)
+        << "到拟合平面的最大距离变化：非共面结论须重新复核";
+    EXPECT_GT(maxAbsDist, 1e-2)
+        << "六点近似共面：不得再称“具有深度变化的靶标”，更不得称为非共面";
+}
+
+TEST(SystemInitializerTest, 场景S_仿真运行模式走通生产链并落盘真值对照)
+{
+    std::string envErr;
+    ASSERT_TRUE(prepareWorkspace(envErr)) << envErr;
+
+    std::string modelErr;
+    ASSERT_TRUE(writeSyntheticModelDir("sim_models", false, modelErr))
+        << modelErr;
+
+    std::string cfgErr;
+    const std::string simDir = makeSimulationConfigDir("sim_models", cfgErr);
+    ASSERT_FALSE(simDir.empty()) << cfgErr;
+
+    Harness h;
+    ASSERT_TRUE(h.build(simDir)) << "仿真配置启动失败：" << h.init->errorText();
+
+    // 装配形态：三路虚拟相机 + 虚拟转台 + 虚拟触发，无降级。
+    EXPECT_EQ(h.init->summary().cameraCount, 3);
+    EXPECT_EQ(h.init->summary().cameraReadyCount, 3);
+    EXPECT_FALSE(h.init->summary().degradedAtStart);
+    ASSERT_TRUE(h.ctx.recorder != nullptr);
+
+    std::fprintf(stderr,
+                 "\n[场景S] 仿真装配完成：机型库=%d 标定=%d；"
+                 "开始 startMeasurement() → 逐拍推进\n",
+                 static_cast<int>(h.init->summary().modelsLoaded),
+                 static_cast<int>(h.init->summary().calibrationLoaded));
+
+    ASSERT_TRUE(h.init->startMeasurement())
+        << "测量启动失败：" << h.ctx.controller->lastError().message;
+
+    const std::vector<TickAccount> accounts = runUntilTerminal(h, 1);
+    ASSERT_FALSE(accounts.empty());
+
+    // ---- 终态：必须是 COMPLETE，不能是"跑完但失败" ----
+    const aircraft::data::ErrorInfo lastError = h.ctx.controller->lastError();
+    ASSERT_EQ(h.ctx.controller->state(), S::COMPLETE)
+        << "仿真链未走到 COMPLETE；末次错误码 " << lastError.code << "（"
+        << aircraft::data::errorCodeName(lastError.code) << "）："
+        << lastError.message;
+
+    // ---- 落盘：结果包必须由 SAVE 自动产出 ----
+    const std::string packageDir = h.ctx.recorder->lastPackageDir();
+    ASSERT_FALSE(packageDir.empty())
+        << "COMPLETE 但没有结果包：" << h.ctx.recorder->lastErrorText();
+    const std::string resultPath = h.ctx.recorder->lastResultPath();
+    std::fprintf(stderr, "[场景S] 结果包：%s\n", packageDir.c_str());
+
+    cv::FileStorage fs(resultPath, cv::FileStorage::READ);
+    ASSERT_TRUE(fs.isOpened()) << "result.json 不是合法 json：" << resultPath;
+
+    // ---- 运行形态元数据（B2 的验收字段）----
+    std::string state;
+    std::string runMode;
+    std::string modelType;
+    std::string modelId;
+    std::string featureVersion;
+    std::string calibrationId;
+    fs["state"] >> state;
+    fs["run_mode"] >> runMode;
+    fs["model_type"] >> modelType;
+    fs["model_id"] >> modelId;
+    fs["feature_version"] >> featureVersion;
+    fs["calibration_id"] >> calibrationId;
+
+    EXPECT_EQ(state, "COMPLETE");
+    EXPECT_EQ(runMode, "simulation")
+        << "结果包必须记录本次运行的形态，而不是仓库默认值";
+    EXPECT_EQ(modelType, "synthetic");
+    EXPECT_EQ(modelId, aircraft::data::synthetic::modelId());
+    EXPECT_EQ(featureVersion, "1");
+    // 结果包必须记录**实际使用**的标定标识。配置里的 `calibration_id:
+    // synthetic-m1` 是"标定文件存在时应加载的 id"；本场景的标定文件不存在，
+    // CalibrationManager 按 calibration_mode=synthetic 改用 loadDefaults
+    // 的合成内参，其标识是 SYNTHETIC-NO-CALIBRATION。若包内写成
+    // synthetic-m1，就等于声称用了一份从未加载的标定。
+    EXPECT_EQ(calibrationId, h.ctx.calibration->calibrationId())
+        << "结果包的 calibration_id 与实际装载的标定不一致";
+    EXPECT_EQ(calibrationId, "SYNTHETIC-NO-CALIBRATION")
+        << "仿真包必须如实标明用的是合成内参";
+
+    // ---- 实际标定参数：标识相同不等于参数相同 --------------------
+    //
+    // 配置里写的是 `synthetic-m1`，实际装载的是默认合成内参。只断言
+    // id 字符串无法区分“渲染与求解用了同一份参数”与“两者只是同名”。
+    // 这里逐项核对包内参数，并与 `ctx_.rig->calibration()`（求解器使用
+    // 的同一对象）比对；再用同一份标定独立重投影，确认渲染几何与参数
+    // 自洽。三路相机均为 1280x1024、45° 水平视场、零畸变、单位外参。
+    const cv::FileNode calibParams = fs["calibration_parameters"];
+    ASSERT_TRUE(calibParams.isSeq()) << "结果包缺少 calibration_parameters";
+    ASSERT_EQ(calibParams.size(), 4u)
+        << "calibration_parameters 必须含 CAM25/CAM50/CAM100/RIG 四项";
+    std::vector<std::string> calibText;
+    for (const cv::FileNode& n : calibParams)
+    {
+        std::string s;
+        n >> s;
+        calibText.push_back(s);
+    }
+
+    const aircraft::data::OpticalRigCalibration actualCalib =
+        h.ctx.rig->calibration();
+    const double expectedFocal =
+        (1280.0 / 2.0) / std::tan(22.5 * CV_PI / 180.0);
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.9f", expectedFocal);
+    const std::string focalText(buf);
+
+    const aircraft::data::CameraCalibration actualCams[3] = {
+        actualCalib.cam25, actualCalib.cam50, actualCalib.cam100};
+    const char* const calibRoles[3] = {"CAM25", "CAM50", "CAM100"};
+    for (int i = 0; i < 3; ++i)
+    {
+        const std::string& text = calibText[static_cast<std::size_t>(i)];
+        EXPECT_EQ(text.compare(0, std::string(calibRoles[i]).size(),
+                               calibRoles[i]),
+                  0)
+            << "第 " << i << " 项不是 " << calibRoles[i] << "："
+            << text;
+        EXPECT_NE(text.find("id=SYNTHETIC-NO-CALIBRATION"), std::string::npos)
+            << "参数文本必须带实际装载的标定标识：" << text;
+        EXPECT_NE(text.find("fx=" + focalText), std::string::npos)
+            << "包内 fx 不是默认合成内参的反推值：" << text;
+        EXPECT_NE(text.find("image=1280x1024"), std::string::npos)
+            << "包内图像尺寸与相机配置不符：" << text;
+        EXPECT_NE(text.find("cameraToRig{R=[1.000000000"), std::string::npos)
+            << "默认合成外参应为单位阵，包内不是：" << text;
+
+        // 与求解器实际持有的数据逐项比对（不是比对配置文本）。
+        const cv::Mat& k = actualCams[i].cameraMatrix;
+        ASSERT_EQ(k.rows, 3);
+        ASSERT_EQ(k.cols, 3);
+        EXPECT_NEAR(k.at<double>(0, 0), expectedFocal, 1e-9);
+        EXPECT_NEAR(k.at<double>(1, 1), expectedFocal, 1e-9);
+        EXPECT_NEAR(k.at<double>(0, 2), 640.0, 1e-9);
+        EXPECT_NEAR(k.at<double>(1, 2), 512.0, 1e-9);
+        EXPECT_EQ(actualCams[i].imageWidth, 1280);
+        EXPECT_EQ(actualCams[i].imageHeight, 1024);
+        EXPECT_EQ(actualCams[i].cameraToRig.rotation, cv::Matx33d::eye());
+        EXPECT_EQ(actualCams[i].cameraToRig.translation, cv::Vec3d(0, 0, 0));
+    }
+    EXPECT_NE(calibText[3].find("RIG: id=SYNTHETIC-NO-CALIBRATION"),
+              std::string::npos);
+    EXPECT_NE(calibText[3].find("rigToShip{R=[1.000000000"),
+              std::string::npos);
+    EXPECT_EQ(actualCalib.rigToShip.rotation, cv::Matx33d::eye());
+    EXPECT_EQ(actualCalib.rigToShip.translation, cv::Vec3d(0, 0, 0));
+
+    // 渲染侧自洽：用**同一份**实际标定重建场景，把六个点投影回去，
+    // 应落回设计位置。这检查的是“参数 → 画面”的几何关系，不读取
+    // 求解结果，也不复用生产误差函数。
+    {
+        aircraft::device::SyntheticTargetScene scene(
+            actualCalib, aircraft::data::CameraRole::CAM100,
+            aircraft::device::SyntheticTargetScene::
+                defaultTruthAircraftToShip());
+        ASSERT_TRUE(scene.valid());
+        const aircraft::data::Transform& a2c = scene.aircraftToCamera();
+        const cv::Point2d design[6] = {
+            {480, 400}, {800, 400}, {800, 624},
+            {620, 624}, {620, 500}, {480, 500}};
+        const std::vector<cv::Point3f> pts =
+            aircraft::data::synthetic::outline();
+        ASSERT_EQ(pts.size(), 6u);
+        const cv::Matx33d K = actualCalib.cam100.cameraMatrix;
+        for (std::size_t i = 0; i < pts.size(); ++i)
+        {
+            const cv::Vec3d p(pts[i].x, pts[i].y, pts[i].z);
+            const cv::Vec3d pc = a2c.rotation * p + a2c.translation;
+            ASSERT_GT(pc[2], 0.0);
+            const double u = K(0, 0) * pc[0] / pc[2] + K(0, 2);
+            const double v = K(1, 1) * pc[1] / pc[2] + K(1, 2);
+            EXPECT_NEAR(u, design[i].x, 0.5)
+                << "第 " << i + 1 << " 点投影 u 与设计位置不符";
+            EXPECT_NEAR(v, design[i].y, 0.5)
+                << "第 " << i + 1 << " 点投影 v 与设计位置不符";
+        }
+    }
+
+    std::string realism;
+    fs["component_realism"] >> realism;
+    EXPECT_NE(realism.find("camera=virtual"), std::string::npos)
+        << "component_realism 未如实声明虚拟相机：" << realism;
+    EXPECT_NE(realism.find("detector=mock"), std::string::npos)
+        << "component_realism 未如实声明桩检测器：" << realism;
+
+    // ---- 每路相机的 backend / real_or_virtual ----
+    const cv::FileNode cameras = fs["cameras"];
+    ASSERT_TRUE(cameras.isSeq()) << "cameras 未写出";
+    ASSERT_EQ(cameras.size(), 3u);
+    const char* const expectedRoles[3] = {"CAM25", "CAM50", "CAM100"};
+    int cameraIndex = 0;
+    for (const cv::FileNode& n : cameras)
+    {
+        std::string role;
+        std::string backend;
+        std::string realOrVirtual;
+        n["role"] >> role;
+        n["backend"] >> backend;
+        n["real_or_virtual"] >> realOrVirtual;
+        EXPECT_EQ(role, expectedRoles[cameraIndex]);
+        EXPECT_EQ(backend, "virtual") << "仿真包的 backend 必须如实写";
+        EXPECT_EQ(realOrVirtual, "virtual");
+        ++cameraIndex;
+    }
+
+    // ---- 独立真值与误差（真值只在这里被比较，不进入求解器）----
+    const cv::FileNode truth = fs["truth"];
+    ASSERT_FALSE(truth.empty()) << "仿真包必须写出 truth 块";
+    std::string truthSource;
+    truth["source"] >> truthSource;
+    EXPECT_EQ(truthSource, aircraft::data::synthetic::truthSource());
+
+    const aircraft::data::Transform expectedTruth =
+        aircraft::device::SyntheticTargetScene::defaultTruthAircraftToShip();
+    expectRotationNear(truth["aircraftToShip"]["rotation"],
+                       expectedTruth.rotation, "truth");
+
+    const cv::FileNode truthT =
+        truth["aircraftToShip"]["translation"];
+    ASSERT_TRUE(truthT.isSeq());
+    ASSERT_EQ(truthT.size(), 3u);
+    for (int i = 0; i < 3; ++i)
+    {
+        double v = 0.0;
+        truthT[i] >> v;
+        EXPECT_NEAR(v, expectedTruth.translation[i], 1e-6)
+            << "truth translation[" << i << "] 与场景真值不符";
+    }
+
+    const cv::FileNode truthErr = truth["error"];
+    ASSERT_FALSE(truthErr.empty()) << "成功包必须写出真值误差";
+    double rotErrDeg = -1.0;
+    double transErrM = -1.0;
+    truthErr["rotation_deg"] >> rotErrDeg;
+    truthErr["translation_m"] >> transErrM;
+
+    // ---- 独立复算误差：不信任包内 `truth.error` 的算法 ----
+    //
+    // 只断言 "误差 ≤ 阈值" 挡不住"恒写 0"：那样 EXPECT_LE 照样通过。
+    // 这里从包里读回**求解出的姿态**，在测试侧用与生产不同的代码路径
+    // （trace 公式直接写在用例里）重算，再与包内数值比对。两者一致，
+    // 才说明包内误差确实来自这次求解与真值的比较。
+    {
+        cv::Matx33d solvedR;
+        for (int r = 0; r < 3; ++r)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                double v = 0.0;
+                fs["aircraftToShip"]["rotation"][r][c] >> v;
+                solvedR(r, c) = v;
+            }
+        }
+        cv::Vec3d solvedT(0.0, 0.0, 0.0);
+        for (int i = 0; i < 3; ++i)
+        {
+            double v = 0.0;
+            fs["aircraftToShip"]["translation"][i] >> v;
+            solvedT[i] = v;
+        }
+
+        const cv::Matx33d dr = expectedTruth.rotation.t() * solvedR;
+        double cc = (dr(0, 0) + dr(1, 1) + dr(2, 2) - 1.0) * 0.5;
+        cc = std::max(-1.0, std::min(1.0, cc));
+        const double independentRotDeg = std::acos(cc) * 180.0 / CV_PI;
+        const cv::Vec3d dt = solvedT - expectedTruth.translation;
+        const double independentTransM =
+            std::sqrt(dt[0] * dt[0] + dt[1] * dt[1] + dt[2] * dt[2]);
+
+        EXPECT_NEAR(rotErrDeg, independentRotDeg, 1e-3)
+            << "包内旋转误差与独立复算不一致";
+        EXPECT_NEAR(transErrM, independentTransM, 1e-3)
+            << "包内平移误差与独立复算不一致";
+    }
+
+    const double reprojectionForLog = [&fs]() {
+        double e = -1.0;
+        fs["reprojection_error"] >> e;
+        return e;
+    }();
+    std::fprintf(stderr,
+                 "[场景S] 链路成功与精度分列：\n"
+                 "  应用终态 COMPLETE → 状态机与自动保存通路跑通\n"
+                 "  旋转误差 %.6f deg = %.3f 角分 → 不构成一角分精度证据\n"
+                 "  平移误差 %.6f m = %.1f mm → 随本场景真值定义记录\n"
+                 "  重投影 %.6f px → 当前对应集的图像拟合结果\n",
+                 rotErrDeg, rotErrDeg * 60.0,
+                 transErrM, transErrM * 1000.0,
+                 reprojectionForLog);
+
+    // ---- 容差：是“通路判别上限”，不是精度验收指标 ----
+    //
+    // SYS-15 的 1 角分精度验收不适用于本合成链：本场景的相机是针孔模型、
+    // 目标是已知投影、检测器是桩，测得的误差不能外推到实机精度。因此这里
+    // 0.5° / 0.5 m 的用途只有一个：区分“链在解算”与“链没解算却报了成功”。
+    //
+    // 依据（在定义场景时固定，**不是**从本次观测值 0.3216° / 0.1434 m 反推）：
+    //   · 旋转：粗姿态与真值相差 1.2°（`defaultTruthAircraftToShip` 的 Rz）。
+    //     若求解器把粗姿态原样回填，误差正好是 1.2°。0.5° 小于该分离量，
+    //     故“抄回先验”不能通过；它不是“精度合格线”。
+    //   · 平移：真值距离 40 m，粗姿态的 (0,0,40) 与真值相同。0.5 m 是
+    //     量级判别（挡轴序/尺度错误），约 1.25% 的距离，同样不是精度线。
+    //   · 两个数字都已如实记录在验收文档中；不得因本次观测更小就收紧，
+    //     也不得因换场景后变大就放宽。
+    EXPECT_GT(rotErrDeg, 0.0);
+    EXPECT_LE(rotErrDeg, 0.5)
+        << "解算结果与独立真值的旋转差超过 0.5°：不是一条在解算的链";
+    EXPECT_GT(transErrM, 0.0);
+    EXPECT_LE(transErrM, 0.5)
+        << "解算结果与独立真值的平移差超过 0.5 m";
+
+    // ---- 求解确实用了图像侧的 CAD 对应（不是空对应集上的"成功"）----
+    int cadCount = 0;
+    int matchCount = 0;
+    int inputFeatureCount = 0;
+    fs["statistics"]["cad_count"] >> cadCount;
+    fs["statistics"]["match_count"] >> matchCount;
+    fs["statistics"]["feature_count"] >> inputFeatureCount;
+    EXPECT_GE(cadCount, 4)
+        << "PnP 至少需要 4 个 CAD 对应，结果包里只有 " << cadCount;
+    EXPECT_EQ(matchCount, cadCount)
+        << "纯 B 类退化路径下，参与 PnP 的对应集必须与统计量一致（R08）";
+    (void)inputFeatureCount;
+
+    double reprojection = -1.0;
+    double inlierRatio = -1.0;
+    fs["reprojection_error"] >> reprojection;
+    fs["validation"]["inlier_ratio"] >> inlierRatio;
+    // ⚠ 这里的重投影误差是 PnP 对**当前对应集**的图像拟合残差（像素），
+    // 与 `CadStructureLocator` 的“每条拟合棱线中位残差 ≤ 0.3 px”
+    // 不是同一个指标。实测值略大于 0.3 px 不构成违反冻结判据，
+    // 也不能反过来证明定位器合格。定位器判据另见 AlgorithmStageTest。
+    EXPECT_LE(reprojection, 2.0) << "VALIDATE 判据内的重投影误差";
+    EXPECT_GE(inlierRatio, 0.3) << "VALIDATE 判据内的内点比例";
+
+    // ---- 成功包的失败摘要：first_error.code == 0，且没有失败记录 ----
+    const cv::FileNode failure = fs["failure"];
+    ASSERT_FALSE(failure.empty()) << "成功包也必须写出 failure 摘要";
+    int firstCode = -1;
+    failure["first_error"]["code"] >> firstCode;
+    EXPECT_EQ(firstCode, 0)
+        << "COMPLETE 包的 first_error.code 必须为 0（没有失败根因）";
+
+    EXPECT_EQ(fs["missing_required_fields"].size(), 0u)
+        << "必含字段有缺失，包不完整";
+    EXPECT_EQ(fs["non_finite_fields"].size(), 0u)
+        << "结果包含非有限值";
+
+    // ---- 正常状态迁移历史必须保留（不是"因为成功就清空"）----
+    cv::FileStorage ff(packageDir + "/failure.json", cv::FileStorage::READ);
+    ASSERT_TRUE(ff.isOpened()) << "failure.json 不是合法 json";
+    const cv::FileNode history = ff["history"];
+    ASSERT_TRUE(history.isSeq());
+    ASSERT_GT(history.size(), 0u)
+        << "成功包也保留正常迁移历史（SYS-08 的可追溯要求）";
+
+    bool sawSearch = false;
+    bool sawSave = false;
+    std::string previousTo;
+    for (const cv::FileNode& hop : history)
+    {
+        std::string from;
+        std::string to;
+        int code = -1;
+        hop["from"] >> from;
+        hop["to"] >> to;
+        hop["error"]["code"] >> code;
+        EXPECT_EQ(code, 0)
+            << "成功包的迁移历史里出现失败记录：" << from << " -> " << to;
+        if (to == "SEARCH") { sawSearch = true; }
+        if (to == "SAVE")   { sawSave = true; }
+        previousTo = to;
+    }
+
+    EXPECT_TRUE(sawSearch) << "迁移历史缺少进入 SEARCH 的一条";
+    EXPECT_TRUE(sawSave) << "迁移历史缺少进入 SAVE 的一条";
+    EXPECT_EQ(previousTo, "COMPLETE")
+        << "迁移历史的终点必须是 COMPLETE（正常历史不得被截断）";
+}
+
+TEST(SystemInitializerTest, 场景S_模型标识相同但点表不同源时拒绝启动)
+{
+    // 负例：图像侧按 `data::synthetic::outline()` 渲染，模型侧的
+    // model_id **保持不变**，只改点表内容：
+    //   · 变体一：整体放大 2 倍；
+    //   · 变体二：只把一个点移动 0.25 m。
+    //
+    // 为什么要断言“拒绝启动”而不是“跑到 FAILED”：
+    //   model_id 相同不等于几何内容相同。若只在启动时比 id，整体缩放
+    //   在某些位姿下可能被估计出的平移吸收，PnP 并不会必然失败；
+    //   届时即使 COMPLETE，得到的也是一个与真实尺度不符的姿态。
+    //   故同源校验必须比**点表内容**，并在装配阶段给出明确原因。
+    //   ⚠ 本用例只证明这两个选定反例被拦下，不宣称“所有错误模型都会
+    //   使 PnP 失败”。
+    std::string envErr;
+    ASSERT_TRUE(prepareWorkspace(envErr)) << envErr;
+
+    struct Variant
+    {
+        const char* dir;
+        bool        scaled;
+        int         perturbIndex;
+    };
+    const Variant variants[] = {
+        {"sim_models_scaled", true, -1},
+        {"sim_models_onept", false, 2},
+    };
+
+    for (const Variant& v : variants)
+    {
+        std::string modelErr;
+        ASSERT_TRUE(writeSyntheticModelDir(v.dir, v.scaled, modelErr,
+                                           v.perturbIndex))
+            << v.dir << "：" << modelErr;
+
+        std::string cfgErr;
+        const std::string simDir = makeSimulationConfigDir(v.dir, cfgErr);
+        ASSERT_FALSE(simDir.empty()) << cfgErr;
+
+        Harness h;
+        EXPECT_FALSE(h.build(simDir))
+            << v.dir << "：model_id 相同但点表内容不同，启动必须被拒绝";
+        const std::string errorText = h.init->errorText();
+        EXPECT_NE(errorText.find("模型标识相同不等于点表内容相同"),
+                  std::string::npos)
+            << v.dir << "：拒绝原因必须点名“标识相同、内容不同”："
+            << errorText;
+        EXPECT_NE(errorText.find("不同源"), std::string::npos)
+            << v.dir << "：拒绝原因必须说明不同源：" << errorText;
+
+        // 具体失败阶段：同源校验在 buildAlgorithm()，早于 buildApplication()
+        // 创建 Recorder。recorder 为空证明失败没有落成“跑起来以后再失败”，
+        // 也没有依赖后段 PnP 偶然报错。
+        EXPECT_EQ(h.ctx.recorder, nullptr)
+            << v.dir << "：未通过同源校验却已创建落盘器，失败阶段不对";
+        EXPECT_EQ(h.ctx.controller, nullptr)
+            << v.dir << "：未通过同源校验却已创建测量控制器，失败阶段不对";
+    }
+}
+
+TEST(SystemInitializerTest, 场景S_仿真模式拒绝混入真实部件)
+{
+    // B2 的一致性校验：`run_mode=simulation` 只允许纯虚拟部件。
+    // 否则结果包会写 "simulation"，而实际采集用了真实相机/触发/转台 ——
+    // 包的形态声明与采集条件不符，比没有 run_mode 更糟。
+    //
+    // 三个负例各自改写**一份**仿真配置（其余六份保持仿真形态），
+    // 证明拒绝确实来自被改写的那一项，而不是配置目录本身不可用。
+    std::string envErr;
+    ASSERT_TRUE(prepareWorkspace(envErr)) << envErr;
+
+    std::string modelErr;
+    ASSERT_TRUE(writeSyntheticModelDir("sim_models_reject", false, modelErr))
+        << modelErr;
+
+    auto variantOf = [&](const char* file, const std::string& from,
+                         const std::string& to, std::string& e) {
+        const std::string dir = makeSimulationConfigDir("sim_models_reject", e);
+        if (dir.empty())
+        {
+            return std::string();
+        }
+        const std::string path = dir + "/" + file;
+        std::string text = readFile(path);
+        if (text.empty())
+        {
+            e = std::string("读 ") + file + " 失败：" + path;
+            return std::string();
+        }
+        text = replaceOnce(text, from, to);
+        if (text.empty())
+        {
+            e = std::string(file) + " 未命中：" + from;
+            return std::string();
+        }
+        if (!writeTextAt(path, text))
+        {
+            e = std::string("写 ") + file + " 失败：" + path;
+            return std::string();
+        }
+        return dir;
+    };
+
+    // 1) 真实相机：把 CAM25 从 virtual 改回现场后端 "imv"。
+    {
+        std::string e;
+        const std::string dir = makeSimulationConfigDir("sim_models_reject", e);
+        ASSERT_FALSE(dir.empty()) << e;
+        const std::string path = dir + "/camera.yaml";
+        std::string text = readFile(path);
+        ASSERT_FALSE(text.empty()) << "读 camera.yaml 失败";
+        text = replaceInCameraRecord(text, "cam25", "backend",
+                                     "      backend: \"imv\"");
+        ASSERT_FALSE(text.empty()) << "camera.yaml 的 cam25.backend 未命中";
+        // 真实后端必须先通过"按序列号绑定"这一关，否则启动会在配置校验
+        // 阶段就失败，走不到 run_mode 的一致性校验。这里给一个**不会
+        // 真的去连设备**的占位序列号（校验只要求非空）。
+        text = replaceInCameraRecord(text, "cam25", "serial",
+                                     "      serial: \"SN-SIM-REJECT\"");
+        ASSERT_FALSE(text.empty()) << "camera.yaml 的 cam25.serial 未命中";
+        ASSERT_TRUE(writeTextAt(path, text));
+
+        Harness h;
+        EXPECT_FALSE(h.build(dir)) << "仿真模式混入真实相机仍启动成功";
+        EXPECT_NE(h.init->errorText().find("全部为虚拟后端"), std::string::npos)
+            << h.init->errorText();
+    }
+
+    // 2) 硬触发：trigger.source 改为 hardware。
+    {
+        std::string e;
+        const std::string dir =
+            variantOf("trigger.yaml", "source: \"virtual\"",
+                      "source: \"hardware\"", e);
+        ASSERT_FALSE(dir.empty()) << e;
+
+        Harness h;
+        EXPECT_FALSE(h.build(dir)) << "仿真模式混入硬触发仍启动成功";
+        EXPECT_NE(h.init->errorText().find("trigger.source"), std::string::npos)
+            << h.init->errorText();
+    }
+
+    // 3) 真实转台：protocol 改为 pelco_d_udp。
+    {
+        std::string e;
+        const std::string dir =
+            makeSimulationConfigDir("sim_models_reject", e);
+        ASSERT_FALSE(dir.empty()) << e;
+        const std::string path = dir + "/turntable.yaml";
+        std::string text = readFile(path);
+        ASSERT_FALSE(text.empty()) << "读 turntable.yaml 失败";
+        text = replaceOnce(text, "protocol: \"sdk\"",
+                           "protocol: \"pelco_d_udp\"");
+        ASSERT_FALSE(text.empty()) << "turntable.yaml 的 protocol 未命中";
+        // pelco_d_udp 的配置校验要求给出 host；补一个本机占位地址，
+        // 使启动走到 run_mode 校验而不是先被"缺 host"拦下。
+        text = replaceOnce(text, "center_threshold: 50.0",
+                           "center_threshold: 50.0\n"
+                           "   host: \"127.0.0.1\"\n"
+                           "   port: 9\n"
+                           "   pelco_address: 1");
+        ASSERT_FALSE(text.empty()) << "turntable.yaml 的 center_threshold 未命中";
+        ASSERT_TRUE(writeTextAt(path, text));
+
+        Harness h;
+        EXPECT_FALSE(h.build(dir)) << "仿真模式混入真实转台仍启动成功";
+        EXPECT_NE(h.init->errorText().find("turntable.protocol"),
+                  std::string::npos)
+            << h.init->errorText();
+    }
+}
+
+TEST(SystemInitializerTest, 场景S_机型库不是合成几何时拒绝启动)
+{
+    // 同源校验：仿真模式下加载的模型必须由 `SyntheticTargetGeometry.h`
+    // 生成。只把 model_id 改掉、点表不动，证明拒绝来自标识校验本身，
+    // 而不是模型文件读不出来。
+    std::string envErr;
+    ASSERT_TRUE(prepareWorkspace(envErr)) << envErr;
+
+    std::string modelErr;
+    ASSERT_TRUE(
+        writeSyntheticModelDir("sim_models_badid", false, modelErr))
+        << modelErr;
+
+    const std::string modelPath = "sim_models_badid/model.yaml";
+    std::string text = readFile(modelPath);
+    ASSERT_FALSE(text.empty()) << "读 model.yaml 失败";
+    text = replaceOnce(text,
+                       std::string("model_id: \"") +
+                           aircraft::data::synthetic::modelId() + "\"",
+                       "model_id: \"production_aircraft\"");
+    ASSERT_FALSE(text.empty()) << "model.yaml 的 model_id 未命中";
+    ASSERT_TRUE(writeTextAt(modelPath, text));
+
+    std::string cfgErr;
+    const std::string simDir =
+        makeSimulationConfigDir("sim_models_badid", cfgErr);
+    ASSERT_FALSE(simDir.empty()) << cfgErr;
+
+    Harness h;
+    EXPECT_FALSE(h.build(simDir)) << "机型库不是合成几何仍启动成功";
+    EXPECT_NE(h.init->errorText().find("画面与模型点表不同源"),
+              std::string::npos)
+        << h.init->errorText();
 }
 
 }  // namespace

@@ -1400,6 +1400,74 @@ TEST(PosePipeline, DescriptorMatcherKeepsBothFeatureClasses)
     EXPECT_EQ(stats.matchCount, 0);
 }
 
+TEST(PosePipeline, DescriptorMatcherDoesNotDuplicateCadPointOnConflict)
+{
+    // R08：冲突分支与组装分支各自 push 一次 B 类点，导致 out 中出现重复
+    // 对应、matchCount 与真正参与 PnP 的集合不一致。本用例构造一次
+    // "A 类与 B 类同像素位置、但三维点不同"的冲突，断言输出只有一个点。
+    MeasurementConfig cfg = configuredConfig();
+    cfg.minFeatureCount = 1;
+    cfg.minMatchRatio   = 0.0;
+
+    DescriptorFeatureMatcher matcher(cfg);
+
+    FeatureSet image;
+    image.keypoints.emplace_back(cv::Point2f(100.0f, 100.0f), 1.0f);
+    image.descriptors = (cv::Mat_<float>(1, 2) << 0.0f, 0.0f);
+
+    TargetModel model;
+    model.points3d.resize(2);
+    model.points3d[0].id          = 0;
+    model.points3d[0].position    = cv::Point3f(0.0f, 0.0f, 0.0f);
+    model.points3d[0].featureType = "texture";
+    model.points3d[1].id          = 1;
+    model.points3d[1].position    = cv::Point3f(1.0f, 0.0f, 0.0f);
+    model.points3d[1].featureType = "texture";
+
+    model.features.resize(2);
+    model.features[0].featureId    = 0;
+    model.features[0].point3dIndex = 0;
+    model.features[0].descriptor   = (cv::Mat_<float>(1, 2) << 0.0f, 0.0f);
+    model.features[1].featureId    = 1;
+    model.features[1].point3dIndex = 1;
+    model.features[1].descriptor   = (cv::Mat_<float>(1, 2) << 10.0f, 0.0f);
+
+    // B 类：与 A 类落在同一像素，但指向另一个三维点 ⇒ 真冲突。
+    std::vector<FeatureCorrespondence> cad(1);
+    cad[0].imagePoint  = cv::Point2f(100.0f, 100.0f);
+    cad[0].objectPoint = cv::Point3f(5.0f, 5.0f, 5.0f);
+
+    std::vector<FeatureCorrespondence> out;
+    MatchResult stats;
+    ASSERT_TRUE(matcher.match(image, model, cad, out, stats));
+
+    EXPECT_EQ(stats.totalCandidates, 2);
+    EXPECT_EQ(stats.droppedByConflict, 1);
+    EXPECT_EQ(stats.cadCount, 1);
+    EXPECT_EQ(stats.textureCount, 0);
+    EXPECT_EQ(stats.matchCount, 1);
+    ASSERT_EQ(out.size(), 1u) << "冲突时 B 类点被重复加入输出";
+    EXPECT_DOUBLE_EQ(static_cast<double>(out[0].imagePoint.x), 100.0);
+    EXPECT_DOUBLE_EQ(static_cast<double>(out[0].objectPoint.x), 5.0);
+
+    // R08 的另一半：统计量必须描述**实际交给 PnP 的集合**，而不是
+    // 候选生成过程中的中间计数。out 里每个对应点只能出现一次。
+    EXPECT_EQ(static_cast<std::size_t>(stats.matchCount), out.size())
+        << "matchCount 与实际输出集合大小不一致";
+    EXPECT_EQ(static_cast<std::size_t>(stats.cadCount + stats.textureCount),
+              out.size())
+        << "cad/texture 计数之和与实际输出集合不一致";
+    for (std::size_t i = 0; i < out.size(); ++i)
+    {
+        for (std::size_t j = i + 1; j < out.size(); ++j)
+        {
+            EXPECT_FALSE(out[i].imagePoint == out[j].imagePoint
+                         && out[i].objectPoint == out[j].objectPoint)
+                << "输出集合中存在重复对应点（R08）";
+        }
+    }
+}
+
 // ===========================================================================
 //  六、统计量推送通道（裁决 C-002 Step 5）
 //

@@ -16,6 +16,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include "data/MonotonicClock.h"
+#include "device/camera/SyntheticTargetScene.h"
 
 namespace aircraft
 {
@@ -224,53 +225,80 @@ data::GrabResult VirtualCameraBackend::grab(data::ImageFrame& frame,
         img.row(y).setTo(cv::Scalar(v, v, v));
     }
 
+    const bool sceneInstalled = syntheticScene_ && syntheticScene_->valid();
+
     // 网格：每 64 pixel 一条暗线。网格使转台移动、画面偏移**肉眼可辨**，
     // 这是 M1 验证闭环时唯一的直观依据。
-    const cv::Scalar gridColor(90, 90, 90);
-    for (int x = 0; x < width_; x += 64)
-    {
-        cv::line(img, cv::Point(x, 0), cv::Point(x, height_ - 1), gridColor, 1);
-    }
-    for (int y = 0; y < height_; y += 64)
-    {
-        cv::line(img, cv::Point(0, y), cv::Point(width_ - 1, y), gridColor, 1);
-    }
-
-    // 图像中心十字：TargetOffset 的原点即此处（裁决 C-11）。
-    // 把原点画出来，使"对准是否真的在把目标往中心驱"可以直接看出来。
+    //
+    // ⚠ 安装合成场景时**不画网格与中心十字**。它们是为"无场景的亮块
+    //   目视检查"加的，但网格间距（64 px）小于 CadStructureLocator 的
+    //   窗口直径（窗口半径上限 60 px）：每个角点窗口内必然落入一条与目标
+    //   棱线**平行**的网格线。倍角聚类只按方向分成两组，会把网格线与目标
+    //   棱线并入同一组，Huber 拟合线落在两者之间 —— 实测中位残差约
+    //   12 px，六个角点中只有一个还能通过冻结的 0.3 px 判据。中心十字
+    //   还会在凹角附近再添两条短边。这不是定位器的问题：生产图像里也
+    //   不会有"正好与目标棱线平行、间距 16/32 px 的人造网格"。
     const cv::Point center(width_ / 2, height_ / 2);
-    cv::line(img, cv::Point(center.x - 20, center.y),
-             cv::Point(center.x + 20, center.y), cv::Scalar(0, 0, 200), 1);
-    cv::line(img, cv::Point(center.x, center.y - 20),
-             cv::Point(center.x, center.y + 20), cv::Scalar(0, 0, 200), 1);
-
-    // 目标：亮色矩形，按角色决定基准尺寸。
-    const int    base = targetBaseSizeFor(config_.role);
-    const int    halfW = base / 2;
-    const int    halfH = (base * 3) / 8;  // 略扁，近似机身侧影
-    const cv::Point tgt(static_cast<int>(center.x + targetOffsetX_),
-                        static_cast<int>(center.y + targetOffsetY_));
-
-    cv::Rect box(tgt.x - halfW, tgt.y - halfH, base, (base * 3) / 4);
-    // 与画幅求交后再绘制：偏移量可能把目标推出画面
-    // （对准测试会给出 100 pixel 级偏移），而 cv::rectangle 对
-    // 越界矩形会抛异常或静默裁剪（依版本而异）。显式求交使行为确定，
-    // 且越界时画面里就是"看不到目标"—— 这正是对准失败应有的表现。
-    box &= cv::Rect(0, 0, width_, height_);
-    if (box.width > 0 && box.height > 0)
+    if (!sceneInstalled)
     {
-        cv::rectangle(img, box, cv::Scalar(210, 210, 210), cv::FILLED);
-        cv::rectangle(img, box, cv::Scalar(255, 255, 255), 2);
-
-        // 机身内部的几条短横线：提供可提取的纹理。
-        // 纯色矩形在 SIFT 下几乎没有稳定关键点，
-        // 而算法链的 F 分项（特征数量）需要一个非退化的输入。
-        for (int i = 1; i < 4; ++i)
+        const cv::Scalar gridColor(90, 90, 90);
+        for (int x = 0; x < width_; x += 64)
         {
-            const int y = box.y + (box.height * i) / 4;
-            cv::line(img, cv::Point(box.x + 6, y),
-                     cv::Point(box.x + box.width - 6, y),
-                     cv::Scalar(120, 120, 120), 1);
+            cv::line(img, cv::Point(x, 0), cv::Point(x, height_ - 1), gridColor, 1);
+        }
+        for (int y = 0; y < height_; y += 64)
+        {
+            cv::line(img, cv::Point(0, y), cv::Point(width_ - 1, y), gridColor, 1);
+        }
+
+        // 图像中心十字：TargetOffset 的原点即此处（裁决 C-11）。
+        // 把原点画出来，使"对准是否真的在把目标往中心驱"可以直接看出来。
+        cv::line(img, cv::Point(center.x - 20, center.y),
+                 cv::Point(center.x + 20, center.y), cv::Scalar(0, 0, 200), 1);
+        cv::line(img, cv::Point(center.x, center.y - 20),
+                 cv::Point(center.x, center.y + 20), cv::Scalar(0, 0, 200), 1);
+    }
+
+    // 目标：两种互斥的渲染方式。
+    //
+    //  · 默认（无场景）：亮色矩形，按角色决定基准尺寸；
+    //  · 安装了 SyntheticTargetScene：按真值位姿投影直角 L 形。
+    //
+    // ⚠ 场景路径**不**画任何 2D 点表或位姿标注。算法侧必须从图像内容
+    //   自己提取结构点，否则本次闭环证明的只是"已知答案能被抄回来"。
+    if (sceneInstalled)
+    {
+        syntheticScene_->renderInto(img);
+    }
+    else
+    {
+        const int    base = targetBaseSizeFor(config_.role);
+        const int    halfW = base / 2;
+        const int    halfH = (base * 3) / 8;  // 略扁，近似机身侧影
+        const cv::Point tgt(static_cast<int>(center.x + targetOffsetX_),
+                            static_cast<int>(center.y + targetOffsetY_));
+
+        cv::Rect box(tgt.x - halfW, tgt.y - halfH, base, (base * 3) / 4);
+        // 与画幅求交后再绘制：偏移量可能把目标推出画面
+        // （对准测试会给出 100 pixel 级偏移），而 cv::rectangle 对
+        // 越界矩形会抛异常或静默裁剪（依版本而异）。显式求交使行为确定，
+        // 且越界时画面里就是"看不到目标"—— 这正是对准失败应有的表现。
+        box &= cv::Rect(0, 0, width_, height_);
+        if (box.width > 0 && box.height > 0)
+        {
+            cv::rectangle(img, box, cv::Scalar(210, 210, 210), cv::FILLED);
+            cv::rectangle(img, box, cv::Scalar(255, 255, 255), 2);
+
+            // 机身内部的几条短横线：提供可提取的纹理。
+            // 纯色矩形在 SIFT 下几乎没有稳定关键点，
+            // 而算法链的 F 分项（特征数量）需要一个非退化的输入。
+            for (int i = 1; i < 4; ++i)
+            {
+                const int y = box.y + (box.height * i) / 4;
+                cv::line(img, cv::Point(box.x + 6, y),
+                         cv::Point(box.x + box.width - 6, y),
+                         cv::Scalar(120, 120, 120), 1);
+            }
         }
     }
 
@@ -412,6 +440,12 @@ void VirtualCameraBackend::setTargetPixelOffset(double dx, double dy)
 {
     targetOffsetX_ = dx;
     targetOffsetY_ = dy;
+}
+
+void VirtualCameraBackend::setSyntheticScene(
+    std::shared_ptr<const SyntheticTargetScene> scene)
+{
+    syntheticScene_ = std::move(scene);
 }
 
 void VirtualCameraBackend::setDeviceLatencyNs(uint64_t ns)
