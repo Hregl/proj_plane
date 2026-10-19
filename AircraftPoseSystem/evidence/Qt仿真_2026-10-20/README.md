@@ -14,14 +14,14 @@
 |---|---|
 | 分支 | `develop` |
 | 起始提交 | `cd37cbf`（批次 1 收口） |
-| 工作树 | 本批改动**尚未提交**；证据对应工作树内容，不对应某个已提交 SHA |
-| 构建树 | `build-native-on`（`APS_SDK_MODE=ON`）、`build-native-off`（`APS_SDK_MODE=OFF`），以及交付脚本自建的 `build-simulation`（无 SDK、无测试） |
+| 主交付提交 | `a69df50`（37 个文件） |
+| 补正提交 | 本目录 11–14 号与 UI 用例补强随补正提交；最终 SHA 见 `git log -- evidence/Qt仿真_2026-10-20`，不在文件内自指 |
+| 构建树 | `build-native-on`（`APS_SDK_MODE=ON`）、`build-native-off`（`APS_SDK_MODE=OFF`）、交付脚本自建的 `build-simulation`，以及从零验证用的 `build-simulation-fresh-20261020`（三者均无 SDK、无测试） |
 | 工具链 | GCC 12.3.0、CMake 3.31.4、Qt 5.15.8、OpenCV 4.6.0、GoogleTest 1.12.1 |
-| 平台 | UOS Desktop 25，`QT_QPA_PLATFORM=offscreen` |
+| 平台 | UOS Desktop 25；自动用例 `QT_QPA_PLATFORM=offscreen`，另有 `DISPLAY=:0` 真实 X 窗口运行 |
 
-⚠ 本批新增/修改文件与批次 1 的两处文字修正（复算脚本标签、CMake 的
-GoogleTest 状态注释）同属**一个未提交工作树**。提交后应把实际 SHA 补记到
-本节；在补记前，本文只声明“起始提交”，不声明“证据对应提交”。
+⚠ 06/07 的逐套件记录标注执行时的 HEAD。补正执行时主交付提交为
+`a69df50`，补正改动尚未提交；这是执行时事实，不是当前工作树状态。
 
 ---
 
@@ -36,12 +36,16 @@ GoogleTest 状态注释）同属**一个未提交工作树**。提交后应把�
 | `04_结果包摘录_OFF/第一次_result.json` | OFF 第一次结果包 `result.json` 原样摘录 |
 | `04_结果包摘录_OFF/第二次_result.json` | OFF 第二次结果包 `result.json` 原样摘录 |
 | `05_交付脚本启动.txt` | `scripts/run_simulation.sh` 端到端输出：CMake 配置、无 SDK 构建、模型生成、应用启动、`APP_FIRST_TICK_COMPLETED` |
-| `06_逐套件回归_ON.txt` | ON 树 13 个套件逐个运行计数（禁止通配汇总） |
-| `07_逐套件回归_OFF.txt` | OFF 树同一清单逐个运行计数 |
+| `06_逐套件回归_ON.txt` | ON 树 13 个套件逐个运行**完整记录**：命令、SDK 值、每条 `Passed`、通过/失败数、每套件 `exit_code`、总退出码 |
+| `07_逐套件回归_OFF.txt` | OFF 树同一清单、同一格式的完整记录 |
 | `08_真实窗口两次测量.txt` | `DISPLAY=:0` 下真实 X 窗口：窗口树/几何、两次 `xdotool` 空格时序、日志、结果包字段 |
 | `09_真实窗口结果包摘录/第一次_result.json` | 真实窗口第一次结果包 `result.json` 原样摘录 |
 | `09_真实窗口结果包摘录/第二次_result.json` | 真实窗口第二次结果包 `result.json` 原样摘录 |
 | `10_安装启动自检_环境限制.txt` | `install_launch_check` 在 ON/OFF 两树的实测失败原因（现场 `config/` 需要真实相机/SDK） |
+| `11_从零构建启动.txt` | 补正：在**执行前不存在**的 `build-simulation-fresh-20261020` 上跑交付脚本，含 49 条编译、12 条链接、`timeout` 退出码 124 |
+| `12_第一包不变性_变异检查.txt` | 补正：定向改写第一包 `turntable.json` 后用例变红（长度与内容两条断言） |
+| `13_第一包不变性_恢复后复跑.txt` | 补正：变异移除后的 ON/OFF 复跑，14 文件快照通过 |
+| `14_模型目录重建.txt` | 补正：删除 `simulation/models/` 后由生成器重建，聚合 SHA-256 与删除前相同 |
 | `SHA256SUMS` | 本目录除自身外全部文件的 SHA-256 |
 
 **原始载荷**（结果包完整目录、三路 `cam*.raw`、配置快照、日志、模型文件）
@@ -104,6 +108,15 @@ cd 验收证据/Qt仿真_2026-10-20 && sha256sum -c SHA256SUMS
   `cam25.raw` / `cam50.raw` / `cam100.raw` / 7 个 `config_snapshot/*.yaml`
   齐全（完整清单见持久目录）。
 
+补正后的用例还做**第一包不变性**校验：第一次测量结束后对整包 14 个文件
+逐文件做字节快照；第二次测量结束后**重新读回**第一包的完整文件清单与内容，
+逐项比较文件数、长度与字节。同时校验三路 RAW 的精确字节数
+（1280×1024×3）、`calibration_id.txt` 含 `SYNTHETIC`、7 个配置快照齐全。
+定向变异（第二次结束后向第一包 `turntable.json` 追加一个换行）使
+“文件长度变化”和“文件内容被改写”两条断言同时变红，见
+`12_第一包不变性_变异检查.txt`；恢复后两树复跑通过，见
+`13_第一包不变性_恢复后复跑.txt`。现有六包未被改写。
+
 ### 3.2 真实 X 窗口（同一交付入口）
 
 自动化用例在 `offscreen` 平台运行。为验证“可直接启动的窗口”本身，另做了一次
@@ -144,16 +157,23 @@ cd 验收证据/Qt仿真_2026-10-20 && sha256sum -c SHA256SUMS
 
 `QT_QPA_PLATFORM=offscreen timeout 20 ./scripts/run_simulation.sh`：
 
-1. 从零创建 `build-simulation/`，配置结果为
-   `APS_SDK_MODE=OFF`、未找到 ImvSdk/TurntableSdk、无 GoogleTest（预期，
-   该树 `BUILD_TESTING=OFF`）；
-2. 构建 `AircraftPoseSystem` 与 `gen_synthetic_model` 两个目标成功；
+1. 配置 `build-simulation/`（该目录在 05 执行时已存在，故 05 只作为
+   启动证据；从零目录见下方的 11），配置结果为 `APS_SDK_MODE=OFF`、
+   未找到 ImvSdk/TurntableSdk、无 GoogleTest（预期，该树
+   `BUILD_TESTING=OFF`）；
+2. 构建 `AircraftPoseSystem` 与 `gen_synthetic_model` 两个目标；
 3. 生成 `simulation/models/`：6 个 CAD 结构点、三个 24 字节空纹理库；
 4. 应用启动并打印 `运行模式：simulation`、三路虚拟相机、机型库
    `synthetic_aircraft_6pt / 1`、`APP_FIRST_TICK_COMPLETED`。
 
 退出码 124 来自 `timeout 20`，表示入口在观察窗口内持续运行，**不是**程序
-自身失败。完整输出见 `05_交付脚本启动.txt`。
+自身失败。完整输出见 `05_交付脚本启动.txt`（该次在**已存在**的
+`build-simulation/` 上启动，只作为启动证据）。
+
+“从零构建”由 `11_从零构建启动.txt` 单独证明：执行前 `build-simulation-fresh-20261020`
+不存在（`test -e` 返回 1），日志包含 49 条 `Building CXX`、12 条
+`Linking CXX`、CMake 配置行、生成器输出、应用启动行与
+`APP_FIRST_TICK_COMPLETED`，末尾记录 `TIMEOUT_EXIT=124`。
 
 ---
 
@@ -178,9 +198,17 @@ cd 验收证据/Qt仿真_2026-10-20 && sha256sum -c SHA256SUMS
 | `test_system_initializer` | 26 |
 | **合计** | **468** |
 
-ON / OFF 均 468 条通过。CTest 清单另有 `install_check`、
-`install_launch_check` 两项安装检查，**不计入**上表；CTest 总计 470 项。
-相对批次 1 的 467 条，新增的正是 `test_qt_simulation_ui` 的 1 条。
+ON / OFF 均 468 条通过、0 条失败，13 个套件逐个退出码均为 0，
+`OVERALL_EXIT=0`。可复核记录见 `06_逐套件回归_ON.txt` /
+`07_逐套件回归_OFF.txt`：每份含执行时间、当时的 HEAD、实际
+`APS_SDK_MODE` / `APS_HAVE_IMVSDK` 值、逐套件命令行、ctest 完整输出
+（每个 `Passed` 行与 `100% tests passed, 0 tests failed out of N`）
+以及每套件的 `exit_code`；两份均以
+`TOTAL tests=468 failed=0 suites=13` 收尾。**不是**从计数行补填“通过”。
+
+CTest 清单另有 `install_check`、`install_launch_check` 两项安装检查，
+**不计入**上表；CTest 总计 470 项。新增的 `test_qt_simulation_ui`
+1 条**已包含在 468 内**（批次 1 为 467 条），不是 468＋1＝469。
 
 ⚠ **`install_launch_check` 当前两棵树都失败，且不是本批引入。** 它从安装
 前缀以默认 `config/`（现场配置）启动：ON 树要求真实相机
@@ -217,7 +245,28 @@ ON / OFF 均 468 条通过。CTest 清单另有 `install_check`、
 
 ---
 
-## 6 复现命令
+## 6 复核补正记录（2026-10-20）
+
+主交付提交 `a69df50` 复核后提出的四项，逐条处理如下；补正不改动
+仿真结果、不放宽判据，也不扩大批次范围。
+
+| # | 复核意见 | 补正产物 | 结论 |
+|---|---|---|---|
+| 1 | 468/468 缺可复核执行记录（只有 `total=数量`） | 重跑两树并保留完整输出：`06` / `07` | 各 468 通过、0 失败、13 套件退出码全 0、总退出码 0 |
+| 2 | `05` 不能证明“从零构建”（只有 `Built target`） | 在原先不存在的目录上重跑：`11`；原 `05` 保留为已有构建树上的启动证据 | 49 编译 + 12 链接 + 超时 124 + 首 tick |
+| 3 | UI 用例未验证第一包未被第二次改写 | 用例增加整包字节快照与重新读回比较、14 文件完整性、RAW 精确大小、标定标识、配置快照；变异反例 `12`，恢复复跑 `13` | 变异必红；恢复后两树绿；现有六包未发现覆盖 |
+| 4 | 旧证据哈希表与 Qt README 基线未同步 | `../正式测试入口_2026-10-20/SHA256SUMS.txt` 重算（19 件全部通过）；本 README 更新基线 | 19/19 通过；历史 `cd37cbf` 的 19 件仍全部通过 |
+
+**安装检查保持分列**：`install_check` 两树通过，`install_launch_check`
+两树失败（ON 找不到 `FD88772AAK00078`，OFF 无 SDK）。现场配置与相关
+启动源码与父提交逐字节相同，该硬件前提不是本批引入；本批未修改安装策略。
+
+**未因补正重跑**：实机运动、测量精度、长时运行仍分别列为未验证项；
+本批不发送任何实机控制帧。
+
+---
+
+## 7 复现命令
 
 ```bash
 # 交付入口（从零构建并启动）

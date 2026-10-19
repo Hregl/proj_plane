@@ -1,14 +1,1078 @@
-test_algorithm_pipeline: total=29
-test_algorithm_stages: total=23
-test_alignment_controller: total=21
-test_device_layer: total=83
-test_measurement_flow: total=46
-test_optical_layer: total=48
-test_pelco_d: total=87
-test_preview_layer: total=40
-test_qt_simulation_ui: total=1
-test_recorder_adapter: total=8
-test_recorder_package: total=29
-test_state_machine: total=27
-test_system_initializer: total=26
-TOTAL build-native-on = 468
+逐套件执行记录：build-native-on
+时间：2026-10-20 05:49:36 +0800
+HEAD：a69df50dac130a645cfb9f0ae1f0a85366e0e2b3（补正工作树，尚未提交）
+ctest：ctest version 3.31.4
+APS_SDK_MODE=ON
+APS_HAVE_IMVSDK=TRUE
+说明：每个套件单独调用 ctest（不使用通配汇总）；退出码为 ctest 进程返回值。
+============================================================
+
+## test_algorithm_pipeline
+命令：ctest --test-dir build-native-on -R '^test_algorithm_pipeline\.' --output-on-failure
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+      Start 26: test_algorithm_pipeline.TargetModelManager.SavesAndLoadsWholeModelDirectory
+ 1/29 Test #26: test_algorithm_pipeline.TargetModelManager.SavesAndLoadsWholeModelDirectory ....................   Passed    0.00 sec
+      Start 27: test_algorithm_pipeline.TargetModelManager.KeepsThreeFocalLengthLibrariesSeparate
+ 2/29 Test #27: test_algorithm_pipeline.TargetModelManager.KeepsThreeFocalLengthLibrariesSeparate ..............   Passed    0.00 sec
+      Start 28: test_algorithm_pipeline.TargetModelManager.RejectsLibraryWhoseStoredRoleDiffersFromFilename
+ 3/29 Test #28: test_algorithm_pipeline.TargetModelManager.RejectsLibraryWhoseStoredRoleDiffersFromFilename ....   Passed    0.00 sec
+      Start 29: test_algorithm_pipeline.TargetModelManager.MissingOneFeatureLibraryFailsWithoutHalfLoad
+ 4/29 Test #29: test_algorithm_pipeline.TargetModelManager.MissingOneFeatureLibraryFailsWithoutHalfLoad ........   Passed    0.00 sec
+      Start 30: test_algorithm_pipeline.TargetModelManager.MissingMetaFileFails
+ 5/29 Test #30: test_algorithm_pipeline.TargetModelManager.MissingMetaFileFails ................................   Passed    0.00 sec
+      Start 31: test_algorithm_pipeline.TargetModelManager.DegeneratePointTableFails
+ 6/29 Test #31: test_algorithm_pipeline.TargetModelManager.DegeneratePointTableFails ...........................   Passed    0.00 sec
+      Start 32: test_algorithm_pipeline.PosePipeline.DecomposeZyxIsSelfConsistentWithMatrix
+ 7/29 Test #32: test_algorithm_pipeline.PosePipeline.DecomposeZyxIsSelfConsistentWithMatrix ....................   Passed    0.00 sec
+      Start 33: test_algorithm_pipeline.PosePipeline.DecomposeZyxHandlesGimbalLockWithoutNaN
+ 8/29 Test #33: test_algorithm_pipeline.PosePipeline.DecomposeZyxHandlesGimbalLockWithoutNaN ...................   Passed    0.00 sec
+      Start 34: test_algorithm_pipeline.PosePipeline.SolvePoseComposesIdentityChainToAircraftPose
+ 9/29 Test #34: test_algorithm_pipeline.PosePipeline.SolvePoseComposesIdentityChainToAircraftPose ..............   Passed    0.00 sec
+      Start 35: test_algorithm_pipeline.PosePipeline.SolvePoseHonoursRigToShipRotation
+10/29 Test #35: test_algorithm_pipeline.PosePipeline.SolvePoseHonoursRigToShipRotation .........................   Passed    0.00 sec
+      Start 36: test_algorithm_pipeline.PosePipeline.SolvePoseAppliesCameraToRigTranslationBeforeRigRotation
+11/29 Test #36: test_algorithm_pipeline.PosePipeline.SolvePoseAppliesCameraToRigTranslationBeforeRigRotation ...   Passed    0.00 sec
+      Start 37: test_algorithm_pipeline.PosePipeline.SolvePoseReportsFailureWhenModelIsNotLoaded
+12/29 Test #37: test_algorithm_pipeline.PosePipeline.SolvePoseReportsFailureWhenModelIsNotLoaded ...............   Passed    0.01 sec
+      Start 38: test_algorithm_pipeline.PosePipeline.ValidateUsesStatsFromLastSolve
+13/29 Test #38: test_algorithm_pipeline.PosePipeline.ValidateUsesStatsFromLastSolve ............................   Passed    0.01 sec
+      Start 39: test_algorithm_pipeline.PosePipeline.DetectAndEstimateScaleOnSyntheticTarget
+14/29 Test #39: test_algorithm_pipeline.PosePipeline.DetectAndEstimateScaleOnSyntheticTarget ...................   Passed    0.01 sec
+      Start 40: test_algorithm_pipeline.PosePipeline.DetectFailsOnFeaturelessImage
+15/29 Test #40: test_algorithm_pipeline.PosePipeline.DetectFailsOnFeaturelessImage .............................   Passed    0.01 sec
+      Start 41: test_algorithm_pipeline.PosePipeline.SelectCameraSkipsEmptyFramesAndHonoursAllowedList
+16/29 Test #41: test_algorithm_pipeline.PosePipeline.SelectCameraSkipsEmptyFramesAndHonoursAllowedList .........   Passed    0.03 sec
+      Start 42: test_algorithm_pipeline.PosePipeline.SelectBestFrameRanksBySharpnessAndAppliesGate
+17/29 Test #42: test_algorithm_pipeline.PosePipeline.SelectBestFrameRanksBySharpnessAndAppliesGate .............   Passed    0.01 sec
+      Start 43: test_algorithm_pipeline.PosePipeline.SelectCameraQueriesTheStoreWithTheCandidatesOwnBucket
+18/29 Test #43: test_algorithm_pipeline.PosePipeline.SelectCameraQueriesTheStoreWithTheCandidatesOwnBucket .....   Passed    0.04 sec
+      Start 44: test_algorithm_pipeline.PosePipeline.DefaultChainBuildsRealStages
+19/29 Test #44: test_algorithm_pipeline.PosePipeline.DefaultChainBuildsRealStages ..............................   Passed    0.59 sec
+      Start 45: test_algorithm_pipeline.PosePipeline.SiftExtractorRejectsImageBelowFeatureGate
+20/29 Test #45: test_algorithm_pipeline.PosePipeline.SiftExtractorRejectsImageBelowFeatureGate .................   Passed    0.04 sec
+      Start 46: test_algorithm_pipeline.PosePipeline.DescriptorMatcherKeepsBothFeatureClasses
+21/29 Test #46: test_algorithm_pipeline.PosePipeline.DescriptorMatcherKeepsBothFeatureClasses ..................   Passed    0.00 sec
+      Start 47: test_algorithm_pipeline.PosePipeline.DescriptorMatcherDoesNotDuplicateCadPointOnConflict
+22/29 Test #47: test_algorithm_pipeline.PosePipeline.DescriptorMatcherDoesNotDuplicateCadPointOnConflict .......   Passed    0.00 sec
+      Start 48: test_algorithm_pipeline.PosePipeline.StatisticsObserverReceivesMatchStatisticsOnSolve
+23/29 Test #48: test_algorithm_pipeline.PosePipeline.StatisticsObserverReceivesMatchStatisticsOnSolve ..........   Passed    0.00 sec
+      Start 49: test_algorithm_pipeline.PosePipeline.StatisticsObserverIsPushedBeforeEarlyReturnWhenPnpFails
+24/29 Test #49: test_algorithm_pipeline.PosePipeline.StatisticsObserverIsPushedBeforeEarlyReturnWhenPnpFails ...   Passed    0.00 sec
+      Start 50: test_algorithm_pipeline.PosePipeline.StatisticsObserverDetachStopsPushingWithoutCrashing
+25/29 Test #50: test_algorithm_pipeline.PosePipeline.StatisticsObserverDetachStopsPushingWithoutCrashing .......   Passed    0.00 sec
+      Start 51: test_algorithm_pipeline.CadStructureLocator.LocatesSubPixelCornersOnSyntheticEdges
+26/29 Test #51: test_algorithm_pipeline.CadStructureLocator.LocatesSubPixelCornersOnSyntheticEdges .............   Passed    0.01 sec
+      Start 52: test_algorithm_pipeline.CadStructureLocator.FlagsInsufficientSpreadButKeepsCorrespondences
+27/29 Test #52: test_algorithm_pipeline.CadStructureLocator.FlagsInsufficientSpreadButKeepsCorrespondences .....   Passed    0.01 sec
+      Start 53: test_algorithm_pipeline.CadStructureLocator.ReportsNoMatchOnBlankImage
+28/29 Test #53: test_algorithm_pipeline.CadStructureLocator.ReportsNoMatchOnBlankImage .........................   Passed    0.01 sec
+      Start 54: test_algorithm_pipeline.CadStructureLocator.RejectsModelWithTooFewCadPoints
+29/29 Test #54: test_algorithm_pipeline.CadStructureLocator.RejectsModelWithTooFewCadPoints ....................   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 29
+
+Total Test time (real) =   0.85 sec
+exit_code=0
+
+## test_algorithm_stages
+命令：ctest --test-dir build-native-on -R '^test_algorithm_stages\.' --output-on-failure
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+      Start  3: test_algorithm_stages.TargetScaleEstimator.PixelsFormGivesCorrectDistance
+ 1/23 Test  #3: test_algorithm_stages.TargetScaleEstimator.PixelsFormGivesCorrectDistance ..............   Passed    0.00 sec
+      Start  4: test_algorithm_stages.TargetScaleEstimator.FocalLengthInMetresIsDetectablyWrong
+ 2/23 Test  #4: test_algorithm_stages.TargetScaleEstimator.FocalLengthInMetresIsDetectablyWrong ........   Passed    0.00 sec
+      Start  5: test_algorithm_stages.TargetScaleEstimator.RejectsInvalidInputs
+ 3/23 Test  #5: test_algorithm_stages.TargetScaleEstimator.RejectsInvalidInputs ........................   Passed    0.00 sec
+      Start  6: test_algorithm_stages.MeasurementSelector.EFollowsEng10Formula
+ 4/23 Test  #6: test_algorithm_stages.MeasurementSelector.EFollowsEng10Formula .........................   Passed    0.00 sec
+      Start  7: test_algorithm_stages.MeasurementSelector.PredictedErrorIsArcminNotRadians
+ 5/23 Test  #7: test_algorithm_stages.MeasurementSelector.PredictedErrorIsArcminNotRadians .............   Passed    0.00 sec
+      Start  8: test_algorithm_stages.MeasurementSelector.UncalibratedSigmasUseFallback
+ 6/23 Test  #8: test_algorithm_stages.MeasurementSelector.UncalibratedSigmasUseFallback ................   Passed    0.00 sec
+      Start  9: test_algorithm_stages.MeasurementSelector.GatedCandidatesAreErasedNotZeroScored
+ 7/23 Test  #9: test_algorithm_stages.MeasurementSelector.GatedCandidatesAreErasedNotZeroScored ........   Passed    0.01 sec
+      Start 10: test_algorithm_stages.MeasurementSelector.MatchRatioGateDoesNotApplyWhenUnmeasured
+ 8/23 Test #10: test_algorithm_stages.MeasurementSelector.MatchRatioGateDoesNotApplyWhenUnmeasured .....   Passed    0.00 sec
+      Start 11: test_algorithm_stages.MeasurementSelector.DistanceBandsFollowFrozenEdges
+ 9/23 Test #11: test_algorithm_stages.MeasurementSelector.DistanceBandsFollowFrozenEdges ...............   Passed    0.00 sec
+      Start 12: test_algorithm_stages.MeasurementSelector.UnconfiguredIllumBandsFallBackToNormal
+10/23 Test #12: test_algorithm_stages.MeasurementSelector.UnconfiguredIllumBandsFallBackToNormal .......   Passed    0.00 sec
+      Start 13: test_algorithm_stages.MeasurementSelector.UnknownDistanceSkipsHistoryLookup
+11/23 Test #13: test_algorithm_stages.MeasurementSelector.UnknownDistanceSkipsHistoryLookup ............   Passed    0.00 sec
+      Start 14: test_algorithm_stages.MeasurementSelector.UsageTripleRecordsTheCamera
+12/23 Test #14: test_algorithm_stages.MeasurementSelector.UsageTripleRecordsTheCamera ..................   Passed    0.00 sec
+      Start 15: test_algorithm_stages.MeasurementSelector.SelectTakesMaximumAndKeepsPriorityOnTies
+13/23 Test #15: test_algorithm_stages.MeasurementSelector.SelectTakesMaximumAndKeepsPriorityOnTies .....   Passed    0.00 sec
+      Start 16: test_algorithm_stages.PoseValidator.PassesWhenAllCriteriaHold
+14/23 Test #16: test_algorithm_stages.PoseValidator.PassesWhenAllCriteriaHold ..........................   Passed    0.00 sec
+      Start 17: test_algorithm_stages.PoseValidator.FailsOnEachCriterionIndependently
+15/23 Test #17: test_algorithm_stages.PoseValidator.FailsOnEachCriterionIndependently ..................   Passed    0.00 sec
+      Start 18: test_algorithm_stages.PoseValidator.RejectsNonFinitePoseValues
+16/23 Test #18: test_algorithm_stages.PoseValidator.RejectsNonFinitePoseValues .........................   Passed    0.00 sec
+      Start 19: test_algorithm_stages.PoseValidator.YawRangeCheckUsesNormalizedAngle
+17/23 Test #19: test_algorithm_stages.PoseValidator.YawRangeCheckUsesNormalizedAngle ...................   Passed    0.00 sec
+      Start 20: test_algorithm_stages.PoseValidator.UnconfiguredYawRangeDisablesThatCriterion
+18/23 Test #20: test_algorithm_stages.PoseValidator.UnconfiguredYawRangeDisablesThatCriterion ..........   Passed    0.00 sec
+      Start 21: test_algorithm_stages.PoseValidator.ConfidenceIsWeakestLink
+19/23 Test #21: test_algorithm_stages.PoseValidator.ConfidenceIsWeakestLink ............................   Passed    0.01 sec
+      Start 22: test_algorithm_stages.PnPPoseEstimator.RecoversKnownPoseFromNoiseFreeCorrespondences
+20/23 Test #22: test_algorithm_stages.PnPPoseEstimator.RecoversKnownPoseFromNoiseFreeCorrespondences ...   Passed    0.01 sec
+      Start 23: test_algorithm_stages.PnPPoseEstimator.RejectsOutliersThroughRansac
+21/23 Test #23: test_algorithm_stages.PnPPoseEstimator.RejectsOutliersThroughRansac ....................   Passed    0.01 sec
+      Start 24: test_algorithm_stages.PnPPoseEstimator.RefusesWhenTooFewCorrespondences
+22/23 Test #24: test_algorithm_stages.PnPPoseEstimator.RefusesWhenTooFewCorrespondences ................   Passed    0.00 sec
+      Start 25: test_algorithm_stages.PnPPoseEstimator.RejectsUncalibratedIntrinsics
+23/23 Test #25: test_algorithm_stages.PnPPoseEstimator.RejectsUncalibratedIntrinsics ...................   Passed    0.00 sec
+
+100% tests passed, 0 tests failed out of 23
+
+Total Test time (real) =   0.11 sec
+exit_code=0
+
+## test_alignment_controller
+命令：ctest --test-dir build-native-on -R '^test_alignment_controller\.' --output-on-failure
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+      Start 423: test_alignment_controller.AlignmentControllerTest.居中停止_阈值内判为居中
+ 1/21 Test #423: test_alignment_controller.AlignmentControllerTest.居中停止_阈值内判为居中 .................................   Passed    0.00 sec
+      Start 424: test_alignment_controller.AlignmentControllerTest.居中停止_阈值外不判居中
+ 2/21 Test #424: test_alignment_controller.AlignmentControllerTest.居中停止_阈值外不判居中 .................................   Passed    0.00 sec
+      Start 425: test_alignment_controller.AlignmentControllerTest.居中停止_judgeCentered填写TargetOffset字段
+ 3/21 Test #425: test_alignment_controller.AlignmentControllerTest.居中停止_judgeCentered填写TargetOffset字段 .................   Passed    0.00 sec
+      Start 426: test_alignment_controller.AlignmentControllerTest.阈值取自配置而非硬编码50
+ 4/21 Test #426: test_alignment_controller.AlignmentControllerTest.阈值取自配置而非硬编码50 ................................   Passed    0.00 sec
+      Start 427: test_alignment_controller.AlignmentControllerTest.小偏差_命令等于当前角加arctan换算量
+ 5/21 Test #427: test_alignment_controller.AlignmentControllerTest.小偏差_命令等于当前角加arctan换算量 ..................   Passed    0.00 sec
+      Start 428: test_alignment_controller.AlignmentControllerTest.小偏差_命令是绝对角而不是增量
+ 6/21 Test #428: test_alignment_controller.AlignmentControllerTest.小偏差_命令是绝对角而不是增量 ........................   Passed    0.00 sec
+      Start 429: test_alignment_controller.AlignmentControllerTest.大偏差_arctan非线性而非线性比例
+ 7/21 Test #429: test_alignment_controller.AlignmentControllerTest.大偏差_arctan非线性而非线性比例 ........................   Passed    0.00 sec
+      Start 430: test_alignment_controller.AlignmentControllerTest.大偏差_fx与fy分别用于方位与俯仰
+ 8/21 Test #430: test_alignment_controller.AlignmentControllerTest.大偏差_fx与fy分别用于方位与俯仰 .......................   Passed    0.00 sec
+      Start 431: test_alignment_controller.AlignmentControllerTest.符号_目标在中心下方时俯仰角减小
+ 9/21 Test #431: test_alignment_controller.AlignmentControllerTest.符号_目标在中心下方时俯仰角减小 .....................   Passed    0.00 sec
+      Start 432: test_alignment_controller.AlignmentControllerTest.符号_目标在中心右侧时方位角增大
+10/21 Test #432: test_alignment_controller.AlignmentControllerTest.符号_目标在中心右侧时方位角增大 .....................   Passed    0.00 sec
+      Start 433: test_alignment_controller.AlignmentControllerTest.符号_两轴都已在位时命令等于当前角
+11/21 Test #433: test_alignment_controller.AlignmentControllerTest.符号_两轴都已在位时命令等于当前角 ..................   Passed    0.00 sec
+      Start 434: test_alignment_controller.AlignmentControllerTest.量纲_必须用像素单位的焦距而不是米
+12/21 Test #434: test_alignment_controller.AlignmentControllerTest.量纲_必须用像素单位的焦距而不是米 ..................   Passed    0.00 sec
+      Start 435: test_alignment_controller.AlignmentControllerTest.越程_方位越界时拒绝且返回原地命令
+13/21 Test #435: test_alignment_controller.AlignmentControllerTest.越程_方位越界时拒绝且返回原地命令 ..................   Passed    0.00 sec
+      Start 436: test_alignment_controller.AlignmentControllerTest.越程_俯仰越界时拒绝
+14/21 Test #436: test_alignment_controller.AlignmentControllerTest.越程_俯仰越界时拒绝 .......................................   Passed    0.00 sec
+      Start 437: test_alignment_controller.AlignmentControllerTest.越程_恰好落在限位上不算越程
+15/21 Test #437: test_alignment_controller.AlignmentControllerTest.越程_恰好落在限位上不算越程 ...........................   Passed    0.00 sec
+      Start 438: test_alignment_controller.AlignmentControllerTest.越程_行程未配置时跳过判定并如实记录
+16/21 Test #438: test_alignment_controller.AlignmentControllerTest.越程_行程未配置时跳过判定并如实记录 ...............   Passed    0.00 sec
+      Start 439: test_alignment_controller.AlignmentControllerTest.标定_空内参时拒绝而不是当成零焦距
+17/21 Test #439: test_alignment_controller.AlignmentControllerTest.标定_空内参时拒绝而不是当成零焦距 ..................   Passed    0.00 sec
+      Start 440: test_alignment_controller.AlignmentControllerTest.标定_只填了靶面尺寸但焦距仍为占位值时被拒绝
+18/21 Test #440: test_alignment_controller.AlignmentControllerTest.标定_只填了靶面尺寸但焦距仍为占位值时被拒绝 ...   Passed    0.00 sec
+      Start 441: test_alignment_controller.AlignmentControllerTest.标定_非正或非有限的焦距被拒绝
+19/21 Test #441: test_alignment_controller.AlignmentControllerTest.标定_非正或非有限的焦距被拒绝 ........................   Passed    0.00 sec
+      Start 442: test_alignment_controller.AlignmentControllerTest.输入含非有限值时拒绝
+20/21 Test #442: test_alignment_controller.AlignmentControllerTest.输入含非有限值时拒绝 .....................................   Passed    0.00 sec
+      Start 443: test_alignment_controller.AlignmentControllerTest.连续调用结果一致且不累积
+21/21 Test #443: test_alignment_controller.AlignmentControllerTest.连续调用结果一致且不累积 ...............................   Passed    0.00 sec
+
+100% tests passed, 0 tests failed out of 21
+
+Total Test time (real) =   0.08 sec
+exit_code=0
+
+## test_device_layer
+命令：ctest --test-dir build-native-on -R '^test_device_layer\.' --output-on-failure
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+      Start  55: test_device_layer.MultiCameraManagerTest.ThreeCamerasCaptureAllChannels
+ 1/83 Test  #55: test_device_layer.MultiCameraManagerTest.ThreeCamerasCaptureAllChannels .........................................   Passed    0.01 sec
+      Start  56: test_device_layer.MultiCameraManagerTest.CaptureFillsRoleFieldOnEveryChannel
+ 2/83 Test  #56: test_device_layer.MultiCameraManagerTest.CaptureFillsRoleFieldOnEveryChannel ....................................   Passed    0.01 sec
+      Start  57: test_device_layer.MultiCameraManagerTest.TriggerTimestampIsMaxOfChannelTimestamps
+ 3/83 Test  #57: test_device_layer.MultiCameraManagerTest.TriggerTimestampIsMaxOfChannelTimestamps ...............................   Passed    0.01 sec
+      Start  58: test_device_layer.MultiCameraManagerTest.TwoCamerasDegradeButCaptureSucceeds
+ 4/83 Test  #58: test_device_layer.MultiCameraManagerTest.TwoCamerasDegradeButCaptureSucceeds ....................................   Passed    0.01 sec
+      Start  59: test_device_layer.MultiCameraManagerTest.CaptureMidwayFaultDisablesChannelWithoutRetrying
+ 5/83 Test  #59: test_device_layer.MultiCameraManagerTest.CaptureMidwayFaultDisablesChannelWithoutRetrying .......................   Passed    0.01 sec
+      Start  60: test_device_layer.MultiCameraManagerTest.InsufficientCamerasFailsWithoutConsumingBudget
+ 6/83 Test  #60: test_device_layer.MultiCameraManagerTest.InsufficientCamerasFailsWithoutConsumingBudget .........................   Passed    0.01 sec
+      Start  61: test_device_layer.MultiCameraManagerTest.NullBackendsCountAsUnavailable
+ 7/83 Test  #61: test_device_layer.MultiCameraManagerTest.NullBackendsCountAsUnavailable .........................................   Passed    0.01 sec
+      Start  62: test_device_layer.MultiCameraManagerTest.CaptureBeforeStartFails
+ 8/83 Test  #62: test_device_layer.MultiCameraManagerTest.CaptureBeforeStartFails ................................................   Passed    0.01 sec
+      Start  63: test_device_layer.MultiCameraManagerTest.ExposureIndexStartsAtOneAndIgnoresDeviceFrameIdOrigin
+ 9/83 Test  #63: test_device_layer.MultiCameraManagerTest.ExposureIndexStartsAtOneAndIgnoresDeviceFrameIdOrigin ..................   Passed    0.01 sec
+      Start  64: test_device_layer.MultiCameraManagerTest.ExposureIndexFlagsDegradedOnFrameIdRollbackWithoutLosingMonotonicity
+10/83 Test  #64: test_device_layer.MultiCameraManagerTest.ExposureIndexFlagsDegradedOnFrameIdRollbackWithoutLosingMonotonicity ...   Passed    0.01 sec
+      Start  65: test_device_layer.MultiCameraManagerTest.ExposureIndexFlagsDegradedWhenFrameIdDoesNotAdvance
+11/83 Test  #65: test_device_layer.MultiCameraManagerTest.ExposureIndexFlagsDegradedWhenFrameIdDoesNotAdvance ....................   Passed    0.01 sec
+      Start  66: test_device_layer.MultiCameraManagerTest.ExposureIndexKeepsAdvancingWhenReferenceChannelDrops
+12/83 Test  #66: test_device_layer.MultiCameraManagerTest.ExposureIndexKeepsAdvancingWhenReferenceChannelDrops ...................   Passed    0.01 sec
+      Start  67: test_device_layer.MultiCameraManagerTest.ReleaseUnconfirmedStopsChannelEvenWhenFrameChecksPassed
+13/83 Test  #67: test_device_layer.MultiCameraManagerTest.ReleaseUnconfirmedStopsChannelEvenWhenFrameChecksPassed ................   Passed    0.01 sec
+      Start  68: test_device_layer.MultiCameraManagerTest.ReleaseUnconfirmedStopsChannelAndKeepsFirstCause
+14/83 Test  #68: test_device_layer.MultiCameraManagerTest.ReleaseUnconfirmedStopsChannelAndKeepsFirstCause .......................   Passed    0.01 sec
+      Start  69: test_device_layer.MultiCameraManagerTest.ThrownReleaseMarkerNeverReachesHumanReadableText
+15/83 Test  #69: test_device_layer.MultiCameraManagerTest.ThrownReleaseMarkerNeverReachesHumanReadableText .......................   Passed    0.01 sec
+      Start  70: test_device_layer.MultiCameraManagerTest.PerChannelStatusTableDecidesAvailabilityAndAggregate
+16/83 Test  #70: test_device_layer.MultiCameraManagerTest.PerChannelStatusTableDecidesAvailabilityAndAggregate ...................   Passed    0.01 sec
+      Start  71: test_device_layer.MultiCameraManagerTest.LocalErrorsCarryNoSdkErrorAndDoNotMasqueradeAsSdkError
+17/83 Test  #71: test_device_layer.MultiCameraManagerTest.LocalErrorsCarryNoSdkErrorAndDoNotMasqueradeAsSdkError .................   Passed    0.01 sec
+      Start  72: test_device_layer.MultiCameraManagerTest.DisabledChannelReasonWordingTellsTheTruth
+18/83 Test  #72: test_device_layer.MultiCameraManagerTest.DisabledChannelReasonWordingTellsTheTruth ..............................   Passed    0.01 sec
+      Start  73: test_device_layer.MultiCameraManagerTest.UnsetResultIsReportedAsCodeDefectNotDeviceFault
+19/83 Test  #73: test_device_layer.MultiCameraManagerTest.UnsetResultIsReportedAsCodeDefectNotDeviceFault ........................   Passed    0.01 sec
+      Start  74: test_device_layer.MultiCameraManagerTest.OkGrabWithEmptyImageIsNotAValidFrame
+20/83 Test  #74: test_device_layer.MultiCameraManagerTest.OkGrabWithEmptyImageIsNotAValidFrame ...................................   Passed    0.01 sec
+      Start  75: test_device_layer.MultiCameraManagerTest.PartialFailureKeepsTheFailingChannelEvidence
+21/83 Test  #75: test_device_layer.MultiCameraManagerTest.PartialFailureKeepsTheFailingChannelEvidence ...........................   Passed    0.01 sec
+      Start  76: test_device_layer.MultiCameraManagerTest.PerGrabCapIsUsedWhenItIsTheTightest
+22/83 Test  #76: test_device_layer.MultiCameraManagerTest.PerGrabCapIsUsedWhenItIsTheTightest ....................................   Passed    0.01 sec
+      Start  77: test_device_layer.MultiCameraManagerTest.GroupBudgetIsUsedWhenItIsTheTightest
+23/83 Test  #77: test_device_layer.MultiCameraManagerTest.GroupBudgetIsUsedWhenItIsTheTightest ...................................   Passed    0.01 sec
+      Start  78: test_device_layer.MultiCameraManagerTest.DeadlineIsUsedWhenItIsTheTightest
+24/83 Test  #78: test_device_layer.MultiCameraManagerTest.DeadlineIsUsedWhenItIsTheTightest ......................................   Passed    0.01 sec
+      Start  79: test_device_layer.MultiCameraManagerTest.ExhaustedBudgetSendsNeitherTriggerNorGrab
+25/83 Test  #79: test_device_layer.MultiCameraManagerTest.ExhaustedBudgetSendsNeitherTriggerNorGrab ..............................   Passed    0.01 sec
+      Start  80: test_device_layer.MultiCameraManagerTest.ExpiredDeadlineMeansNoSdkCallAtAll
+26/83 Test  #80: test_device_layer.MultiCameraManagerTest.ExpiredDeadlineMeansNoSdkCallAtAll .....................................   Passed    0.01 sec
+      Start  81: test_device_layer.MultiCameraManagerTest.ManagerDoesNotCacheThePreviousRoundsDeadline
+27/83 Test  #81: test_device_layer.MultiCameraManagerTest.ManagerDoesNotCacheThePreviousRoundsDeadline ...........................   Passed    0.01 sec
+      Start  82: test_device_layer.MultiCameraManagerTest.RoundRecordShowsTheOverrunWhenTheLastCallReturnedPastTheDeadline
+28/83 Test  #82: test_device_layer.MultiCameraManagerTest.RoundRecordShowsTheOverrunWhenTheLastCallReturnedPastTheDeadline .......   Passed    0.01 sec
+      Start  83: test_device_layer.MultiCameraManagerTest.ZeroPerGrabTimeoutIsALocalParameterError
+29/83 Test  #83: test_device_layer.MultiCameraManagerTest.ZeroPerGrabTimeoutIsALocalParameterError ...............................   Passed    0.01 sec
+      Start  84: test_device_layer.MultiCameraManagerTest.SoftwareTriggerIsSentExactlyOncePerChannelBeforeItsGrab
+30/83 Test  #84: test_device_layer.MultiCameraManagerTest.SoftwareTriggerIsSentExactlyOncePerChannelBeforeItsGrab ................   Passed    0.01 sec
+      Start  85: test_device_layer.MultiCameraManagerTest.FreeRunAndHardwareSendNoTriggerCommand
+31/83 Test  #85: test_device_layer.MultiCameraManagerTest.FreeRunAndHardwareSendNoTriggerCommand .................................   Passed    0.02 sec
+      Start  86: test_device_layer.MultiCameraManagerTest.TriggerFailureSkipsThatChannelsGrabAndNamesTheCall
+32/83 Test  #86: test_device_layer.MultiCameraManagerTest.TriggerFailureSkipsThatChannelsGrabAndNamesTheCall .....................   Passed    0.01 sec
+      Start  87: test_device_layer.MultiCameraManagerTest.UnknownTriggerReadbackIsNotStartedAndSendsNoCommand
+33/83 Test  #87: test_device_layer.MultiCameraManagerTest.UnknownTriggerReadbackIsNotStartedAndSendsNoCommand ....................   Passed    0.01 sec
+      Start  88: test_device_layer.MultiCameraManagerTest.TriggerReadbackMismatchIsContractViolationAndSendsNoCommand
+34/83 Test  #88: test_device_layer.MultiCameraManagerTest.TriggerReadbackMismatchIsContractViolationAndSendsNoCommand ............   Passed    0.01 sec
+      Start  89: test_device_layer.MultiCameraManagerTest.PerChannelReadbackEvidenceReachesTheRoundRecord
+35/83 Test  #89: test_device_layer.MultiCameraManagerTest.PerChannelReadbackEvidenceReachesTheRoundRecord ........................   Passed    0.01 sec
+      Start  90: test_device_layer.MultiCameraManagerTest.BudgetExhaustedAfterReadbackBeforeTriggerNamesThatStage
+36/83 Test  #90: test_device_layer.MultiCameraManagerTest.BudgetExhaustedAfterReadbackBeforeTriggerNamesThatStage ................   Passed    0.01 sec
+      Start  91: test_device_layer.MultiCameraManagerTest.BudgetExhaustedAfterTriggerBeforeGrabKeepsTheCommandFact
+37/83 Test  #91: test_device_layer.MultiCameraManagerTest.BudgetExhaustedAfterTriggerBeforeGrabKeepsTheCommandFact ...............   Passed    0.01 sec
+      Start  92: test_device_layer.MultiCameraManagerTest.SubMillisecondRemainingCountsAsExhaustedAndExactlyOneMsProceeds
+38/83 Test  #92: test_device_layer.MultiCameraManagerTest.SubMillisecondRemainingCountsAsExhaustedAndExactlyOneMsProceeds ........   Passed    0.01 sec
+      Start  93: test_device_layer.MultiCameraManagerTest.NormalRoundProducesNoSinkOutputAtAll
+39/83 Test  #93: test_device_layer.MultiCameraManagerTest.NormalRoundProducesNoSinkOutputAtAll ...................................   Passed    0.01 sec
+      Start  94: test_device_layer.MultiCameraManagerTest.SuccessfulRoundCarriesNoStaleDiagnosisFromPreviousRound
+40/83 Test  #94: test_device_layer.MultiCameraManagerTest.SuccessfulRoundCarriesNoStaleDiagnosisFromPreviousRound ................   Passed    0.01 sec
+      Start  95: test_device_layer.MultiCameraManagerTest.EntryBudgetShortfallClearsThePreviousRoundsReadbackEvidence
+41/83 Test  #95: test_device_layer.MultiCameraManagerTest.EntryBudgetShortfallClearsThePreviousRoundsReadbackEvidence ............   Passed    0.01 sec
+      Start  96: test_device_layer.MultiCameraManagerTest.DiagnosticSinkCarriesCallNameRawCodeAndRecomputedLength
+42/83 Test  #96: test_device_layer.MultiCameraManagerTest.DiagnosticSinkCarriesCallNameRawCodeAndRecomputedLength ................   Passed    0.01 sec
+      Start  97: test_device_layer.VirtualTurntableTest.MoveTransitionsToMovingThenStable
+43/83 Test  #97: test_device_layer.VirtualTurntableTest.MoveTransitionsToMovingThenStable ........................................   Passed    0.01 sec
+      Start  98: test_device_layer.VirtualTurntableTest.OutOfTravelCommandIsRejectedAsCapabilityLimit
+44/83 Test  #98: test_device_layer.VirtualTurntableTest.OutOfTravelCommandIsRejectedAsCapabilityLimit ............................   Passed    0.01 sec
+      Start  99: test_device_layer.VirtualTurntableTest.InvalidLimitsAreRejectedAtInitialize
+45/83 Test  #99: test_device_layer.VirtualTurntableTest.InvalidLimitsAreRejectedAtInitialize .....................................   Passed    0.01 sec
+      Start 100: test_device_layer.VirtualTurntableTest.StopDoesNotClearErrorState
+46/83 Test #100: test_device_layer.VirtualTurntableTest.StopDoesNotClearErrorState ...............................................   Passed    0.01 sec
+      Start 101: test_device_layer.VirtualTriggerControllerTest.TriggerRequiresEnable
+47/83 Test #101: test_device_layer.VirtualTriggerControllerTest.TriggerRequiresEnable ............................................   Passed    0.01 sec
+      Start 102: test_device_layer.VirtualTriggerControllerTest.SimulatedFailureReportsDegradeCode
+48/83 Test #102: test_device_layer.VirtualTriggerControllerTest.SimulatedFailureReportsDegradeCode ...............................   Passed    0.01 sec
+      Start 103: test_device_layer.ImvCameraBackendTest.UnboundSerialIsRejectedWithoutAnySdkCall
+49/83 Test #103: test_device_layer.ImvCameraBackendTest.UnboundSerialIsRejectedWithoutAnySdkCall .................................   Passed    0.01 sec
+      Start 104: test_device_layer.ImvCameraBackendTest.MissingSerialInEnumerationYieldsDisconnectedWithoutSdkError
+50/83 Test #104: test_device_layer.ImvCameraBackendTest.MissingSerialInEnumerationYieldsDisconnectedWithoutSdkError ..............   Passed    0.01 sec
+      Start 105: test_device_layer.ImvCameraBackendTest.DuplicateSerialIsContractViolationAndIsNotGuessed
+51/83 Test #105: test_device_layer.ImvCameraBackendTest.DuplicateSerialIsContractViolationAndIsNotGuessed ........................   Passed    0.01 sec
+      Start 106: test_device_layer.ImvCameraBackendTest.CreatesHandleByMatchedIndexNotByFirstDevice
+52/83 Test #106: test_device_layer.ImvCameraBackendTest.CreatesHandleByMatchedIndexNotByFirstDevice ..............................   Passed    0.01 sec
+      Start 107: test_device_layer.ImvCameraBackendTest.IdentityMismatchAfterOpenAbandonsHandle
+53/83 Test #107: test_device_layer.ImvCameraBackendTest.IdentityMismatchAfterOpenAbandonsHandle ..................................   Passed    0.01 sec
+      Start 108: test_device_layer.ImvCameraBackendTest.OpenFailureSelfCleansAndDoesNotLeaveHandleOpen
+54/83 Test #108: test_device_layer.ImvCameraBackendTest.OpenFailureSelfCleansAndDoesNotLeaveHandleOpen ...........................   Passed    0.01 sec
+      Start 109: test_device_layer.ImvCameraBackendTest.TriggerIsConfiguredSelectorThenSourceThenModeAndReadBack
+55/83 Test #109: test_device_layer.ImvCameraBackendTest.TriggerIsConfiguredSelectorThenSourceThenModeAndReadBack .................   Passed    0.01 sec
+      Start 110: test_device_layer.ImvCameraBackendTest.ReadbackMismatchIsContractViolationNotSilentAcceptance
+56/83 Test #110: test_device_layer.ImvCameraBackendTest.ReadbackMismatchIsContractViolationNotSilentAcceptance ...................   Passed    0.01 sec
+      Start 111: test_device_layer.ImvCameraBackendTest.TriggerModeStateReportsAllThreeFieldsFromDevice
+57/83 Test #111: test_device_layer.ImvCameraBackendTest.TriggerModeStateReportsAllThreeFieldsFromDevice ..........................   Passed    0.01 sec
+      Start 112: test_device_layer.ImvCameraBackendTest.UnreadableTriggerModeIsUnknownNotEmptySuccess
+58/83 Test #112: test_device_layer.ImvCameraBackendTest.UnreadableTriggerModeIsUnknownNotEmptySuccess ............................   Passed    0.01 sec
+      Start 113: test_device_layer.ImvCameraBackendTest.UnreadableReadbackDistinguishesEmptyReturnFromCallFailure
+59/83 Test #113: test_device_layer.ImvCameraBackendTest.UnreadableReadbackDistinguishesEmptyReturnFromCallFailure ................   Passed    0.01 sec
+      Start 114: test_device_layer.ImvCameraBackendTest.FreeRunRequestIsNotImplementedOnRealBackend
+60/83 Test #114: test_device_layer.ImvCameraBackendTest.FreeRunRequestIsNotImplementedOnRealBackend ..............................   Passed    0.01 sec
+      Start 115: test_device_layer.ImvCameraBackendTest.TimeoutIsTimeoutOnlyWhenGetFrameReturnedIt
+61/83 Test #115: test_device_layer.ImvCameraBackendTest.TimeoutIsTimeoutOnlyWhenGetFrameReturnedIt ...............................   Passed    0.01 sec
+      Start 116: test_device_layer.ImvCameraBackendTest.AmbiguousSdkCodesStaySdkErrorAndKeepTheRawCode
+62/83 Test #116: test_device_layer.ImvCameraBackendTest.AmbiguousSdkCodesStaySdkErrorAndKeepTheRawCode ...........................   Passed    0.01 sec
+      Start 117: test_device_layer.ImvCameraBackendTest.NotSupportIsNotImplementedAndNotConnectedIsDisconnected
+63/83 Test #117: test_device_layer.ImvCameraBackendTest.NotSupportIsNotImplementedAndNotConnectedIsDisconnected ..................   Passed    0.01 sec
+      Start 118: test_device_layer.ImvCameraBackendTest.ZeroTimeoutIsRejectedLocallyWithoutCallingSdk
+64/83 Test #118: test_device_layer.ImvCameraBackendTest.ZeroTimeoutIsRejectedLocallyWithoutCallingSdk ............................   Passed    0.01 sec
+      Start 119: test_device_layer.ImvCameraBackendTest.FrameIsCopiedBeforeReleaseSoReleaseCannotCorruptIt
+65/83 Test #119: test_device_layer.ImvCameraBackendTest.FrameIsCopiedBeforeReleaseSoReleaseCannotCorruptIt .......................   Passed    0.01 sec
+      Start 120: test_device_layer.ImvCameraBackendTest.Mono12KnownBytesConvertByShiftWithoutScaling
+66/83 Test #120: test_device_layer.ImvCameraBackendTest.Mono12KnownBytesConvertByShiftWithoutScaling .............................   Passed    0.01 sec
+      Start 121: test_device_layer.ImvCameraBackendTest.OkReturnWithWrongLengthIsCorruptFrameNotTimeout
+67/83 Test #121: test_device_layer.ImvCameraBackendTest.OkReturnWithWrongLengthIsCorruptFrameNotTimeout ..........................   Passed    0.01 sec
+      Start 122: test_device_layer.ImvCameraBackendTest.NonZeroSdkFrameStatusIsCorruptFrameNotNoFrame
+68/83 Test #122: test_device_layer.ImvCameraBackendTest.NonZeroSdkFrameStatusIsCorruptFrameNotNoFrame ............................   Passed    0.01 sec
+      Start 123: test_device_layer.ImvCameraBackendTest.CallFailureLeavesFrameStatusUnreadNotZero
+69/83 Test #123: test_device_layer.ImvCameraBackendTest.CallFailureLeavesFrameStatusUnreadNotZero ................................   Passed    0.01 sec
+      Start 124: test_device_layer.ImvCameraBackendTest.OverflowingDimensionsAreRejectedWithoutCopying
+70/83 Test #124: test_device_layer.ImvCameraBackendTest.OverflowingDimensionsAreRejectedWithoutCopying ...........................   Passed    0.01 sec
+      Start 125: test_device_layer.ImvCameraBackendTest.FrameGeometryMismatchWithConfigIsContractViolation
+71/83 Test #125: test_device_layer.ImvCameraBackendTest.FrameGeometryMismatchWithConfigIsContractViolation .......................   Passed    0.01 sec
+      Start 126: test_device_layer.ImvCameraBackendTest.UnsupportedFormatsFailExplicitlyInsteadOfGuessing
+72/83 Test #126: test_device_layer.ImvCameraBackendTest.UnsupportedFormatsFailExplicitlyInsteadOfGuessing ........................   Passed    0.01 sec
+      Start 127: test_device_layer.ImvCameraBackendTest.SuccessfulGetFrameWithFailingReleaseFailsWholeOperation
+73/83 Test #127: test_device_layer.ImvCameraBackendTest.SuccessfulGetFrameWithFailingReleaseFailsWholeOperation ..................   Passed    0.01 sec
+      Start 128: test_device_layer.ImvCameraBackendTest.CleanupFailureDoesNotOverwriteFirstCause
+74/83 Test #128: test_device_layer.ImvCameraBackendTest.CleanupFailureDoesNotOverwriteFirstCause .................................   Passed    0.01 sec
+      Start 129: test_device_layer.ImvCameraBackendTest.InitFailureWithCleanupFailureKeepsFirstCauseAndReportsBoth
+75/83 Test #129: test_device_layer.ImvCameraBackendTest.InitFailureWithCleanupFailureKeepsFirstCauseAndReportsBoth ...............   Passed    0.01 sec
+      Start 130: test_device_layer.ImvCameraBackendTest.IndependentCloseFailureTextDoesNotLeakHistoricalFault
+76/83 Test #130: test_device_layer.ImvCameraBackendTest.IndependentCloseFailureTextDoesNotLeakHistoricalFault ....................   Passed    0.01 sec
+      Start 131: test_device_layer.ImvCameraBackendTest.GrabExceptionReleasesExactlyOnceAndLeavesDiagnosticsBehind
+77/83 Test #131: test_device_layer.ImvCameraBackendTest.GrabExceptionReleasesExactlyOnceAndLeavesDiagnosticsBehind ...............   Passed    0.01 sec
+      Start 132: test_device_layer.ImvCameraBackendTest.GrabExceptionSurvivesReleaseCallThatThrows
+78/83 Test #132: test_device_layer.ImvCameraBackendTest.GrabExceptionSurvivesReleaseCallThatThrows ...............................   Passed    0.01 sec
+      Start 133: test_device_layer.ImvCameraBackendTest.GrabExceptionSurvivesFailingExceptionDescription
+79/83 Test #133: test_device_layer.ImvCameraBackendTest.GrabExceptionSurvivesFailingExceptionDescription .........................   Passed    0.01 sec
+      Start 134: test_device_layer.ImvCameraBackendTest.GrabExceptionSurvivesFailingDiagnosticWrite
+80/83 Test #134: test_device_layer.ImvCameraBackendTest.GrabExceptionSurvivesFailingDiagnosticWrite ..............................   Passed    0.01 sec
+      Start 135: test_device_layer.ImvCameraBackendTest.CloseIsIdempotentAndDestroysUnderlyingExactlyOnce
+81/83 Test #135: test_device_layer.ImvCameraBackendTest.CloseIsIdempotentAndDestroysUnderlyingExactlyOnce ........................   Passed    0.01 sec
+      Start 136: test_device_layer.ImvCameraBackendTest.CloseWithoutInitializeIsOkAndCallsNoSdk
+82/83 Test #136: test_device_layer.ImvCameraBackendTest.CloseWithoutInitializeIsOkAndCallsNoSdk ..................................   Passed    0.01 sec
+      Start 137: test_device_layer.HardwareTriggerControllerTest.ReportsUnavailable
+83/83 Test #137: test_device_layer.HardwareTriggerControllerTest.ReportsUnavailable ..............................................   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 83
+
+Total Test time (real) =   0.79 sec
+exit_code=0
+
+## test_measurement_flow
+命令：ctest --test-dir build-native-on -R '^test_measurement_flow\.' --output-on-failure
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+      Start 225: test_measurement_flow.MeasurementFlowTest.正常路径应走完12状态并成功终止
+ 1/46 Test #225: test_measurement_flow.MeasurementFlowTest.正常路径应走完12状态并成功终止 ..................................   Passed    0.05 sec
+      Start 226: test_measurement_flow.MeasurementFlowTest.撤销STABLE后STABILIZE不得仅凭图像居中继续
+ 2/46 Test #226: test_measurement_flow.MeasurementFlowTest.撤销STABLE后STABILIZE不得仅凭图像居中继续 ........................   Passed    0.02 sec
+      Start 227: test_measurement_flow.MeasurementFlowTest.正常路径的每个尝试都不超过其状态超时
+ 3/46 Test #227: test_measurement_flow.MeasurementFlowTest.正常路径的每个尝试都不超过其状态超时 ........................   Passed    0.05 sec
+      Start 228: test_measurement_flow.MeasurementFlowTest.未挂记录器时SAVE记notice而不伪装成落盘成功
+ 4/46 Test #228: test_measurement_flow.MeasurementFlowTest.未挂记录器时SAVE记notice而不伪装成落盘成功 ....................   Passed    0.04 sec
+      Start 229: test_measurement_flow.MeasurementFlowTest.落盘失败应在3次后终止且不进入COMPLETE
+ 5/46 Test #229: test_measurement_flow.MeasurementFlowTest.落盘失败应在3次后终止且不进入COMPLETE ...........................   Passed    0.05 sec
+      Start 230: test_measurement_flow.MeasurementFlowTest.用例1_任务时限_桩恒不检出在Ttask内以9001终止
+ 6/46 Test #230: test_measurement_flow.MeasurementFlowTest.用例1_任务时限_桩恒不检出在Ttask内以9001终止 ..................   Passed    0.11 sec
+      Start 231: test_measurement_flow.MeasurementFlowTest.用例2_对准上限_恒偏差100pixel时恰好8次后2003
+ 7/46 Test #231: test_measurement_flow.MeasurementFlowTest.用例2_对准上限_恒偏差100pixel时恰好8次后2003 ....................   Passed    0.03 sec
+      Start 232: test_measurement_flow.MeasurementFlowTest.用例3_回退预算_VALIDATE恒不通过时的有界性
+ 8/46 Test #232: test_measurement_flow.MeasurementFlowTest.用例3_回退预算_VALIDATE恒不通过时的有界性 ......................   Passed    0.06 sec
+      Start 233: test_measurement_flow.MeasurementFlowTest.R05_验证契约被违背时必须在当拍直接终止且详情仍留存
+ 9/46 Test #233: test_measurement_flow.MeasurementFlowTest.R05_验证契约被违背时必须在当拍直接终止且详情仍留存 .....   Passed    0.07 sec
+      Start 234: test_measurement_flow.MeasurementFlowTest.用例4_升级规则_PnP恒失败时第2次必须换输入
+10/46 Test #234: test_measurement_flow.MeasurementFlowTest.用例4_升级规则_PnP恒失败时第2次必须换输入 ....................   Passed    0.08 sec
+      Start 235: test_measurement_flow.MeasurementFlowTest.用例5_单台相机断连时降级继续且不消耗重试预算
+11/46 Test #235: test_measurement_flow.MeasurementFlowTest.用例5_单台相机断连时降级继续且不消耗重试预算 .............   Passed    0.03 sec
+      Start 236: test_measurement_flow.MeasurementFlowTest.用例6_断开两台相机时立即1001且不消耗重试预算
+12/46 Test #236: test_measurement_flow.MeasurementFlowTest.用例6_断开两台相机时立即1001且不消耗重试预算 ...............   Passed    0.00 sec
+      Start 237: test_measurement_flow.MeasurementFlowTest.用例7_时限与状态上限同时可达时报9001
+13/46 Test #237: test_measurement_flow.MeasurementFlowTest.用例7_时限与状态上限同时可达时报9001 ...........................   Passed    0.02 sec
+      Start 238: test_measurement_flow.MeasurementFlowTest.用例7对照_时限未到时由状态上限胜出报2003
+14/46 Test #238: test_measurement_flow.MeasurementFlowTest.用例7对照_时限未到时由状态上限胜出报2003 .....................   Passed    0.02 sec
+      Start 239: test_measurement_flow.MeasurementFlowTest.转台故障直接FAILED且不重试
+15/46 Test #239: test_measurement_flow.MeasurementFlowTest.转台故障直接FAILED且不重试 ..........................................   Passed    0.01 sec
+      Start 240: test_measurement_flow.MeasurementFlowTest.转台指令下发失败按瞬态重试
+16/46 Test #240: test_measurement_flow.MeasurementFlowTest.转台指令下发失败按瞬态重试 .......................................   Passed    0.03 sec
+      Start 241: test_measurement_flow.MeasurementFlowTest.采集瞬时失败不消耗额外预算即可恢复
+17/46 Test #241: test_measurement_flow.MeasurementFlowTest.采集瞬时失败不消耗额外预算即可恢复 ...........................   Passed    0.05 sec
+      Start 242: test_measurement_flow.MeasurementFlowTest.转台越程按能力边界立即FAILED报2002
+18/46 Test #242: test_measurement_flow.MeasurementFlowTest.转台越程按能力边界立即FAILED报2002 ................................   Passed    0.01 sec
+      Start 243: test_measurement_flow.MeasurementFlowTest.人工取消以9003终止并让转台停下
+19/46 Test #243: test_measurement_flow.MeasurementFlowTest.人工取消以9003终止并让转台停下 ...................................   Passed    0.02 sec
+      Start 244: test_measurement_flow.MeasurementFlowTest.重复启动不打断进行中的任务
+20/46 Test #244: test_measurement_flow.MeasurementFlowTest.重复启动不打断进行中的任务 .......................................   Passed    0.01 sec
+      Start 245: test_measurement_flow.MeasurementFlowTest.状态变化应通知PreviewManager按SYS08_8切换显示源
+21/46 Test #245: test_measurement_flow.MeasurementFlowTest.状态变化应通知PreviewManager按SYS08_8切换显示源 ..................   Passed    0.04 sec
+      Start 246: test_measurement_flow.MeasurementFlowTest.R04_测量期间预览必须有生产者
+22/46 Test #246: test_measurement_flow.MeasurementFlowTest.R04_测量期间预览必须有生产者 ......................................   Passed    0.05 sec
+      Start 247: test_measurement_flow.MeasurementFlowTest.R04_未注入预览时不崩
+23/46 Test #247: test_measurement_flow.MeasurementFlowTest.R04_未注入预览时不崩 ..................................................   Passed    0.05 sec
+      Start 248: test_measurement_flow.MeasurementFlowTest.R06_记录里的选中得分必须来自选择结论
+24/46 Test #248: test_measurement_flow.MeasurementFlowTest.R06_记录里的选中得分必须来自选择结论 ..........................   Passed    0.04 sec
+      Start 249: test_measurement_flow.MeasurementFlowTest.R06_换机路径的得分也必须写回
+25/46 Test #249: test_measurement_flow.MeasurementFlowTest.R06_换机路径的得分也必须写回 ......................................   Passed    0.04 sec
+      Start 250: test_measurement_flow.MeasurementFlowTest.C02判据1_被解算的必须是评分最高那一次采集
+26/46 Test #250: test_measurement_flow.MeasurementFlowTest.C02判据1_被解算的必须是评分最高那一次采集 ...................   Passed    0.05 sec
+      Start 251: test_measurement_flow.MeasurementFlowTest.C02判据4_选定焦段为空时索引映射不得错位
+27/46 Test #251: test_measurement_flow.MeasurementFlowTest.C02判据4_选定焦段为空时索引映射不得错位 ......................   Passed    0.05 sec
+      Start 252: test_measurement_flow.MeasurementFlowTest.C02判据6_采集帧数被夹到上界且可见
+28/46 Test #252: test_measurement_flow.MeasurementFlowTest.C02判据6_采集帧数被夹到上界且可见 ...............................   Passed    0.10 sec
+      Start 253: test_measurement_flow.MeasurementFlowTest.C02判据8_统计量经推送通道进入记录
+29/46 Test #253: test_measurement_flow.MeasurementFlowTest.C02判据8_统计量经推送通道进入记录 ...............................   Passed    0.05 sec
+      Start 254: test_measurement_flow.MeasurementFlowTest.C02判据9_算法未推送时记录可与推送全零区分
+30/46 Test #254: test_measurement_flow.MeasurementFlowTest.C02判据9_算法未推送时记录可与推送全零区分 ...................   Passed    0.05 sec
+      Start 255: test_measurement_flow.MeasurementFlowTest.C02判据10_控制器析构时必须注销观察者
+31/46 Test #255: test_measurement_flow.MeasurementFlowTest.C02判据10_控制器析构时必须注销观察者 ...........................   Passed    0.00 sec
+      Start 256: test_measurement_flow.MeasurementFlowTest.C02判据11_PnP未收敛时统计量仍须推送
+32/46 Test #256: test_measurement_flow.MeasurementFlowTest.C02判据11_PnP未收敛时统计量仍须推送 ..............................   Passed    0.08 sec
+      Start 257: test_measurement_flow.MeasurementFlowTest.D_C02_6_记录里的最佳帧带曝光序号
+33/46 Test #257: test_measurement_flow.MeasurementFlowTest.D_C02_6_记录里的最佳帧带曝光序号 ..................................   Passed    0.05 sec
+      Start 258: test_measurement_flow.MeasurementFlowTest.D_C02_6_连续两次测量的曝光序号单调递增
+34/46 Test #258: test_measurement_flow.MeasurementFlowTest.D_C02_6_连续两次测量的曝光序号单调递增 .........................   Passed    0.07 sec
+      Start 259: test_measurement_flow.MeasurementFlowTest.C006_全部失败通路的终态码都是登记码
+35/46 Test #259: test_measurement_flow.MeasurementFlowTest.C006_全部失败通路的终态码都是登记码 ............................   Passed    0.12 sec
+      Start 260: test_measurement_flow.MeasurementFlowTest.C006_兜底码不得吞掉有专属码的通路
+36/46 Test #260: test_measurement_flow.MeasurementFlowTest.C006_兜底码不得吞掉有专属码的通路 ...............................   Passed    0.04 sec
+      Start 261: test_measurement_flow.MeasurementFlowTest.C007_根因与用尽症状并存于同一条记录
+37/46 Test #261: test_measurement_flow.MeasurementFlowTest.C007_根因与用尽症状并存于同一条记录 ............................   Passed    0.11 sec
+      Start 262: test_measurement_flow.MeasurementFlowTest.C007_成功任务有路径而无根因
+38/46 Test #262: test_measurement_flow.MeasurementFlowTest.C007_成功任务有路径而无根因 ........................................   Passed    0.05 sec
+      Start 263: test_measurement_flow.MeasurementFlowTest.A1_43_CAPTURE连采因时限提前停止且停在第几帧可见
+39/46 Test #263: test_measurement_flow.MeasurementFlowTest.A1_43_CAPTURE连采因时限提前停止且停在第几帧可见 ..............   Passed    0.04 sec
+      Start 264: test_measurement_flow.MeasurementFlowTest.A1_43_CAPTURE连采不因时限提前停止且期限判定只认注入钟
+40/46 Test #264: test_measurement_flow.MeasurementFlowTest.A1_43_CAPTURE连采不因时限提前停止且期限判定只认注入钟 .....   Passed    0.05 sec
+      Start 265: test_measurement_flow.MeasurementFlowTest.A1_43_CAPTURE采满帧但末轮返回时已越期也要如实说明
+41/46 Test #265: test_measurement_flow.MeasurementFlowTest.A1_43_CAPTURE采满帧但末轮返回时已越期也要如实说明 ...........   Passed    0.04 sec
+      Start 266: test_measurement_flow.MeasurementFlowTest.A1_43_控制器把状态剩余预算作为期限传给管理器
+42/46 Test #266: test_measurement_flow.MeasurementFlowTest.A1_43_控制器把状态剩余预算作为期限传给管理器 ...............   Passed    0.06 sec
+      Start 267: test_measurement_flow.MeasurementFlowTest.A1_43_整轮失败必须把本轮的调用现场带进错误文本
+43/46 Test #267: test_measurement_flow.MeasurementFlowTest.A1_43_整轮失败必须把本轮的调用现场带进错误文本 ............   Passed    0.05 sec
+      Start 268: test_measurement_flow.MeasurementFlowTest.A1_43_空图通道的原因必须进入降级说明且不得伪造SDK调用
+44/46 Test #268: test_measurement_flow.MeasurementFlowTest.A1_43_空图通道的原因必须进入降级说明且不得伪造SDK调用 ...   Passed    0.05 sec
+      Start 269: test_measurement_flow.MeasurementFlowTest.A1_43_一路损坏帧的现场必须进入降级说明
+45/46 Test #269: test_measurement_flow.MeasurementFlowTest.A1_43_一路损坏帧的现场必须进入降级说明 ........................   Passed    0.04 sec
+      Start 270: test_measurement_flow.MeasurementFlowTest.A1_44_同一拍内跨过任务期限时一次采集都不发起
+46/46 Test #270: test_measurement_flow.MeasurementFlowTest.A1_44_同一拍内跨过任务期限时一次采集都不发起 ...............   Passed    0.06 sec
+
+100% tests passed, 0 tests failed out of 46
+
+Total Test time (real) =   2.20 sec
+exit_code=0
+
+## test_optical_layer
+命令：ctest --test-dir build-native-on -R '^test_optical_layer\.' --output-on-failure
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+      Start 335: test_optical_layer.OpticalRigTest.DefaultChannelsUseMetresNotMillimetres
+ 1/48 Test #335: test_optical_layer.OpticalRigTest.DefaultChannelsUseMetresNotMillimetres .....................   Passed    0.00 sec
+      Start 336: test_optical_layer.OpticalRigTest.EitherExtremeOfTheMillimetreBugIsRejected
+ 2/48 Test #336: test_optical_layer.OpticalRigTest.EitherExtremeOfTheMillimetreBugIsRejected ..................   Passed    0.00 sec
+      Start 337: test_optical_layer.OpticalRigTest.DefaultTableRegistersEachRoleExactlyOnce
+ 3/48 Test #337: test_optical_layer.OpticalRigTest.DefaultTableRegistersEachRoleExactlyOnce ...................   Passed    0.00 sec
+      Start 338: test_optical_layer.OpticalRigTest.DuplicateRoleIsRejected
+ 4/48 Test #338: test_optical_layer.OpticalRigTest.DuplicateRoleIsRejected ....................................   Passed    0.00 sec
+      Start 339: test_optical_layer.OpticalRigTest.SetCalibrationAlsoUpdatesChannel
+ 5/48 Test #339: test_optical_layer.OpticalRigTest.SetCalibrationAlsoUpdatesChannel ...........................   Passed    0.00 sec
+      Start 340: test_optical_layer.OpticalRigTest.QueryReturnsConstPointerNotWritableReference
+ 6/48 Test #340: test_optical_layer.OpticalRigTest.QueryReturnsConstPointerNotWritableReference ...............   Passed    0.00 sec
+      Start 341: test_optical_layer.CalibrationDirFixture.LoadsAllSevenFiles
+ 7/48 Test #341: test_optical_layer.CalibrationDirFixture.LoadsAllSevenFiles ..................................   Passed    0.00 sec
+      Start 342: test_optical_layer.CalibrationDirFixture.ConvertsMillimetresToMetres
+ 8/48 Test #342: test_optical_layer.CalibrationDirFixture.ConvertsMillimetresToMetres .........................   Passed    0.00 sec
+      Start 343: test_optical_layer.CalibrationDirFixture.DoesNotConvertIntrinsics
+ 9/48 Test #343: test_optical_layer.CalibrationDirFixture.DoesNotConvertIntrinsics ............................   Passed    0.00 sec
+      Start 344: test_optical_layer.CalibrationDirFixture.ReadsResolutionAndRotation
+10/48 Test #344: test_optical_layer.CalibrationDirFixture.ReadsResolutionAndRotation ..........................   Passed    0.00 sec
+      Start 345: test_optical_layer.CalibrationDirFixture.CalibrationIdComesFromTheFile
+11/48 Test #345: test_optical_layer.CalibrationDirFixture.CalibrationIdComesFromTheFile .......................   Passed    0.00 sec
+      Start 346: test_optical_layer.CalibrationDirFixture.MissingExtrinsicFileFailsStartup
+12/48 Test #346: test_optical_layer.CalibrationDirFixture.MissingExtrinsicFileFailsStartup ....................   Passed    0.00 sec
+      Start 347: test_optical_layer.CalibrationDirFixture.MissingRigToShipFileFailsStartup
+13/48 Test #347: test_optical_layer.CalibrationDirFixture.MissingRigToShipFileFailsStartup ....................   Passed    0.00 sec
+      Start 348: test_optical_layer.CalibrationDirFixture.RejectsNonOrthogonalRotation
+14/48 Test #348: test_optical_layer.CalibrationDirFixture.RejectsNonOrthogonalRotation ........................   Passed    0.00 sec
+      Start 349: test_optical_layer.CalibrationDirFixture.RejectsReflectionRotation
+15/48 Test #349: test_optical_layer.CalibrationDirFixture.RejectsReflectionRotation ...........................   Passed    0.00 sec
+      Start 350: test_optical_layer.CalibrationDirFixture.RejectsNonFiniteTranslation
+16/48 Test #350: test_optical_layer.CalibrationDirFixture.RejectsNonFiniteTranslation .........................   Passed    0.00 sec
+      Start 351: test_optical_layer.CalibrationDirFixture.RejectsNonPositiveFocalLength
+17/48 Test #351: test_optical_layer.CalibrationDirFixture.RejectsNonPositiveFocalLength .......................   Passed    0.00 sec
+      Start 352: test_optical_layer.CalibrationDirFixture.RejectsBadHomogeneousRow
+18/48 Test #352: test_optical_layer.CalibrationDirFixture.RejectsBadHomogeneousRow ............................   Passed    0.01 sec
+      Start 353: test_optical_layer.CalibrationDirFixture.RejectsPrincipalPointOutsideImage
+19/48 Test #353: test_optical_layer.CalibrationDirFixture.RejectsPrincipalPointOutsideImage ...................   Passed    0.00 sec
+      Start 354: test_optical_layer.CalibrationDirFixture.RejectsNonFiniteDistortion
+20/48 Test #354: test_optical_layer.CalibrationDirFixture.RejectsNonFiniteDistortion ..........................   Passed    0.00 sec
+      Start 355: test_optical_layer.CalibrationDirFixture.RejectsWrongShapeCameraMatrix
+21/48 Test #355: test_optical_layer.CalibrationDirFixture.RejectsWrongShapeCameraMatrix .......................   Passed    0.00 sec
+      Start 356: test_optical_layer.CalibrationDirFixture.MalformedFileIsRejectedNotThrown
+22/48 Test #356: test_optical_layer.CalibrationDirFixture.MalformedFileIsRejectedNotThrown ....................   Passed    0.00 sec
+      Start 357: test_optical_layer.CalibrationDirFixture.MissingDistortionWarnsButStillLoads
+23/48 Test #357: test_optical_layer.CalibrationDirFixture.MissingDistortionWarnsButStillLoads .................   Passed    0.01 sec
+      Start 358: test_optical_layer.CalibrationDirFixture.ComposesRotationChainInTheFrozenOrder
+24/48 Test #358: test_optical_layer.CalibrationDirFixture.ComposesRotationChainInTheFrozenOrder ...............   Passed    0.00 sec
+      Start 359: test_optical_layer.CalibrationDirFixture.ComposesTranslationLevelByLevel
+25/48 Test #359: test_optical_layer.CalibrationDirFixture.ComposesTranslationLevelByLevel .....................   Passed    0.00 sec
+      Start 360: test_optical_layer.CalibrationDirFixture.UsesPerCameraExtrinsics
+26/48 Test #360: test_optical_layer.CalibrationDirFixture.UsesPerCameraExtrinsics .............................   Passed    0.00 sec
+      Start 361: test_optical_layer.CalibrationDirFixture.CarriesReprojectionErrorForward
+27/48 Test #361: test_optical_layer.CalibrationDirFixture.CarriesReprojectionErrorForward .....................   Passed    0.00 sec
+      Start 362: test_optical_layer.CalibrationManagerTest.EmptyDirFailsStartup
+28/48 Test #362: test_optical_layer.CalibrationManagerTest.EmptyDirFailsStartup ...............................   Passed    0.00 sec
+      Start 363: test_optical_layer.CalibrationManagerTest.NonExistentDirFailsStartup
+29/48 Test #363: test_optical_layer.CalibrationManagerTest.NonExistentDirFailsStartup .........................   Passed    0.00 sec
+      Start 364: test_optical_layer.CalibrationManagerTest.SyntheticCalibrationIsLabelledAndWarned
+30/48 Test #364: test_optical_layer.CalibrationManagerTest.SyntheticCalibrationIsLabelledAndWarned ............   Passed    0.00 sec
+      Start 365: test_optical_layer.CalibrationManagerTest.SyntheticFocalLengthFollowsFromFieldOfView
+31/48 Test #365: test_optical_layer.CalibrationManagerTest.SyntheticFocalLengthFollowsFromFieldOfView .........   Passed    0.00 sec
+      Start 366: test_optical_layer.CoordinateTransformerTest.RejectsNonRotationMatrix
+32/48 Test #366: test_optical_layer.CoordinateTransformerTest.RejectsNonRotationMatrix ........................   Passed    0.00 sec
+      Start 367: test_optical_layer.CoordinateTransformerTest.RejectsNonFiniteInput
+33/48 Test #367: test_optical_layer.CoordinateTransformerTest.RejectsNonFiniteInput ...........................   Passed    0.00 sec
+      Start 368: test_optical_layer.CoordinateTransformerTest.DecomposesYawPitchRollInZyxOrder
+34/48 Test #368: test_optical_layer.CoordinateTransformerTest.DecomposesYawPitchRollInZyxOrder ................   Passed    0.00 sec
+      Start 369: test_optical_layer.CoordinateTransformerTest.ReportsAnglesInDegrees
+35/48 Test #369: test_optical_layer.CoordinateTransformerTest.ReportsAnglesInDegrees ..........................   Passed    0.00 sec
+      Start 370: test_optical_layer.CoordinateTransformerTest.RejectsGimbalLockInsteadOfInventingASolution
+36/48 Test #370: test_optical_layer.CoordinateTransformerTest.RejectsGimbalLockInsteadOfInventingASolution ....   Passed    0.00 sec
+      Start 371: test_optical_layer.CameraSynchronizerTest.CombinesThreeSynchronisedFrames
+37/48 Test #371: test_optical_layer.CameraSynchronizerTest.CombinesThreeSynchronisedFrames ....................   Passed    0.01 sec
+      Start 372: test_optical_layer.CameraSynchronizerTest.AcceptsSpreadExactlyAtTolerance
+38/48 Test #372: test_optical_layer.CameraSynchronizerTest.AcceptsSpreadExactlyAtTolerance ....................   Passed    0.01 sec
+      Start 373: test_optical_layer.CameraSynchronizerTest.RejectsSpreadBeyondTolerance
+39/48 Test #373: test_optical_layer.CameraSynchronizerTest.RejectsSpreadBeyondTolerance .......................   Passed    0.00 sec
+      Start 374: test_optical_layer.CameraSynchronizerTest.SpreadIsMeasuredAcrossPresentChannelsOnly
+40/48 Test #374: test_optical_layer.CameraSynchronizerTest.SpreadIsMeasuredAcrossPresentChannelsOnly ..........   Passed    0.00 sec
+      Start 375: test_optical_layer.CameraSynchronizerTest.TwoCamerasDegradeAndContinue
+41/48 Test #375: test_optical_layer.CameraSynchronizerTest.TwoCamerasDegradeAndContinue .......................   Passed    0.00 sec
+      Start 376: test_optical_layer.CameraSynchronizerTest.SingleCameraFailsWithInsufficientCode
+42/48 Test #376: test_optical_layer.CameraSynchronizerTest.SingleCameraFailsWithInsufficientCode ..............   Passed    0.00 sec
+      Start 377: test_optical_layer.CameraSynchronizerTest.ZeroCamerasFailsWithInsufficientCode
+43/48 Test #377: test_optical_layer.CameraSynchronizerTest.ZeroCamerasFailsWithInsufficientCode ...............   Passed    0.00 sec
+      Start 378: test_optical_layer.CameraSynchronizerTest.UnconfiguredToleranceIsReportedNotSilentlyPassed
+44/48 Test #378: test_optical_layer.CameraSynchronizerTest.UnconfiguredToleranceIsReportedNotSilentlyPassed ...   Passed    0.00 sec
+      Start 379: test_optical_layer.CameraSynchronizerTest.DetectsFrameDropButDoesNotFail
+45/48 Test #379: test_optical_layer.CameraSynchronizerTest.DetectsFrameDropButDoesNotFail .....................   Passed    0.00 sec
+      Start 380: test_optical_layer.CameraSynchronizerTest.ResetOfContinuityAfterDisconnect
+46/48 Test #380: test_optical_layer.CameraSynchronizerTest.ResetOfContinuityAfterDisconnect ...................   Passed    0.00 sec
+      Start 381: test_optical_layer.CameraSynchronizerTest.FailureLeavesErrorClearedOnNextSuccess
+47/48 Test #381: test_optical_layer.CameraSynchronizerTest.FailureLeavesErrorClearedOnNextSuccess .............   Passed    0.00 sec
+      Start 382: test_optical_layer.CameraSynchronizerTest.OutputIsOverwrittenNotAccumulated
+48/48 Test #382: test_optical_layer.CameraSynchronizerTest.OutputIsOverwrittenNotAccumulated ..................   Passed    0.00 sec
+
+100% tests passed, 0 tests failed out of 48
+
+Total Test time (real) =   0.19 sec
+exit_code=0
+
+## test_pelco_d
+命令：ctest --test-dir build-native-on -R '^test_pelco_d\.' --output-on-failure
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+      Start 138: test_pelco_d.PelcoDCodec.ChecksumExcludesStartByte
+ 1/87 Test #138: test_pelco_d.PelcoDCodec.ChecksumExcludesStartByte ......................................   Passed    0.00 sec
+      Start 139: test_pelco_d.PelcoDCodec.QueryFramesPlaceOpcodesInData2
+ 2/87 Test #139: test_pelco_d.PelcoDCodec.QueryFramesPlaceOpcodesInData2 .................................   Passed    0.00 sec
+      Start 140: test_pelco_d.PelcoDCodec.WorkModeFramePlacesOpcodeInData1
+ 3/87 Test #140: test_pelco_d.PelcoDCodec.WorkModeFramePlacesOpcodeInData1 ...............................   Passed    0.00 sec
+      Start 141: test_pelco_d.PelcoDCodec.StopFrame
+ 4/87 Test #141: test_pelco_d.PelcoDCodec.StopFrame ......................................................   Passed    0.00 sec
+      Start 142: test_pelco_d.PelcoDCodec.DefaultSpeedPositionUsesTable35
+ 5/87 Test #142: test_pelco_d.PelcoDCodec.DefaultSpeedPositionUsesTable35 ................................   Passed    0.00 sec
+      Start 143: test_pelco_d.PelcoDCodec.SpeedControlPositionUsesTable365
+ 6/87 Test #143: test_pelco_d.PelcoDCodec.SpeedControlPositionUsesTable365 ...............................   Passed    0.00 sec
+      Start 144: test_pelco_d.PelcoDCodec.SpeedConversionUsesDivideBySix
+ 7/87 Test #144: test_pelco_d.PelcoDCodec.SpeedConversionUsesDivideBySix .................................   Passed    0.00 sec
+      Start 145: test_pelco_d.PelcoDCodec.HorizontalRoundTrip
+ 8/87 Test #145: test_pelco_d.PelcoDCodec.HorizontalRoundTrip ............................................   Passed    0.00 sec
+      Start 146: test_pelco_d.PelcoDCodec.HorizontalWrapsToSignedRange
+ 9/87 Test #146: test_pelco_d.PelcoDCodec.HorizontalWrapsToSignedRange ...................................   Passed    0.00 sec
+      Start 147: test_pelco_d.PelcoDCodec.PlusMinus180AreSameDevicePoint
+10/87 Test #147: test_pelco_d.PelcoDCodec.PlusMinus180AreSameDevicePoint .................................   Passed    0.00 sec
+      Start 148: test_pelco_d.PelcoDCodec.InvalidHorizontalRawIsRejected
+11/87 Test #148: test_pelco_d.PelcoDCodec.InvalidHorizontalRawIsRejected .................................   Passed    0.00 sec
+      Start 149: test_pelco_d.PelcoDCodec.VerticalIsSigned
+12/87 Test #149: test_pelco_d.PelcoDCodec.VerticalIsSigned ...............................................   Passed    0.00 sec
+      Start 150: test_pelco_d.PelcoDCodec.ParsesAngleReplies
+13/87 Test #150: test_pelco_d.PelcoDCodec.ParsesAngleReplies .............................................   Passed    0.00 sec
+      Start 151: test_pelco_d.PelcoDCodec.ParsesWorkModeReply
+14/87 Test #151: test_pelco_d.PelcoDCodec.ParsesWorkModeReply ............................................   Passed    0.00 sec
+      Start 152: test_pelco_d.PelcoDCodec.InvalidHorizontalReplyIsItsOwnKind
+15/87 Test #152: test_pelco_d.PelcoDCodec.InvalidHorizontalReplyIsItsOwnKind .............................   Passed    0.00 sec
+      Start 153: test_pelco_d.PelcoDCodec.ChecksumErrorMarkers
+16/87 Test #153: test_pelco_d.PelcoDCodec.ChecksumErrorMarkers ...........................................   Passed    0.00 sec
+      Start 154: test_pelco_d.PelcoDCodec.RejectedMarkers
+17/87 Test #154: test_pelco_d.PelcoDCodec.RejectedMarkers ................................................   Passed    0.00 sec
+      Start 155: test_pelco_d.PelcoDCodec.GarbagePrefixAndTruncatedTailAreDropped
+18/87 Test #155: test_pelco_d.PelcoDCodec.GarbagePrefixAndTruncatedTailAreDropped ........................   Passed    0.00 sec
+      Start 156: test_pelco_d.PelcoDCodec.BadChecksumSkipsOnlyOneByte
+19/87 Test #156: test_pelco_d.PelcoDCodec.BadChecksumSkipsOnlyOneByte ....................................   Passed    0.00 sec
+      Start 157: test_pelco_d.PelcoDCodec.EmptyAndNullInput
+20/87 Test #157: test_pelco_d.PelcoDCodec.EmptyAndNullInput ..............................................   Passed    0.00 sec
+      Start 158: test_pelco_d.PelcoDCodec.ForbiddenOpcodesAreNeverGenerated
+21/87 Test #158: test_pelco_d.PelcoDCodec.ForbiddenOpcodesAreNeverGenerated ..............................   Passed    0.00 sec
+      Start 159: test_pelco_d.PelcoDTransport.RoundTripAndMultiFrameDatagram
+22/87 Test #159: test_pelco_d.PelcoDTransport.RoundTripAndMultiFrameDatagram .............................   Passed    0.00 sec
+      Start 160: test_pelco_d.PelcoDTransport.ReceiveTimesOut
+23/87 Test #160: test_pelco_d.PelcoDTransport.ReceiveTimesOut ............................................   Passed    0.05 sec
+      Start 161: test_pelco_d.PelcoDTransport.CloseIsIdempotentAndReopenWorks
+24/87 Test #161: test_pelco_d.PelcoDTransport.CloseIsIdempotentAndReopenWorks ............................   Passed    0.01 sec
+      Start 162: test_pelco_d.PelcoDTransport.RejectsInvalidHost
+25/87 Test #162: test_pelco_d.PelcoDTransport.RejectsInvalidHost .........................................   Passed    0.01 sec
+      Start 163: test_pelco_d.PelcoDTransport.RejectsPortZero
+26/87 Test #163: test_pelco_d.PelcoDTransport.RejectsPortZero ............................................   Passed    0.01 sec
+      Start 164: test_pelco_d.PelcoDTransport.SendAndReceiveRequireOpenSocket
+27/87 Test #164: test_pelco_d.PelcoDTransport.SendAndReceiveRequireOpenSocket ............................   Passed    0.00 sec
+      Start 165: test_pelco_d.PelcoDSessionTest.InitializeReadsBothAxesAndWorkMode
+28/87 Test #165: test_pelco_d.PelcoDSessionTest.InitializeReadsBothAxesAndWorkMode .......................   Passed    0.00 sec
+      Start 166: test_pelco_d.PelcoDSessionTest.InitializeFailsOnNonZeroWorkMode
+29/87 Test #166: test_pelco_d.PelcoDSessionTest.InitializeFailsOnNonZeroWorkMode .........................   Passed    0.00 sec
+      Start 167: test_pelco_d.PelcoDSessionTest.IndependentWorkModeReplyStaysUnknown
+30/87 Test #167: test_pelco_d.PelcoDSessionTest.IndependentWorkModeReplyStaysUnknown .....................   Passed    0.00 sec
+      Start 168: test_pelco_d.PelcoDSessionTest.MissingWorkModeReplyReportsNoReply
+31/87 Test #168: test_pelco_d.PelcoDSessionTest.MissingWorkModeReplyReportsNoReply .......................   Passed    0.03 sec
+      Start 169: test_pelco_d.PelcoDSessionTest.UnknownWorkModeCannotMoveWithoutAuthorization
+32/87 Test #169: test_pelco_d.PelcoDSessionTest.UnknownWorkModeCannotMoveWithoutAuthorization ............   Passed    0.00 sec
+      Start 170: test_pelco_d.PelcoDSessionTest.InitializeFailsWhenMeasuredAngleOutsideRange
+33/87 Test #170: test_pelco_d.PelcoDSessionTest.InitializeFailsWhenMeasuredAngleOutsideRange .............   Passed    0.00 sec
+      Start 171: test_pelco_d.PelcoDSessionTest.InitializeRejectsInconsistentConfigBeforeOpeningSocket
+34/87 Test #171: test_pelco_d.PelcoDSessionTest.InitializeRejectsInconsistentConfigBeforeOpeningSocket ...   Passed    0.00 sec
+      Start 172: test_pelco_d.PelcoDSessionTest.HorizontalReplyFromWrongAddressCannotInitialize
+35/87 Test #172: test_pelco_d.PelcoDSessionTest.HorizontalReplyFromWrongAddressCannotInitialize ..........   Passed    0.06 sec
+      Start 173: test_pelco_d.PelcoDSessionTest.VerticalReplyFromWrongAddressCannotInitialize
+36/87 Test #173: test_pelco_d.PelcoDSessionTest.VerticalReplyFromWrongAddressCannotInitialize ............   Passed    0.06 sec
+      Start 174: test_pelco_d.PelcoDSessionTest.WorkModeReplyFromWrongAddressCannotInitialize
+37/87 Test #174: test_pelco_d.PelcoDSessionTest.WorkModeReplyFromWrongAddressCannotInitialize ............   Passed    0.06 sec
+      Start 175: test_pelco_d.PelcoDSessionTest.MoveBeforeInitializeFailsWithoutSending
+38/87 Test #175: test_pelco_d.PelcoDSessionTest.MoveBeforeInitializeFailsWithoutSending ..................   Passed    0.00 sec
+      Start 176: test_pelco_d.PelcoDSessionTest.ReadOnlyMoveIsRejectedWithoutAnyControlFrame
+39/87 Test #176: test_pelco_d.PelcoDSessionTest.ReadOnlyMoveIsRejectedWithoutAnyControlFrame .............   Passed    0.00 sec
+      Start 177: test_pelco_d.PelcoDSessionTest.ReadOnlyLostLinkSendsNoControlFrame
+40/87 Test #177: test_pelco_d.PelcoDSessionTest.ReadOnlyLostLinkSendsNoControlFrame ......................   Passed    0.24 sec
+      Start 178: test_pelco_d.PelcoDSessionTest.ReadOnlyStopIsFrameFreeNoOp
+41/87 Test #178: test_pelco_d.PelcoDSessionTest.ReadOnlyStopIsFrameFreeNoOp ..............................   Passed    0.00 sec
+      Start 179: test_pelco_d.PelcoDSessionTest.MotionGateRejectsWithoutTestAuthorization
+42/87 Test #179: test_pelco_d.PelcoDSessionTest.MotionGateRejectsWithoutTestAuthorization ................   Passed    0.00 sec
+      Start 180: test_pelco_d.PelcoDSessionTest.MoveSendsBothAxesAndAcceptsEcho
+43/87 Test #180: test_pelco_d.PelcoDSessionTest.MoveSendsBothAxesAndAcceptsEcho ..........................   Passed    0.00 sec
+      Start 181: test_pelco_d.PelcoDSessionTest.MoveRetriesOnChecksumErrorMarker
+44/87 Test #181: test_pelco_d.PelcoDSessionTest.MoveRetriesOnChecksumErrorMarker .........................   Passed    0.00 sec
+      Start 182: test_pelco_d.PelcoDSessionTest.MoveDoesNotRetryOnRejectedMarker
+45/87 Test #182: test_pelco_d.PelcoDSessionTest.MoveDoesNotRetryOnRejectedMarker .........................   Passed    0.00 sec
+      Start 183: test_pelco_d.PelcoDSessionTest.PartialAxisFailureSendsStop
+46/87 Test #183: test_pelco_d.PelcoDSessionTest.PartialAxisFailureSendsStop ..............................   Passed    0.00 sec
+      Start 184: test_pelco_d.PelcoDSessionTest.LocalOverTravelSendsNoFrameAtAll
+47/87 Test #184: test_pelco_d.PelcoDSessionTest.LocalOverTravelSendsNoFrameAtAll .........................   Passed    0.00 sec
+      Start 185: test_pelco_d.PelcoDSessionTest.MoveAfterLatchedErrorPreservesOriginalError
+48/87 Test #185: test_pelco_d.PelcoDSessionTest.MoveAfterLatchedErrorPreservesOriginalError ..............   Passed    0.00 sec
+      Start 186: test_pelco_d.PelcoDSessionTest.NaNCommandIsRejectedBeforeAnyByteIsSent
+49/87 Test #186: test_pelco_d.PelcoDSessionTest.NaNCommandIsRejectedBeforeAnyByteIsSent ..................   Passed    0.00 sec
+      Start 187: test_pelco_d.PelcoDSessionTest.NaNSpeedConfigFailsBeforeOpeningSocket
+50/87 Test #187: test_pelco_d.PelcoDSessionTest.NaNSpeedConfigFailsBeforeOpeningSocket ...................   Passed    0.00 sec
+      Start 188: test_pelco_d.PelcoDSessionTest.AzimuthCommandWrapsIntoRange
+51/87 Test #188: test_pelco_d.PelcoDSessionTest.AzimuthCommandWrapsIntoRange .............................   Passed    0.00 sec
+      Start 189: test_pelco_d.PelcoDSessionTest.SpeedControlUsesTable365AndRpm10
+52/87 Test #189: test_pelco_d.PelcoDSessionTest.SpeedControlUsesTable365AndRpm10 .........................   Passed    0.00 sec
+      Start 190: test_pelco_d.PelcoDSessionTest.PollReachesStableAfterConfiguredReadCount
+53/87 Test #190: test_pelco_d.PelcoDSessionTest.PollReachesStableAfterConfiguredReadCount ................   Passed    0.00 sec
+      Start 191: test_pelco_d.PelcoDSessionTest.StableIsRevokedWhenMeasuredAngleDeviates
+54/87 Test #191: test_pelco_d.PelcoDSessionTest.StableIsRevokedWhenMeasuredAngleDeviates .................   Passed    0.00 sec
+      Start 192: test_pelco_d.PelcoDSessionTest.SingleAxisInvalidRevokesStable
+55/87 Test #192: test_pelco_d.PelcoDSessionTest.SingleAxisInvalidRevokesStable ...........................   Passed    0.02 sec
+      Start 193: test_pelco_d.PelcoDSessionTest.StaleSampleReportsErrorAndIsNotFresh
+56/87 Test #193: test_pelco_d.PelcoDSessionTest.StaleSampleReportsErrorAndIsNotFresh .....................   Passed    0.00 sec
+      Start 194: test_pelco_d.PelcoDSessionTest.CrossRoundSampleIsNeverPublished
+57/87 Test #194: test_pelco_d.PelcoDSessionTest.CrossRoundSampleIsNeverPublished .........................   Passed    0.02 sec
+      Start 195: test_pelco_d.PelcoDSessionTest.StopNotDeliveredLatches2005AndExhaustsRetries
+58/87 Test #195: test_pelco_d.PelcoDSessionTest.StopNotDeliveredLatches2005AndExhaustsRetries ............   Passed    0.00 sec
+      Start 196: test_pelco_d.PelcoDSessionTest.StopDeliveredButNotStationaryLatches2006
+59/87 Test #196: test_pelco_d.PelcoDSessionTest.StopDeliveredButNotStationaryLatches2006 .................   Passed    0.00 sec
+      Start 197: test_pelco_d.PelcoDSessionTest.StopObservedStationaryRequiresFreshStableSamples
+60/87 Test #197: test_pelco_d.PelcoDSessionTest.StopObservedStationaryRequiresFreshStableSamples .........   Passed    0.00 sec
+      Start 198: test_pelco_d.PelcoDSessionTest.StopIsNoOpWhenIdle
+61/87 Test #198: test_pelco_d.PelcoDSessionTest.StopIsNoOpWhenIdle .......................................   Passed    0.00 sec
+      Start 199: test_pelco_d.PelcoDSessionTest.StopIsIdempotentAndDoesNotClearLatchedError
+62/87 Test #199: test_pelco_d.PelcoDSessionTest.StopIsIdempotentAndDoesNotClearLatchedError ..............   Passed    0.00 sec
+      Start 200: test_pelco_d.PelcoDSessionTest.WatchdogLatches2008AndRequestsStop
+63/87 Test #200: test_pelco_d.PelcoDSessionTest.WatchdogLatches2008AndRequestsStop .......................   Passed    0.00 sec
+      Start 201: test_pelco_d.PelcoDSessionTest.FirstFaultIsPreservedAcrossStopEscalation
+64/87 Test #201: test_pelco_d.PelcoDSessionTest.FirstFaultIsPreservedAcrossStopEscalation ................   Passed    0.00 sec
+      Start 202: test_pelco_d.PelcoDSessionTest.TwoAxisSnapshotNeverMixesRounds
+65/87 Test #202: test_pelco_d.PelcoDSessionTest.TwoAxisSnapshotNeverMixesRounds ..........................   Passed    0.10 sec
+      Start 203: test_pelco_d.PelcoDSessionTest.CancelledPartialMoveStillSendsStopFrame
+66/87 Test #203: test_pelco_d.PelcoDSessionTest.CancelledPartialMoveStillSendsStopFrame ..................   Passed    0.00 sec
+      Start 204: test_pelco_d.PelcoDSessionTest.WatchdogStopNotDeliveredKeeps2005AsCurrentError
+67/87 Test #204: test_pelco_d.PelcoDSessionTest.WatchdogStopNotDeliveredKeeps2005AsCurrentError ..........   Passed    0.00 sec
+      Start 205: test_pelco_d.PelcoDSessionTest.LostLinkFaultStaysLatchedAfterRecovery
+68/87 Test #205: test_pelco_d.PelcoDSessionTest.LostLinkFaultStaysLatchedAfterRecovery ...................   Passed    0.08 sec
+      Start 206: test_pelco_d.PelcoDSessionTest.SnapshotNeverPairsOldSampleWithNewMotion
+69/87 Test #206: test_pelco_d.PelcoDSessionTest.SnapshotNeverPairsOldSampleWithNewMotion .................   Passed    0.10 sec
+      Start 207: test_pelco_d.PelcoDSessionTest.MotionIsPublishedInsideSampleWindow
+70/87 Test #207: test_pelco_d.PelcoDSessionTest.MotionIsPublishedInsideSampleWindow ......................   Passed    0.11 sec
+      Start 208: test_pelco_d.PelcoDTurntableControllerTest.StateIsCheapWhileWorkerBlocksOnTransport
+71/87 Test #208: test_pelco_d.PelcoDTurntableControllerTest.StateIsCheapWhileWorkerBlocksOnTransport .....   Passed    0.22 sec
+      Start 209: test_pelco_d.PelcoDTurntableControllerTest.MoveIsAcceptedWithoutWaitingForEcho
+72/87 Test #209: test_pelco_d.PelcoDTurntableControllerTest.MoveIsAcceptedWithoutWaitingForEcho ..........   Passed    0.12 sec
+      Start 210: test_pelco_d.PelcoDTurntableControllerTest.StopBarrierCancelsQueuedMove
+73/87 Test #210: test_pelco_d.PelcoDTurntableControllerTest.StopBarrierCancelsQueuedMove .................   Passed    0.22 sec
+      Start 211: test_pelco_d.PelcoDTurntableControllerTest.DiagnosticsReportDeliveredCommand
+74/87 Test #211: test_pelco_d.PelcoDTurntableControllerTest.DiagnosticsReportDeliveredCommand ............   Passed    0.01 sec
+      Start 212: test_pelco_d.PelcoDTurntableControllerTest.WorkerDrivesMotionToStable
+75/87 Test #212: test_pelco_d.PelcoDTurntableControllerTest.WorkerDrivesMotionToStable ...................   Passed    0.02 sec
+      Start 213: test_pelco_d.PelcoDTurntableControllerTest.ReadOnlyControllerSendsNoControlFrames
+76/87 Test #213: test_pelco_d.PelcoDTurntableControllerTest.ReadOnlyControllerSendsNoControlFrames .......   Passed    0.11 sec
+      Start 214: test_pelco_d.PelcoDTurntableControllerTest.DestructorJoinsWorkerAndClosesTransport
+77/87 Test #214: test_pelco_d.PelcoDTurntableControllerTest.DestructorJoinsWorkerAndClosesTransport ......   Passed    0.11 sec
+      Start 215: test_pelco_d.PelcoDTurntableControllerTest.DiagnosticSinkReportsLatchedErrorOnce
+78/87 Test #215: test_pelco_d.PelcoDTurntableControllerTest.DiagnosticSinkReportsLatchedErrorOnce ........   Passed    0.13 sec
+      Start 216: test_pelco_d.PelcoDTurntableControllerTest.ThrowingSinkDoesNotTerminateWorker
+79/87 Test #216: test_pelco_d.PelcoDTurntableControllerTest.ThrowingSinkDoesNotTerminateWorker ...........   Passed    0.09 sec
+      Start 217: test_pelco_d.PelcoDTurntableControllerTest.ConcurrentMoveAndWorkerDoNotDeadlock
+80/87 Test #217: test_pelco_d.PelcoDTurntableControllerTest.ConcurrentMoveAndWorkerDoNotDeadlock .........   Passed    0.02 sec
+      Start 218: test_pelco_d.PelcoDTurntableControllerTest.MoveBeforeInitializeFails
+81/87 Test #218: test_pelco_d.PelcoDTurntableControllerTest.MoveBeforeInitializeFails ....................   Passed    0.00 sec
+      Start 219: test_pelco_d.PelcoDTurntableControllerTest.QtEventLoopDispatchesStopWhileMoveInFlight
+82/87 Test #219: test_pelco_d.PelcoDTurntableControllerTest.QtEventLoopDispatchesStopWhileMoveInFlight ...   Passed    0.23 sec
+      Start 220: test_pelco_d.PelcoDTurntableControllerTest.PartialSendCancelStillSendsStopFrame
+83/87 Test #220: test_pelco_d.PelcoDTurntableControllerTest.PartialSendCancelStillSendsStopFrame .........   Passed    0.01 sec
+      Start 221: test_pelco_d.PelcoDTurntableControllerTest.CancelAndBarrierShareOneStopRetryBudget
+84/87 Test #221: test_pelco_d.PelcoDTurntableControllerTest.CancelAndBarrierShareOneStopRetryBudget ......   Passed    0.01 sec
+      Start 222: test_pelco_d.PelcoDTurntableControllerTest.TeardownDoesNotRearmSpentStopBudget
+85/87 Test #222: test_pelco_d.PelcoDTurntableControllerTest.TeardownDoesNotRearmSpentStopBudget ..........   Passed    0.01 sec
+      Start 223: test_pelco_d.PelcoDTurntableControllerTest.StopDuringPollingIsHandledWithinOneSlice
+86/87 Test #223: test_pelco_d.PelcoDTurntableControllerTest.StopDuringPollingIsHandledWithinOneSlice .....   Passed    0.04 sec
+      Start 224: test_pelco_d.PelcoDTurntableControllerTest.NewMotionDoesNotCarryPreviousStopFacts
+87/87 Test #224: test_pelco_d.PelcoDTurntableControllerTest.NewMotionDoesNotCarryPreviousStopFacts .......   Passed    0.03 sec
+
+100% tests passed, 0 tests failed out of 87
+
+Total Test time (real) =   2.52 sec
+exit_code=0
+
+## test_preview_layer
+命令：ctest --test-dir build-native-on -R '^test_preview_layer\.' --output-on-failure
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+      Start 383: test_preview_layer.PreviewQueueTest.DefaultCapacityIsWithinFrozenRange
+ 1/40 Test #383: test_preview_layer.PreviewQueueTest.DefaultCapacityIsWithinFrozenRange ....................   Passed    0.00 sec
+      Start 384: test_preview_layer.PreviewQueueTest.CapacityIsClampedIntoFrozenRangeAndReported
+ 2/40 Test #384: test_preview_layer.PreviewQueueTest.CapacityIsClampedIntoFrozenRangeAndReported ...........   Passed    0.00 sec
+      Start 385: test_preview_layer.PreviewQueueTest.DropOldestKeepsNewest
+ 3/40 Test #385: test_preview_layer.PreviewQueueTest.DropOldestKeepsNewest .................................   Passed    0.00 sec
+      Start 386: test_preview_layer.PreviewQueueTest.PopOnEmptyReturnsFalse
+ 4/40 Test #386: test_preview_layer.PreviewQueueTest.PopOnEmptyReturnsFalse ................................   Passed    0.00 sec
+      Start 387: test_preview_layer.PreviewQueueTest.LatestDoesNotRemove
+ 5/40 Test #387: test_preview_layer.PreviewQueueTest.LatestDoesNotRemove ...................................   Passed    0.00 sec
+      Start 388: test_preview_layer.PreviewQueueTest.ClearEmptiesQueueButKeepsCounters
+ 6/40 Test #388: test_preview_layer.PreviewQueueTest.ClearEmptiesQueueButKeepsCounters .....................   Passed    0.00 sec
+      Start 389: test_preview_layer.PreviewQueueTest.WaitPopReturnsFalseOnTimeout
+ 7/40 Test #389: test_preview_layer.PreviewQueueTest.WaitPopReturnsFalseOnTimeout ..........................   Passed    0.03 sec
+      Start 390: test_preview_layer.PreviewQueueTest.WaitPopIsWokenByPush
+ 8/40 Test #390: test_preview_layer.PreviewQueueTest.WaitPopIsWokenByPush ..................................   Passed    0.03 sec
+      Start 391: test_preview_layer.PreviewQueueTest.WaitPopReturnsFalseAfterWakeAll
+ 9/40 Test #391: test_preview_layer.PreviewQueueTest.WaitPopReturnsFalseAfterWakeAll .......................   Passed    0.03 sec
+      Start 392: test_preview_layer.PreviewQueueTest.WakeIsOneShotNotSticky
+10/40 Test #392: test_preview_layer.PreviewQueueTest.WakeIsOneShotNotSticky ................................   Passed    0.05 sec
+      Start 393: test_preview_layer.PreviewQueueTest.HighRateInputConservesEveryFrame
+11/40 Test #393: test_preview_layer.PreviewQueueTest.HighRateInputConservesEveryFrame ......................   Passed    0.03 sec
+      Start 394: test_preview_layer.PreviewManagerTest.DefaultsToCam25InAutoMode
+12/40 Test #394: test_preview_layer.PreviewManagerTest.DefaultsToCam25InAutoMode ...........................   Passed    0.00 sec
+      Start 395: test_preview_layer.PreviewManagerTest.ManualModeFollowsSetCamera
+13/40 Test #395: test_preview_layer.PreviewManagerTest.ManualModeFollowsSetCamera ..........................   Passed    0.00 sec
+      Start 396: test_preview_layer.PreviewManagerTest.AutoModeFollowsTheFrozenStateTable
+14/40 Test #396: test_preview_layer.PreviewManagerTest.AutoModeFollowsTheFrozenStateTable ..................   Passed    0.00 sec
+      Start 397: test_preview_layer.PreviewManagerTest.AutoModeHoldsSourceOnFailure
+15/40 Test #397: test_preview_layer.PreviewManagerTest.AutoModeHoldsSourceOnFailure ........................   Passed    0.00 sec
+      Start 398: test_preview_layer.PreviewManagerTest.MapStateToCameraCoversSearchAlignMeasure
+16/40 Test #398: test_preview_layer.PreviewManagerTest.MapStateToCameraCoversSearchAlignMeasure ............   Passed    0.00 sec
+      Start 399: test_preview_layer.PreviewManagerTest.ManualModeIsUnaffectedByMeasurementState
+17/40 Test #399: test_preview_layer.PreviewManagerTest.ManualModeIsUnaffectedByMeasurementState ............   Passed    0.00 sec
+      Start 400: test_preview_layer.PreviewManagerTest.ManualChoiceSurvivesAutoAndTakesEffectOnReturn
+18/40 Test #400: test_preview_layer.PreviewManagerTest.ManualChoiceSurvivesAutoAndTakesEffectOnReturn ......   Passed    0.00 sec
+      Start 401: test_preview_layer.PreviewManagerTest.SetCameraRejectsDisabledChannel
+19/40 Test #401: test_preview_layer.PreviewManagerTest.SetCameraRejectsDisabledChannel .....................   Passed    0.00 sec
+      Start 402: test_preview_layer.PreviewManagerTest.WithoutRigEveryChannelIsAccepted
+20/40 Test #402: test_preview_layer.PreviewManagerTest.WithoutRigEveryChannelIsAccepted ....................   Passed    0.00 sec
+      Start 403: test_preview_layer.PreviewManagerTest.ReportsCameraIdAndFocalLengthInMetres
+21/40 Test #403: test_preview_layer.PreviewManagerTest.ReportsCameraIdAndFocalLengthInMetres ...............   Passed    0.00 sec
+      Start 404: test_preview_layer.PreviewManagerTest.QueueSizeClampIsRecordedInNotices
+22/40 Test #404: test_preview_layer.PreviewManagerTest.QueueSizeClampIsRecordedInNotices ...................   Passed    0.00 sec
+      Start 405: test_preview_layer.PreviewManagerTest.WorkerDeliverFiltersByDisplayRole
+23/40 Test #405: test_preview_layer.PreviewManagerTest.WorkerDeliverFiltersByDisplayRole ...................   Passed    0.00 sec
+      Start 406: test_preview_layer.PreviewManagerTest.GetFrameOnlyReturnsNewFrames
+24/40 Test #406: test_preview_layer.PreviewManagerTest.GetFrameOnlyReturnsNewFrames ........................   Passed    0.00 sec
+      Start 407: test_preview_layer.PreviewManagerTest.LatestFrameIgnoresFreshness
+25/40 Test #407: test_preview_layer.PreviewManagerTest.LatestFrameIgnoresFreshness .........................   Passed    0.00 sec
+      Start 408: test_preview_layer.PreviewManagerTest.SwitchingSourceInvalidatesPublishedFrame
+26/40 Test #408: test_preview_layer.PreviewManagerTest.SwitchingSourceInvalidatesPublishedFrame ............   Passed    0.00 sec
+      Start 409: test_preview_layer.PreviewManagerTest.SubmitFrameStampsDisplayTimestamp
+27/40 Test #409: test_preview_layer.PreviewManagerTest.SubmitFrameStampsDisplayTimestamp ...................   Passed    0.00 sec
+      Start 410: test_preview_layer.PreviewManagerTest.SubmitFromPicksTheDisplayedChannel
+28/40 Test #410: test_preview_layer.PreviewManagerTest.SubmitFromPicksTheDisplayedChannel ..................   Passed    0.00 sec
+      Start 411: test_preview_layer.PreviewManagerTest.SubmitFromReturnsFalseWhenDisplayedChannelIsEmpty
+29/40 Test #411: test_preview_layer.PreviewManagerTest.SubmitFromReturnsFalseWhenDisplayedChannelIsEmpty ...   Passed    0.00 sec
+      Start 412: test_preview_layer.PreviewManagerTest.SubmitFromRefusesNonEightBitDisplayImage
+30/40 Test #412: test_preview_layer.PreviewManagerTest.SubmitFromRefusesNonEightBitDisplayImage ............   Passed    0.00 sec
+      Start 413: test_preview_layer.PreviewManagerTest.SubmitFromDoesNotMislableOnSourceSwitch
+31/40 Test #413: test_preview_layer.PreviewManagerTest.SubmitFromDoesNotMislableOnSourceSwitch .............   Passed    0.00 sec
+      Start 414: test_preview_layer.PreviewWorkerTest.StartStopLifecycle
+32/40 Test #414: test_preview_layer.PreviewWorkerTest.StartStopLifecycle ...................................   Passed    0.00 sec
+      Start 415: test_preview_layer.PreviewWorkerTest.DoubleStartIsRejected
+33/40 Test #415: test_preview_layer.PreviewWorkerTest.DoubleStartIsRejected ................................   Passed    0.00 sec
+      Start 416: test_preview_layer.PreviewWorkerTest.StopIsIdempotent
+34/40 Test #416: test_preview_layer.PreviewWorkerTest.StopIsIdempotent .....................................   Passed    0.00 sec
+      Start 417: test_preview_layer.PreviewWorkerTest.PublishesFramesFromTheQueue
+35/40 Test #417: test_preview_layer.PreviewWorkerTest.PublishesFramesFromTheQueue ..........................   Passed    0.00 sec
+      Start 418: test_preview_layer.PreviewWorkerTest.FramesOfOtherRolesAreSkippedNotPublished
+36/40 Test #418: test_preview_layer.PreviewWorkerTest.FramesOfOtherRolesAreSkippedNotPublished .............   Passed    0.00 sec
+      Start 419: test_preview_layer.PreviewWorkerTest.CameraSwitchDuringRunTakesEffect
+37/40 Test #419: test_preview_layer.PreviewWorkerTest.CameraSwitchDuringRunTakesEffect .....................   Passed    0.00 sec
+      Start 420: test_preview_layer.PreviewWorkerTest.DestructorStopsTheThread
+38/40 Test #420: test_preview_layer.PreviewWorkerTest.DestructorStopsTheThread .............................   Passed    0.01 sec
+      Start 421: test_preview_layer.PreviewWorkerTest.ShortPollTimeoutStillProcessesFrames
+39/40 Test #421: test_preview_layer.PreviewWorkerTest.ShortPollTimeoutStillProcessesFrames .................   Passed    0.01 sec
+      Start 422: test_preview_layer.PreviewWorkerTest.HighRateSubmissionDoesNotLoseTheThread
+40/40 Test #422: test_preview_layer.PreviewWorkerTest.HighRateSubmissionDoesNotLoseTheThread ...............   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 40
+
+Total Test time (real) =   0.31 sec
+exit_code=0
+
+## test_qt_simulation_ui
+命令：ctest --test-dir build-native-on -R '^test_qt_simulation_ui\.' --output-on-failure
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+    Start 334: test_qt_simulation_ui.QtSimulationUiTest.界面空格连续两次测量生成两个独立结果包
+1/1 Test #334: test_qt_simulation_ui.QtSimulationUiTest.界面空格连续两次测量生成两个独立结果包 ...   Passed    0.77 sec
+
+100% tests passed, 0 tests failed out of 1
+
+Total Test time (real) =   0.78 sec
+exit_code=0
+
+## test_recorder_adapter
+命令：ctest --test-dir build-native-on -R '^test_recorder_adapter\.' --output-on-failure
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+    Start 300: test_recorder_adapter.RecorderAdapter.OverwritesTheExternalFactsTheControllerCannotKnow
+1/8 Test #300: test_recorder_adapter.RecorderAdapter.OverwritesTheExternalFactsTheControllerCannotKnow .......   Passed    0.01 sec
+    Start 301: test_recorder_adapter.RecorderAdapter.LeavesModelTypeEmptyUntilC003Lands
+2/8 Test #301: test_recorder_adapter.RecorderAdapter.LeavesModelTypeEmptyUntilC003Lands ......................   Passed    0.01 sec
+    Start 302: test_recorder_adapter.RecorderAdapter.MetadataMergeRulesAreExplicitAndNeverStitchIdentities
+3/8 Test #302: test_recorder_adapter.RecorderAdapter.MetadataMergeRulesAreExplicitAndNeverStitchIdentities ...   Passed    0.01 sec
+    Start 303: test_recorder_adapter.RecorderAdapter.PassesMeasurementFactsThroughUntouched
+4/8 Test #303: test_recorder_adapter.RecorderAdapter.PassesMeasurementFactsThroughUntouched ..................   Passed    0.01 sec
+    Start 304: test_recorder_adapter.RecorderAdapter.ResultJsonCarriesTheRequiredFieldsWithTheirValues
+5/8 Test #304: test_recorder_adapter.RecorderAdapter.ResultJsonCarriesTheRequiredFieldsWithTheirValues .......   Passed    0.01 sec
+    Start 305: test_recorder_adapter.RecorderAdapter.SnapshotsAllSevenConfigFilesFromARealConfigDir
+6/8 Test #305: test_recorder_adapter.RecorderAdapter.SnapshotsAllSevenConfigFilesFromARealConfigDir ..........   Passed    0.01 sec
+    Start 306: test_recorder_adapter.RecorderAdapter.EmptyConfigDirStillSavesButMustReportWhy
+7/8 Test #306: test_recorder_adapter.RecorderAdapter.EmptyConfigDirStillSavesButMustReportWhy ................   Passed    0.03 sec
+    Start 307: test_recorder_adapter.RecorderAdapter.RepoConfigMatchesTheNamesTheRecorderExpects
+8/8 Test #307: test_recorder_adapter.RecorderAdapter.RepoConfigMatchesTheNamesTheRecorderExpects .............   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 8
+
+Total Test time (real) =   0.11 sec
+exit_code=0
+
+## test_recorder_package
+命令：ctest --test-dir build-native-on -R '^test_recorder_package\.' --output-on-failure
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+      Start 271: test_recorder_package.RecorderPackageTest.ResultJsonParsesAndCarriesTheRecordedFacts
+ 1/29 Test #271: test_recorder_package.RecorderPackageTest.ResultJsonParsesAndCarriesTheRecordedFacts ...................   Passed    0.01 sec
+      Start 272: test_recorder_package.RecorderPackageTest.RawFramesAreHeaderlessBuffersMatchingDeclaredGeometry
+ 2/29 Test #272: test_recorder_package.RecorderPackageTest.RawFramesAreHeaderlessBuffersMatchingDeclaredGeometry ........   Passed    0.01 sec
+      Start 273: test_recorder_package.RecorderPackageTest.Mono12FrameWithoutRawPayloadIsRefusedNotSilentlyDowngraded
+ 3/29 Test #273: test_recorder_package.RecorderPackageTest.Mono12FrameWithoutRawPayloadIsRefusedNotSilentlyDowngraded ...   Passed    0.01 sec
+      Start 274: test_recorder_package.RecorderPackageTest.Mono12FrameWithRawPayloadIsSavedByteForByte
+ 4/29 Test #274: test_recorder_package.RecorderPackageTest.Mono12FrameWithRawPayloadIsSavedByteForByte ..................   Passed    0.01 sec
+      Start 275: test_recorder_package.RecorderPackageTest.EightBitFrameWithoutRawPayloadIsSavedAndLabelledAsImage
+ 5/29 Test #275: test_recorder_package.RecorderPackageTest.EightBitFrameWithoutRawPayloadIsSavedAndLabelledAsImage ......   Passed    0.01 sec
+      Start 276: test_recorder_package.RecorderPackageTest.Mono12FrameWithRawButNoDisplayImageIsStillSaved
+ 6/29 Test #276: test_recorder_package.RecorderPackageTest.Mono12FrameWithRawButNoDisplayImageIsStillSaved ..............   Passed    0.02 sec
+      Start 277: test_recorder_package.RecorderPackageTest.RawCarrierShorterThanItsOwnDeclaredLengthIsRefused
+ 7/29 Test #277: test_recorder_package.RecorderPackageTest.RawCarrierShorterThanItsOwnDeclaredLengthIsRefused ...........   Passed    0.02 sec
+      Start 278: test_recorder_package.RecorderPackageTest.CompactSizeMatchesTrueButLengthActuallyWrongIsStillRefused
+ 8/29 Test #278: test_recorder_package.RecorderPackageTest.CompactSizeMatchesTrueButLengthActuallyWrongIsStillRefused ...   Passed    0.02 sec
+      Start 279: test_recorder_package.RecorderPackageTest.CompactSizeMatchesFalseWhileFourFactsAgreeIsStillRefused
+ 9/29 Test #279: test_recorder_package.RecorderPackageTest.CompactSizeMatchesFalseWhileFourFactsAgreeIsStillRefused .....   Passed    0.02 sec
+      Start 280: test_recorder_package.RecorderPackageTest.BigEndianDeclaredRawPayloadIsRefused
+10/29 Test #280: test_recorder_package.RecorderPackageTest.BigEndianDeclaredRawPayloadIsRefused .........................   Passed    0.01 sec
+      Start 281: test_recorder_package.RecorderPackageTest.Mono8DeclaredWithThreeChannelImageIsRefused
+11/29 Test #281: test_recorder_package.RecorderPackageTest.Mono8DeclaredWithThreeChannelImageIsRefused ..................   Passed    0.02 sec
+      Start 282: test_recorder_package.RecorderPackageTest.FallbackMetadataDescribesTheImageActuallyWritten
+12/29 Test #282: test_recorder_package.RecorderPackageTest.FallbackMetadataDescribesTheImageActuallyWritten .............   Passed    0.02 sec
+      Start 283: test_recorder_package.RecorderPackageTest.RawPolicyContradictingCaptureFormatIsRefused
+13/29 Test #283: test_recorder_package.RecorderPackageTest.RawPolicyContradictingCaptureFormatIsRefused .................   Passed    0.02 sec
+      Start 284: test_recorder_package.RecorderPackageTest.RawFormatContradictingCaptureFormatIsRefused
+14/29 Test #284: test_recorder_package.RecorderPackageTest.RawFormatContradictingCaptureFormatIsRefused .................   Passed    0.02 sec
+      Start 285: test_recorder_package.RecorderPackageTest.MsbAlignedRawPayloadIsRefused
+15/29 Test #285: test_recorder_package.RecorderPackageTest.MsbAlignedRawPayloadIsRefused ................................   Passed    0.02 sec
+      Start 286: test_recorder_package.RecorderPackageTest.MissingFieldTableFollowsTheRecordNotAHardcodedList
+16/29 Test #286: test_recorder_package.RecorderPackageTest.MissingFieldTableFollowsTheRecordNotAHardcodedList ...........   Passed    0.02 sec
+      Start 287: test_recorder_package.RecorderPackageTest.NonFinitePoseStillProducesParsableJson
+17/29 Test #287: test_recorder_package.RecorderPackageTest.NonFinitePoseStillProducesParsableJson .......................   Passed    0.02 sec
+      Start 288: test_recorder_package.RecorderPackageTest.FailurePackageKeepsEveryFileExceptTheRawFrames
+18/29 Test #288: test_recorder_package.RecorderPackageTest.FailurePackageKeepsEveryFileExceptTheRawFrames ...............   Passed    0.03 sec
+      Start 289: test_recorder_package.RecorderPackageTest.FailureJsonAnswersRootCauseAndReconstructsThePath
+19/29 Test #289: test_recorder_package.RecorderPackageTest.FailureJsonAnswersRootCauseAndReconstructsThePath ............   Passed    0.02 sec
+      Start 290: test_recorder_package.RecorderPackageTest.SuccessfulTaskCarriesAPathButNoRootCause
+20/29 Test #290: test_recorder_package.RecorderPackageTest.SuccessfulTaskCarriesAPathButNoRootCause .....................   Passed    0.02 sec
+      Start 291: test_recorder_package.RecorderPackageTest.FailurePackageLabelsEachSlotWithItsOwnRole
+21/29 Test #291: test_recorder_package.RecorderPackageTest.FailurePackageLabelsEachSlotWithItsOwnRole ...................   Passed    0.02 sec
+      Start 292: test_recorder_package.RecorderPackageTest.OnlyTheSlotThatDeliveredGetsItsRawFile
+22/29 Test #292: test_recorder_package.RecorderPackageTest.OnlyTheSlotThatDeliveredGetsItsRawFile .......................   Passed    0.02 sec
+      Start 293: test_recorder_package.RecorderPackageTest.FrameCarryingDataInTheWrongSlotIsRefused
+23/29 Test #293: test_recorder_package.RecorderPackageTest.FrameCarryingDataInTheWrongSlotIsRefused .....................   Passed    0.04 sec
+      Start 294: test_recorder_package.RecorderPackageTest.Mono10FrameIsSavedWithItsOwnBitDepthAndDecodesPerPosition
+24/29 Test #294: test_recorder_package.RecorderPackageTest.Mono10FrameIsSavedWithItsOwnBitDepthAndDecodesPerPosition ....   Passed    0.02 sec
+      Start 295: test_recorder_package.RecorderPackageTest.FailedSaveLeavesNeitherFinalNorStagingDirectory
+25/29 Test #295: test_recorder_package.RecorderPackageTest.FailedSaveLeavesNeitherFinalNorStagingDirectory ..............   Passed    0.02 sec
+      Start 296: test_recorder_package.RecorderPackageTest.ExistingPackageIsNeverOverwritten
+26/29 Test #296: test_recorder_package.RecorderPackageTest.ExistingPackageIsNeverOverwritten ............................   Passed    0.02 sec
+      Start 297: test_recorder_package.RecorderPackageTest.ExistingEmptyDirectoryIsNotReplaced
+27/29 Test #297: test_recorder_package.RecorderPackageTest.ExistingEmptyDirectoryIsNotReplaced ..........................   Passed    0.02 sec
+      Start 298: test_recorder_package.RecorderPackageTest.SuccessfulSavePublishesOnlyTheFinalDirectory
+28/29 Test #298: test_recorder_package.RecorderPackageTest.SuccessfulSavePublishesOnlyTheFinalDirectory .................   Passed    0.02 sec
+      Start 299: test_recorder_package.RecorderPackageTest.SecondSaveOfTheSameTaskCannotReplaceTheFirst
+29/29 Test #299: test_recorder_package.RecorderPackageTest.SecondSaveOfTheSameTaskCannotReplaceTheFirst .................   Passed    0.02 sec
+
+100% tests passed, 0 tests failed out of 29
+
+Total Test time (real) =   0.59 sec
+exit_code=0
+
+## test_state_machine
+命令：ctest --test-dir build-native-on -R '^test_state_machine\.' --output-on-failure
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+      Start 444: test_state_machine.StateMachineTest.正常流程逐步推进到COMPLETE
+ 1/27 Test #444: test_state_machine.StateMachineTest.正常流程逐步推进到COMPLETE ..............................   Passed    0.00 sec
+      Start 445: test_state_machine.StateMachineTest.每次进入状态都向RetryManager报一次尝试
+ 2/27 Test #445: test_state_machine.StateMachineTest.每次进入状态都向RetryManager报一次尝试 ..............   Passed    0.00 sec
+      Start 446: test_state_machine.StateMachineTest.跳状态被拒绝且不改变当前状态
+ 3/27 Test #446: test_state_machine.StateMachineTest.跳状态被拒绝且不改变当前状态 .......................   Passed    0.00 sec
+      Start 447: test_state_machine.StateMachineTest.自转换被拒绝
+ 4/27 Test #447: test_state_machine.StateMachineTest.自转换被拒绝 ...............................................   Passed    0.00 sec
+      Start 448: test_state_machine.StateMachineTest.COMPLETE不得转为FAILED
+ 5/27 Test #448: test_state_machine.StateMachineTest.COMPLETE不得转为FAILED .......................................   Passed    0.00 sec
+      Start 449: test_state_machine.StateMachineTest.所有状态都可进入FAILED除COMPLETE外
+ 6/27 Test #449: test_state_machine.StateMachineTest.所有状态都可进入FAILED除COMPLETE外 .....................   Passed    0.00 sec
+      Start 450: test_state_machine.StateMachineTest.回退转换须经beginRollback批准且受每边上限2约束
+ 7/27 Test #450: test_state_machine.StateMachineTest.回退转换须经beginRollback批准且受每边上限2约束 ...   Passed    0.00 sec
+      Start 451: test_state_machine.StateMachineTest.回退总预算用尽后任何回退都被拒
+ 8/27 Test #451: test_state_machine.StateMachineTest.回退总预算用尽后任何回退都被拒 ....................   Passed    0.00 sec
+      Start 452: test_state_machine.StateMachineTest.向前的转换不消耗回退预算
+ 9/27 Test #452: test_state_machine.StateMachineTest.向前的转换不消耗回退预算 .............................   Passed    0.00 sec
+      Start 453: test_state_machine.StateMachineTest.被拒的回退不消耗目标状态的尝试次数
+10/27 Test #453: test_state_machine.StateMachineTest.被拒的回退不消耗目标状态的尝试次数 ..............   Passed    0.00 sec
+      Start 454: test_state_machine.RetryManagerTest.SEARCH不设次数上限但受任务时限约束
+11/27 Test #454: test_state_machine.RetryManagerTest.SEARCH不设次数上限但受任务时限约束 .................   Passed    0.00 sec
+      Start 455: test_state_machine.RetryManagerTest.各状态次数上限与SYS08_7_3一致
+12/27 Test #455: test_state_machine.RetryManagerTest.各状态次数上限与SYS08_7_3一致 ..........................   Passed    0.00 sec
+      Start 456: test_state_machine.RetryManagerTest.VALIDATE与SAVE的上限来自配置
+13/27 Test #456: test_state_machine.RetryManagerTest.VALIDATE与SAVE的上限来自配置 .............................   Passed    0.00 sec
+      Start 457: test_state_machine.RetryManagerTest.超限时给出该状态的登记错误码
+14/27 Test #457: test_state_machine.RetryManagerTest.超限时给出该状态的登记错误码 .......................   Passed    0.00 sec
+      Start 458: test_state_machine.RetryManagerTest.无登记码的状态如实置0且消息写明状态名
+15/27 Test #458: test_state_machine.RetryManagerTest.无登记码的状态如实置0且消息写明状态名 ..........   Passed    0.00 sec
+      Start 459: test_state_machine.RetryManagerTest.各状态计数独立且不因进入新状态清零
+16/27 Test #459: test_state_machine.RetryManagerTest.各状态计数独立且不因进入新状态清零 ..............   Passed    0.00 sec
+      Start 460: test_state_machine.RetryManagerTest.时限优先于次数上限
+17/27 Test #460: test_state_machine.RetryManagerTest.时限优先于次数上限 ......................................   Passed    0.00 sec
+      Start 461: test_state_machine.RetryManagerTest.reset与beginTask清零全部计数
+18/27 Test #461: test_state_machine.RetryManagerTest.reset与beginTask清零全部计数 ..............................   Passed    0.00 sec
+      Start 462: test_state_machine.RetryManagerTest.极大的任务时限不应饱和回绕
+19/27 Test #462: test_state_machine.RetryManagerTest.极大的任务时限不应饱和回绕 ..........................   Passed    0.00 sec
+      Start 463: test_state_machine.RetryManagerTest.配置中把上限写成0表示一次都不放行
+20/27 Test #463: test_state_machine.RetryManagerTest.配置中把上限写成0表示一次都不放行 ................   Passed    0.00 sec
+      Start 464: test_state_machine.MeasurementStrategyTest.失败三分类的处置完全不同
+21/27 Test #464: test_state_machine.MeasurementStrategyTest.失败三分类的处置完全不同 ......................   Passed    0.00 sec
+      Start 465: test_state_machine.MeasurementStrategyTest.硬件故障无码时按状态名给出可定位消息
+22/27 Test #465: test_state_machine.MeasurementStrategyTest.硬件故障无码时按状态名给出可定位消息 ....   Passed    0.00 sec
+      Start 466: test_state_machine.MeasurementStrategyTest.超限后果逐状态与SYS08_7_7一致
+23/27 Test #466: test_state_machine.MeasurementStrategyTest.超限后果逐状态与SYS08_7_7一致 ...................   Passed    0.00 sec
+      Start 467: test_state_machine.MeasurementStrategyTest.验证失败的回退目标是重新选择通道
+24/27 Test #467: test_state_machine.MeasurementStrategyTest.验证失败的回退目标是重新选择通道 ..........   Passed    0.00 sec
+      Start 468: test_state_machine.MeasurementStrategyTest.升级规则要求第2次换相机第3次放宽阈值
+25/27 Test #468: test_state_machine.MeasurementStrategyTest.升级规则要求第2次换相机第3次放宽阈值 .....   Passed    0.00 sec
+      Start 469: test_state_machine.MeasurementStrategyTest.排除集幂等且可清零
+26/27 Test #469: test_state_machine.MeasurementStrategyTest.排除集幂等且可清零 ...............................   Passed    0.00 sec
+      Start 470: test_state_machine.MeasurementStrategyTest.终止态没有下一步也不会被推成失败
+27/27 Test #470: test_state_machine.MeasurementStrategyTest.终止态没有下一步也不会被推成失败 ..........   Passed    0.00 sec
+
+100% tests passed, 0 tests failed out of 27
+
+Total Test time (real) =   0.04 sec
+exit_code=0
+
+## test_system_initializer
+命令：ctest --test-dir build-native-on -R '^test_system_initializer\.' --output-on-failure
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+Test project /media/hjm/uosData1/proj/proj_plane/AircraftPoseSystem/build-native-on
+      Start 308: test_system_initializer.SystemInitializerTest.场景A_逐状态采集归属与空闲补帧
+ 1/26 Test #308: test_system_initializer.SystemInitializerTest.场景A_逐状态采集归属与空闲补帧 ....................................   Passed    0.89 sec
+      Start 309: test_system_initializer.SystemInitializerTest.场景B_ALIGN越程当拍FAILED且当拍不补帧
+ 2/26 Test #309: test_system_initializer.SystemInitializerTest.场景B_ALIGN越程当拍FAILED且当拍不补帧 ...............................   Passed    0.09 sec
+      Start 310: test_system_initializer.SystemInitializerTest.场景C_取帧预算键被读到
+ 3/26 Test #310: test_system_initializer.SystemInitializerTest.场景C_取帧预算键被读到 ................................................   Passed    0.01 sec
+      Start 311: test_system_initializer.SystemInitializerTest.场景C_仓库现值的零余量事实必须可见
+ 4/26 Test #311: test_system_initializer.SystemInitializerTest.场景C_仓库现值的零余量事实必须可见 ..............................   Passed    0.01 sec
+      Start 312: test_system_initializer.SystemInitializerTest.场景C_取帧预算余量充足时不告警
+ 5/26 Test #312: test_system_initializer.SystemInitializerTest.场景C_取帧预算余量充足时不告警 ....................................   Passed    0.01 sec
+      Start 313: test_system_initializer.SystemInitializerTest.场景C_grab_timeout_ms为零即启动失败
+ 6/26 Test #313: test_system_initializer.SystemInitializerTest.场景C_grab_timeout_ms为零即启动失败 ....................................   Passed    0.01 sec
+      Start 314: test_system_initializer.SystemInitializerTest.场景C_grab_group_budget_ns为零即启动失败
+ 7/26 Test #314: test_system_initializer.SystemInitializerTest.场景C_grab_group_budget_ns为零即启动失败 ...............................   Passed    0.01 sec
+      Start 315: test_system_initializer.SystemInitializerTest.场景D_全虚拟启动时每个后端恰好初始化一次
+ 8/26 Test #315: test_system_initializer.SystemInitializerTest.场景D_全虚拟启动时每个后端恰好初始化一次 .....................   Passed    0.01 sec
+      Start 316: test_system_initializer.SystemInitializerTest.场景D_显式请求真实后端不可用即启动失败且不静默换虚拟
+ 9/26 Test #316: test_system_initializer.SystemInitializerTest.场景D_显式请求真实后端不可用即启动失败且不静默换虚拟 ...   Passed    0.17 sec
+      Start 317: test_system_initializer.SystemInitializerTest.场景D_缺backend键即启动失败
+10/26 Test #317: test_system_initializer.SystemInitializerTest.场景D_缺backend键即启动失败 ............................................   Passed    0.02 sec
+      Start 318: test_system_initializer.SystemInitializerTest.场景D_启动失败时已建立资源逐路回滚
+11/26 Test #318: test_system_initializer.SystemInitializerTest.场景D_启动失败时已建立资源逐路回滚 ..............................   Passed    0.17 sec
+      Start 319: test_system_initializer.SystemInitializerTest.场景D_真实CAM25取流启动失败即整次启动失败
+12/26 Test #319: test_system_initializer.SystemInitializerTest.场景D_真实CAM25取流启动失败即整次启动失败 ......................   Passed    0.02 sec
+      Start 320: test_system_initializer.SystemInitializerTest.场景D_注入工厂返回空即装配失败且不回落内置工厂
+13/26 Test #320: test_system_initializer.SystemInitializerTest.场景D_注入工厂返回空即装配失败且不回落内置工厂 ............   Passed    0.01 sec
+      Start 321: test_system_initializer.SystemInitializerTest.场景D_注入工厂返回空但不给说明时文本仍可执行
+14/26 Test #321: test_system_initializer.SystemInitializerTest.场景D_注入工厂返回空但不给说明时文本仍可执行 ...............   Passed    0.02 sec
+      Start 322: test_system_initializer.SystemInitializerTest.场景T_未实现协议显式失败不回落虚拟后端
+15/26 Test #322: test_system_initializer.SystemInitializerTest.场景T_未实现协议显式失败不回落虚拟后端 ........................   Passed    0.01 sec
+      Start 323: test_system_initializer.SystemInitializerTest.场景T_pelco_d_udp装配真实后端并如实报告连不上
+16/26 Test #323: test_system_initializer.SystemInitializerTest.场景T_pelco_d_udp装配真实后端并如实报告连不上 ...................   Passed    0.01 sec
+      Start 324: test_system_initializer.SystemInitializerTest.场景T_pekod旧取值给出迁移提示
+17/26 Test #324: test_system_initializer.SystemInitializerTest.场景T_pekod旧取值给出迁移提示 ........................................   Passed    0.01 sec
+      Start 325: test_system_initializer.SystemInitializerTest.场景T_广播地址被配置层拒绝
+18/26 Test #325: test_system_initializer.SystemInitializerTest.场景T_广播地址被配置层拒绝 ..........................................   Passed    0.01 sec
+      Start 326: test_system_initializer.SystemInitializerTest.场景T_注入转台工厂返回空即失败且不回落
+19/26 Test #326: test_system_initializer.SystemInitializerTest.场景T_注入转台工厂返回空即失败且不回落 ........................   Passed    0.01 sec
+      Start 327: test_system_initializer.SystemInitializerTest.场景T_注入工厂优先于协议且对象被实际装配
+20/26 Test #327: test_system_initializer.SystemInitializerTest.场景T_注入工厂优先于协议且对象被实际装配 .....................   Passed    0.01 sec
+      Start 328: test_system_initializer.SystemInitializerTest.场景A3_shutdown停止转台释放触发与相机且幂等
+21/26 Test #328: test_system_initializer.SystemInitializerTest.场景A3_shutdown停止转台释放触发与相机且幂等 .....................   Passed    0.01 sec
+      Start 329: test_system_initializer.SystemInitializerTest.场景S_合成靶标六点非共面性可复核
+22/26 Test #329: test_system_initializer.SystemInitializerTest.场景S_合成靶标六点非共面性可复核 .................................   Passed    0.01 sec
+      Start 330: test_system_initializer.SystemInitializerTest.场景S_仿真运行模式走通生产链并落盘真值对照
+23/26 Test #330: test_system_initializer.SystemInitializerTest.场景S_仿真运行模式走通生产链并落盘真值对照 ..................   Passed    0.26 sec
+      Start 331: test_system_initializer.SystemInitializerTest.场景S_模型标识相同但点表不同源时拒绝启动
+24/26 Test #331: test_system_initializer.SystemInitializerTest.场景S_模型标识相同但点表不同源时拒绝启动 .....................   Passed    0.01 sec
+      Start 332: test_system_initializer.SystemInitializerTest.场景S_仿真模式拒绝混入真实部件
+25/26 Test #332: test_system_initializer.SystemInitializerTest.场景S_仿真模式拒绝混入真实部件 ....................................   Passed    0.01 sec
+      Start 333: test_system_initializer.SystemInitializerTest.场景S_机型库不是合成几何时拒绝启动
+26/26 Test #333: test_system_initializer.SystemInitializerTest.场景S_机型库不是合成几何时拒绝启动 ..............................   Passed    0.01 sec
+
+100% tests passed, 0 tests failed out of 26
+
+Total Test time (real) =   1.86 sec
+exit_code=0
+
+============================================================
+TOTAL tests=468 failed=0 suites=13
+OVERALL_EXIT=0

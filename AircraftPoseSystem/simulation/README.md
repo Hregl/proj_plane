@@ -89,9 +89,14 @@ CTest 名称 `test_qt_simulation_ui.*`。
    `QKeyEvent(Qt::Key_Space)` 送入窗口（走
    `MainWindow::keyPressEvent` → `startRequested` 的生产路径，
    **不直接调** `SystemInitializer::startMeasurement()`）；
-4. 第一次 COMPLETE 后再送一次空格，断言两次的 `task_id`、结果目录
-   不同，两份 `result.json` 均为 `state=COMPLETE`、
-   `run_mode=simulation`、`success=true`。
+4. 第一次 COMPLETE 后对第一包做逐文件字节快照，再送一次空格；第二次
+   COMPLETE 后断言两次的 `task_id`、结果目录不同，两份 `result.json`
+   均为 `state=COMPLETE`、`run_mode=simulation`、`success=true`，并
+   **重新读回第一包**逐文件、逐字节比较，证明它没有被第二次改写。
+5. 两包各自校验完整性：14 个文件齐全（4 个顶层文件 + 3 路 RAW +
+   7 个配置快照），三路 RAW 均恰为 `1280×1024×3` 字节，
+   `calibration_id.txt` 为合成标定标识。定向改写第一包时用例必须变红
+   （记录见 `evidence/Qt仿真_2026-10-20/12_第一包不变性_变异检查.txt`）。
 
 运行：
 

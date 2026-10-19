@@ -1,0 +1,20 @@
+仿真模型不依赖旧产物：移走 simulation/models 后由生成器重建
+时间：2026-10-20 05:50:36 +0800
+旧模型目录清单（移走前）：
+  points3d.yaml 459 bytes sha256=61d293afde7db9d001a605c6ef5668fb71a93abdcd4cfc0d4b461edece28162a  simulation/models/points3d.yaml
+  feature50.bin 24 bytes sha256=847cf2266c293ef3f54f724c1ba5689ea54d8c46bbfbf06cef8a03e5b7f59df9  simulation/models/feature50.bin
+  model.yaml 286 bytes sha256=2af293176ae113a1dffc9532aead53e49ab2d662b739a201da55d79132bb403a  simulation/models/model.yaml
+  feature100.bin 24 bytes sha256=b48371bdcb22a6c3a58296342040bd18acd77f134832b9d0012b772b18fb339b  simulation/models/feature100.bin
+  feature25.bin 24 bytes sha256=7df8054c8d11ccd9dc6e0d462177711f1158fe231712cd1232d0d9ec1fe658ea  simulation/models/feature25.bin
+旧目录整体 SHA-256：a834c14059676a386d95dd9a67ff651f87de587583817fafe1485a0f25df40bd
+MOVE_RESULT=absent
+命令：./build-simulation/gen_synthetic_model simulation/models
+合成机型库已生成："simulation/models"（6 个 CAD 结构点，三个空纹理库）
+新目录整体 SHA-256：a834c14059676a386d95dd9a67ff651f87de587583817fafe1485a0f25df40bd
+SAME_AS_BEFORE=yes
+新模型目录清单：
+  feature100.bin 24 bytes
+  feature25.bin 24 bytes
+  feature50.bin 24 bytes
+  model.yaml 286 bytes
+  points3d.yaml 459 bytes

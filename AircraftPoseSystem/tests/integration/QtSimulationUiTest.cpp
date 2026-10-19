@@ -11,7 +11,10 @@
 //  │     不是直接调 `SystemInitializer::startMeasurement()`；              │
 //  │   · 第一次 COMPLETE 后再按一次空格，第二次同样到 COMPLETE；           │
 //  │   · 两个任务号不同、两个结果包目录不同、两份 result.json 均为         │
-//  │     `state=COMPLETE`、`run_mode=simulation`。                         │
+//  │     `state=COMPLETE`、`run_mode=simulation`；                         │
+//  │   · 第二次启动前对第一包做逐文件字节快照，第二次结束后重新读回，      │
+//  │     逐字节比较，证明第一包没有被第二次改写；                          │
+//  │   · 两包各自检查 3 路 RAW、标定标识与 7 个配置快照是否完整。          │
 //  └──────────────────────────────────────────────────────────────────────┘
 //
 //  ---- 证据边界（必须与结论一起写）----
@@ -45,16 +48,19 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <unistd.h>
@@ -297,6 +303,162 @@ bool readPackage(const std::string& resultPath, PackageFacts& facts,
     return true;
 }
 
+using FileContents = std::map<std::string, std::string>;
+
+bool readFileBytes(const std::filesystem::path& path, std::string& out,
+                   std::string& err)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+    {
+        err = "打不开文件：" + path.string();
+        return false;
+    }
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    if (in.bad())
+    {
+        err = "读取文件失败：" + path.string();
+        return false;
+    }
+    out = buf.str();
+    return true;
+}
+
+/// 结果包必须自带的文件。RAW 不是“有就行”：三路都必须等于
+/// 1280×1024×3 字节（BGR8 未压缩），否则半截文件也能骗过 exists()。
+bool expectPackageComplete(const std::filesystem::path& dir,
+                           std::string& err)
+{
+    const char* const topLevel[] = {
+        "result.json", "failure.json", "turntable.json",
+        "calibration_id.txt", "cam25.raw", "cam50.raw", "cam100.raw"};
+    for (const char* name : topLevel)
+    {
+        const std::filesystem::path p = dir / name;
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(p, ec) || ec)
+        {
+            err = std::string("结果包缺少文件：") + p.string();
+            return false;
+        }
+        if (std::filesystem::file_size(p, ec) == 0 || ec)
+        {
+            err = std::string("结果包文件为空：") + p.string();
+            return false;
+        }
+    }
+
+    const char* const snapshots[] = {
+        "camera.yaml", "measurement.yaml", "optical_rig.yaml", "system.yaml",
+        "trigger.yaml", "turntable.yaml", "validation.yaml"};
+    for (const char* name : snapshots)
+    {
+        const std::filesystem::path p = dir / "config_snapshot" / name;
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(p, ec) || ec ||
+            std::filesystem::file_size(p, ec) == 0 || ec)
+        {
+            err = std::string("结果包缺少非空配置快照：") + p.string();
+            return false;
+        }
+    }
+
+    constexpr std::uintmax_t kRawBytes = 1280u * 1024u * 3u;
+    for (const char* name : {"cam25.raw", "cam50.raw", "cam100.raw"})
+    {
+        std::error_code ec;
+        const std::uintmax_t size = std::filesystem::file_size(dir / name, ec);
+        if (ec || size != kRawBytes)
+        {
+            err = std::string("RAW 尺寸不是 1280x1024x3：") + name + " = " +
+                  std::to_string(static_cast<unsigned long long>(size));
+            return false;
+        }
+    }
+
+    std::string calibration;
+    if (!readFileBytes(dir / "calibration_id.txt", calibration, err))
+    {
+        return false;
+    }
+    if (calibration.find("SYNTHETIC") == std::string::npos)
+    {
+        err = "calibration_id.txt 不是本次合成标定标识：" + calibration;
+        return false;
+    }
+    return true;
+}
+
+/// 对整个结果包做逐文件快照（相对路径 → 原始字节）。
+bool snapshotPackage(const std::filesystem::path& dir, FileContents& out,
+                     std::string& err)
+{
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec) || ec)
+    {
+        err = "结果包目录不存在：" + dir.string();
+        return false;
+    }
+    for (std::filesystem::recursive_directory_iterator it(dir, ec), end;
+         it != end; it.increment(ec))
+    {
+        if (ec)
+        {
+            err = "遍历结果包失败：" + dir.string() + "：" + ec.message();
+            return false;
+        }
+        if (!it->is_regular_file(ec) || ec)
+        {
+            continue;
+        }
+        const std::filesystem::path rel = it->path().lexically_relative(dir);
+        if (rel.empty())
+        {
+            err = "无法计算相对路径：" + it->path().string();
+            return false;
+        }
+        std::string bytes;
+        if (!readFileBytes(it->path(), bytes, err))
+        {
+            return false;
+        }
+        out[rel.generic_string()] = std::move(bytes);
+    }
+    if (out.empty())
+    {
+        err = "结果包目录中没有文件：" + dir.string();
+        return false;
+    }
+    return true;
+}
+
+/// 第一次测量完成后与第二次测量完成后，第一包必须逐文件、逐字节相同。
+void expectSnapshotsEqual(const FileContents& before, const FileContents& after,
+                          const std::string& label)
+{
+    EXPECT_EQ(before.size(), after.size())
+        << label << " 的文件数发生变化";
+    for (const auto& kv : before)
+    {
+        const auto it = after.find(kv.first);
+        EXPECT_NE(it, after.end()) << label << " 丢失文件：" << kv.first;
+        if (it == after.end())
+        {
+            continue;
+        }
+        EXPECT_EQ(kv.second.size(), it->second.size())
+            << label << " 文件长度变化：" << kv.first;
+        EXPECT_TRUE(kv.second == it->second)
+            << label << " 文件内容被改写：" << kv.first;
+    }
+    for (const auto& kv : after)
+    {
+        EXPECT_TRUE(before.count(kv.first) != 0)
+            << label << " 多出文件：" << kv.first;
+    }
+}
+
 }  // namespace
 
 // ============================================================================
@@ -393,8 +555,19 @@ TEST(QtSimulationUiTest, 界面空格连续两次测量生成两个独立结果�
     EXPECT_EQ(first.state, "COMPLETE");
     EXPECT_EQ(first.runMode, "simulation");
     EXPECT_TRUE(first.success);
-    std::fprintf(stderr, "[QtSim] 第一次结果包：%s（task_id=%s）\n",
-                 firstDir.c_str(), first.taskId.c_str());
+    ASSERT_TRUE(expectPackageComplete(firstDir, err)) << err;
+
+    // 第二次启动前把第一包整体读入内存。第二次测量结束后再读一遍，
+    // 逐文件、逐字节比较 —— 仅检查“文件还在、非空”抓不到覆盖写。
+    FileContents firstBefore;
+    ASSERT_TRUE(snapshotPackage(firstDir, firstBefore, err)) << err;
+    EXPECT_EQ(firstBefore.size(), 14u)
+        << "第一包文件数异常（应为 result/failure/turntable/calibration/"
+           "3 RAW + 7 配置快照 = 14），实际快照到 "
+        << firstBefore.size();
+    std::fprintf(stderr,
+                 "[QtSim] 第一次结果包：%s（task_id=%s，已快照 %zu 个文件）\n",
+                 firstDir.c_str(), first.taskId.c_str(), firstBefore.size());
 
     // ---- 第二次：同一窗口、同一进程，再按一次空格 ----
     pressSpace(window);
@@ -440,15 +613,19 @@ TEST(QtSimulationUiTest, 界面空格连续两次测量生成两个独立结果�
     EXPECT_NE(second.taskId, std::string());
 
     // 两次都是独立的完整包，而不是第二次复用第一次的文件。
-    for (const PackageFacts& f : {first, second})
-    {
-        const std::filesystem::path dir(f.dir);
-        EXPECT_TRUE(std::filesystem::exists(dir / "failure.json"))
-            << "结果包缺少 failure.json：" << dir;
-        EXPECT_TRUE(std::filesystem::exists(dir / "turntable.json"))
-            << "结果包缺少 turntable.json：" << dir;
-        EXPECT_GT(std::filesystem::file_size(dir / "result.json"), 0u);
-    }
+    ASSERT_TRUE(expectPackageComplete(secondDir, err)) << err;
+
+    // 第一包在第二次测量后必须**逐字节**保持原样。第二包也做完整快照，
+    // 证明两包各自独立，而不是共享/替换了部分文件。
+    FileContents firstAfter;
+    ASSERT_TRUE(snapshotPackage(firstDir, firstAfter, err)) << err;
+    FileContents secondFiles;
+    ASSERT_TRUE(snapshotPackage(secondDir, secondFiles, err)) << err;
+    expectSnapshotsEqual(firstBefore, firstAfter, "第一结果包");
+    EXPECT_EQ(secondFiles.size(), 14u)
+        << "第二包文件数异常，实际快照到 " << secondFiles.size();
+    EXPECT_TRUE(firstAfter != secondFiles)
+        << "两个结果包内容完全相同：第二次没有生成独立结果";
 
     ticker.stop();
     window.hide();
