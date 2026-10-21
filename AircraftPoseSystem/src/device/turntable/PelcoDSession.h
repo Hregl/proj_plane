@@ -23,7 +23,17 @@
 //
 //  ⚠ 只读门禁（C1）：`sendPolicy == ReadOnly` 时，**所有路径**（初始化、
 //    轮询、失联、错误锁存、退出、stop()）都不得发送控制帧；stop() 是
-//    无帧 no-op。本类不提供任何能把门禁改成 MotionEnabled 的方法。
+//    无帧 no-op。本类不提供任何能从配置把门禁改成 MotionEnabled 的方法。
+//
+//  ⚠ 验收许可（V1.3，C-23 补正）：`MotionEnabled` 只是“结构性允许”，
+//    它本身不再足以运动。除单元测试门 `setTestMotionGate()` 外，唯一的
+//    放行依据是显式安装的 `TurntableAcceptancePermit`：
+//    · 设备（host/port/地址）必须与配置一致；
+//    · 只允许绝对定位；目标必须在许可两轴范围内；
+//    · 目标相对**当前新鲜有效实测角**的每轴变化不得超过许可位移；
+//    · 次数与期限在**每次发送前**核对（过期/用尽 ⇒ 2007，零帧）；
+//    · 许可不改变 WorkModeTrust，不绕过错误锁存/通信故障/过期样本；
+//    · 许可只约束新运动。停止、退出与故障收口**不看**许可期限。
 // ============================================================================
 
 #include <atomic>
@@ -35,6 +45,7 @@
 #include <utility>
 
 #include "data/ErrorInfo.h"
+#include "data/TurntableAcceptancePermit.h"
 #include "data/TurntableCommand.h"
 #include "data/TurntableConfig.h"
 #include "data/TurntableDiagnostics.h"
@@ -60,6 +71,27 @@ public:
 
     /// 注入单调时钟（测试用）。默认使用 data::monotonicNowNs()。
     void setClock(std::function<std::uint64_t()> clock);
+
+    /// 注入墙钟（测试用，返回 Unix epoch 毫秒）。默认使用
+    /// `std::chrono::system_clock`。只用于核对验收许可期限；
+    /// 所有超时/看门狗仍使用单调时钟。
+    void setWallClockForTest(std::function<std::int64_t()> clock);
+
+    /// 安装**仅限本次验收**的运动许可。
+    ///
+    /// 必须在 `initialize()` 之前调用；每个会话只能安装一次，不可替换、
+    /// 不可撤销。字段缺失、设备不一致、范围越界、非有限值、次数小于 1、
+    /// 期限无效或安装时已过期 ⇒ 返回 false 并写明原因，会话保持无许可。
+    ///
+    /// ⚠ 安装许可**不会**把 `sendPolicy` 改成 `MotionEnabled`，也不会
+    /// 改变 `WorkModeTrust`。只读会话即使安装了许可，仍然零控制帧。
+    bool setAcceptancePermit(const data::TurntableAcceptancePermit& permit,
+                             std::string& error);
+
+    /// 运动当前是否**有资格**被受理（不校验具体目标）。只读、无许可、
+    /// 许可未生效/过期/次数用尽 ⇒ false。控制器用它避免把注定被拒绝的
+    /// 命令写入命令槽；真正的目标校验仍在 `move()` 发送前完成。
+    bool motionPreauthorized() const;
 
     /// 打开传输、查询两轴角度与工作模式；两轴必须在同一事务内成功，
     /// 且工作模式回复的**地址**必须与配置一致（C3）。
@@ -90,6 +122,17 @@ public:
     ///        部分发送路径消耗过预算的命令时传 false：取消补帧与屏障
     ///        必须共享**同一个**停止请求的预算，不能在销毁前再发一轮。
     void stop(bool allowRearm = true);
+
+    /// 验收专用：在**静止**状态下实际发送一帧停止指令。
+    ///
+    /// 与 `stop()` 的区别：`stop()` 在静止时是无帧 no-op（C1）；
+    /// 本方法用于验证“停止帧确实能发出”，只在以下条件全部满足时执行：
+    ///   · 已安装验收许可，且 `allowStopFrameAtRest=true`；
+    ///   · 会话不是 ReadOnly（ReadOnly 永远不发控制帧）；
+    ///   · 当前静止（非 moving、无待观测停止、无锁存故障/不确定）；
+    ///   · 本次会话尚未交付过停止帧（避免重复补帧）。
+    /// 过期许可**不阻止**本操作：它属于停止/安全收口，不是新运动。
+    bool sendAcceptanceStopFrameAtRest(std::string& error);
 
     /// 故障收口使用的停止：保留原始首因，记录停止结果；停止未交付/
     /// 未观测到静止时升级为 2005/2006 并锁存 motionUncertain。
@@ -192,10 +235,32 @@ private:
     void armWatchdog(double targetAz, double targetEl);
     bool finiteConfig(std::string& error) const;
 
+    /// 墙钟（epoch ms）。
+    std::int64_t wallNowMs() const;
+
+    /// 许可是否能放行**这一条**命令（目标角已解析）。
+    /// 只由 I/O 所有者线程调用；不做 I/O。
+    /// @param denial 拒绝原因（2007 的 message），允许时清空。
+    bool acceptancePermitAllows(double azimuthTarget,
+                                double elevationTarget,
+                                std::string& denial) const;
+
+    /// 许可本身当前是否可用（设备/操作/期限/次数），不校验目标。
+    bool acceptancePermitUsableNow() const;
+
     data::TurntableConfig            config_;
     std::shared_ptr<IPelcoTransport> transport_;
     std::function<std::uint64_t()>   clock_;
+    std::function<std::int64_t()>    wallClock_;
     bool                             testMotionGate_ = false;
+
+    // ---- 验收许可（initialize 前安装一次；之后只读）----
+    // 结构体本身只在安装时写一次，安装后不再修改；worker 启动前安装，
+    // 因此读取无需锁。剩余次数为原子量，供诊断与发送前核对。
+    data::TurntableAcceptancePermit  acceptancePermit_;
+    bool                             acceptancePermitInstalled_ = false;
+    std::atomic<int>                 acceptancePermitRemaining_{0};
+    std::atomic<int>                 acceptancePermitConsumed_{0};
 
     // ---- I/O 所有者线程独占的状态 ----
     bool     moving_              = false;

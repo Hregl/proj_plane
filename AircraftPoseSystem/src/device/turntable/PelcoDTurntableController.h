@@ -43,6 +43,7 @@
 #include <thread>
 
 #include "data/ErrorInfo.h"
+#include "data/TurntableAcceptancePermit.h"
 #include "data/TurntableConfig.h"
 #include "data/TurntableDiagnostics.h"
 #include "device/turntable/IPelcoTransport.h"
@@ -92,6 +93,23 @@ public:
 
     bool initialized() const { return initialized_.load(); }
 
+    /// 最近一次 `move()` 分配的命令序号（含被预检拒绝的命令）。
+    /// 供验收工具把“这次调用”与 `diagnostics().lastCommandOutcome`
+    /// 精确对应，避免把上一条命令的结果误挂到新命令上。
+    std::uint64_t lastAcceptedCommandSeq() const;
+
+    /// 安装**仅限本次验收**的运动许可（委托给 session）。
+    /// 必须在 `initialize()` 之前调用；只由独立验收工具使用。
+    /// 生产装配与 `config/` 没有任何路径调用它。
+    /// ⚠ 安装许可不改变 `sendPolicy`，也不改变 `WorkModeTrust`。
+    bool enableAcceptancePermit(
+        const data::TurntableAcceptancePermit& permit, std::string& error);
+
+    /// 验收专用：在静止状态下**实际发送一帧停止指令**并等待交付结果。
+    /// 需已安装许可且 `allowStopFrameAtRest=true`；运动中请用 `stop()`。
+    /// 返回 false 时 `error` 给出拒绝/失败原因。不会自动重试整个序列。
+    bool sendAcceptanceStopFrameAtRest(std::string& error);
+
     /// ⚠ 单元测试专用：仅用于在 fake transport 上验证停止/故障路径。
     /// 生产装配不调用；它不改变 WorkMode 可信度，也不改变只读门禁。
     void setTestMotionGate(bool allow);
@@ -128,6 +146,14 @@ private:
     //（session 在部分发送取消时已补发过停止帧并可能耗尽预算）。屏障
     // 对同一序号不得再次重新武装，否则一次停止请求会烧掉两轮重试。
     std::uint64_t                     stopSeqHandledByCancel_ = 0;
+
+    // 验收静止停止帧：停止序号 → 结果。worker 写结果后才通告完成。
+    std::atomic<std::uint64_t>        acceptanceStopAtRestSeq_{0};
+    std::mutex                        acceptanceStopResultMutex_;
+    std::uint64_t                     acceptanceStopResultSeq_ = 0;
+    bool                              acceptanceStopResultOk_ = false;
+    std::string                       acceptanceStopResultError_;
+
     std::mutex                        stopWaitMutex_;
     std::condition_variable           stopWaitCv_;
 

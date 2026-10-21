@@ -118,8 +118,27 @@ struct TurntableDiagnostics
     std::uint64_t stopRequestSeq = 0;
     std::uint64_t stopCompletedSeq = 0;
 
-    /// 运动门禁当前是否在拒绝运动（只读模式或 WorkMode 证据不足）。
+    /// 运动门禁当前是否在拒绝运动（只读模式、无有效验收许可、
+    /// 许可过期或次数用尽）。
     bool motionInhibited = false;
+
+    /// ---- 验收许可（acceptance-only 运动许可）----
+    //
+    // ⚠ 这些字段只描述“许可本身”，不改变 `workModeTrust`：
+    //    安装了许可、甚至成功运动过，`EchoOnly` 仍然如实显示为
+    //    `EchoOnly`。许可不把任何观察升级为“协议确认正常”。
+    /// 是否已安装许可（仅验收工具会安装；生产装配不安装）。
+    bool acceptancePermitInstalled = false;
+
+    /// 许可是否已过期（按读取该快照时的墙钟判断）。
+    bool acceptancePermitExpired = false;
+
+    /// 许可剩余可执行次数（已进入发送阶段即扣减）。
+    int acceptancePermitRemaining = 0;
+
+    /// 许可的验收范围编号（空 = 未安装）。“,”不参与任何判据，
+    /// 只用于现场记录与证据归属。
+    std::string acceptancePermitScope;
 };
 
 }  // namespace data

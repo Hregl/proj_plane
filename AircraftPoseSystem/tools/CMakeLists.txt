@@ -10,6 +10,42 @@
 #    应当在配置期报错，而不是静默少构建一个目标。
 # ============================================================================
 
+# ----------------------------------------------------------------------------
+# 转台实机验收入口（独立可执行，不进入生产装配）
+#
+# ⚠ 与 gen_synthetic_model 不同，本工具**会**链接 device，并可能发送实机
+#   运动帧；但只在显式 `--permit` 且许可通过生产会话的全部判据时才可能。
+#   无许可时是只读会话。它不被 AircraftPoseSystem 链接。
+# ----------------------------------------------------------------------------
+if(TARGET device AND TARGET infrastructure AND TARGET data)
+    add_executable(turntable_acceptance turntable_acceptance.cpp)
+
+    set_target_properties(turntable_acceptance PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    target_include_directories(turntable_acceptance PRIVATE
+        "${PROJECT_SOURCE_DIR}/src")
+
+    # 复用生产设备层与配置加载；不链 Qt、不链 app/application。
+    target_link_libraries(turntable_acceptance PRIVATE
+        data
+        device
+        infrastructure
+    )
+
+    install(TARGETS turntable_acceptance
+            RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+
+    message(STATUS "[APS] 工具 turntable_acceptance 已生成")
+else()
+    message(STATUS
+        "[APS] 工具 turntable_acceptance：data/device/infrastructure "
+        "尚未生成，跳过")
+endif()
+
 if(TARGET algorithm AND TARGET data)
     add_executable(gen_synthetic_model gen_synthetic_model.cpp)
 

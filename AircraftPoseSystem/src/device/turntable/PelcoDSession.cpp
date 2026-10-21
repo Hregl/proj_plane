@@ -106,6 +106,226 @@ void PelcoDSession::setClock(std::function<std::uint64_t()> clock)
     clock_ = std::move(clock);
 }
 
+void PelcoDSession::setWallClockForTest(std::function<std::int64_t()> clock)
+{
+    wallClock_ = std::move(clock);
+}
+
+std::int64_t PelcoDSession::wallNowMs() const
+{
+    if (wallClock_)
+    {
+        return wallClock_();
+    }
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+bool PelcoDSession::setAcceptancePermit(
+    const data::TurntableAcceptancePermit& permit, std::string& error)
+{
+    error.clear();
+
+    if (initialized_.load())
+    {
+        error = "验收许可必须在 initialize() 之前安装";
+        return false;
+    }
+    if (acceptancePermitInstalled_)
+    {
+        error = "验收许可只能安装一次，不可替换";
+        return false;
+    }
+
+    if (permit.scopeId.empty())
+    {
+        error = "许可缺少验收范围编号（scope_id）";
+        return false;
+    }
+    if (!permit.allowAbsolutePosition)
+    {
+        error = "许可没有允许任何操作（绝对定位未授权）";
+        return false;
+    }
+    if (permit.deviceHost != config_.host ||
+        permit.devicePort != config_.port ||
+        permit.pelcoAddress != config_.pelcoAddress)
+    {
+        // 不回显地址值：只说明不一致，避免把设备地址写进日志。
+        error = "许可设备（host/port/pelco_address）与配置不一致";
+        return false;
+    }
+
+    const double tol = 1e-9;
+    if (!std::isfinite(permit.azimuthMinDeg) ||
+        !std::isfinite(permit.azimuthMaxDeg) ||
+        !std::isfinite(permit.elevationMinDeg) ||
+        !std::isfinite(permit.elevationMaxDeg) ||
+        !std::isfinite(permit.maxDisplacementDeg))
+    {
+        error = "许可角度范围或最大位移含非有限值";
+        return false;
+    }
+    if (permit.azimuthMinDeg > permit.azimuthMaxDeg ||
+        permit.elevationMinDeg > permit.elevationMaxDeg)
+    {
+        error = "许可角度范围下限大于上限";
+        return false;
+    }
+    if (permit.azimuthMinDeg < config_.azimuthMin - tol ||
+        permit.azimuthMaxDeg > config_.azimuthMax + tol ||
+        permit.elevationMinDeg < config_.elevationMin - tol ||
+        permit.elevationMaxDeg > config_.elevationMax + tol)
+    {
+        error = "许可角度范围超出配置的机械行程";
+        return false;
+    }
+    if (permit.maxDisplacementDeg <= 0.0)
+    {
+        error = "许可最大位移必须大于 0";
+        return false;
+    }
+    if (permit.maxExecutions <= 0)
+    {
+        error = "许可执行次数必须大于 0";
+        return false;
+    }
+    if (permit.validFromEpochMs <= 0 ||
+        permit.validUntilEpochMs <= permit.validFromEpochMs)
+    {
+        error = "许可有效期无效（必须满足 from>0 且 until>from）";
+        return false;
+    }
+    if (wallNowMs() >= permit.validUntilEpochMs)
+    {
+        error = "许可已过期，拒绝安装";
+        return false;
+    }
+
+    acceptancePermit_          = permit;
+    acceptancePermitInstalled_ = true;
+    acceptancePermitRemaining_.store(permit.maxExecutions);
+    acceptancePermitConsumed_.store(0);
+    return true;
+}
+
+bool PelcoDSession::acceptancePermitUsableNow() const
+{
+    if (!acceptancePermitInstalled_ ||
+        !acceptancePermit_.allowAbsolutePosition)
+    {
+        return false;
+    }
+    const std::int64_t now = wallNowMs();
+    return now >= acceptancePermit_.validFromEpochMs &&
+           now < acceptancePermit_.validUntilEpochMs &&
+           acceptancePermitRemaining_.load() > 0;
+}
+
+bool PelcoDSession::acceptancePermitAllows(double azimuthTarget,
+                                           double elevationTarget,
+                                           std::string& denial) const
+{
+    denial.clear();
+
+    if (!acceptancePermitInstalled_)
+    {
+        denial = "无验收许可（acceptance permit）：运动指令未受理";
+        return false;
+    }
+    if (!acceptancePermit_.allowAbsolutePosition)
+    {
+        denial = "验收许可未授权绝对定位：运动指令未受理";
+        return false;
+    }
+
+    // 许可不是“工作模式正常”的证明，也不能绕过明确异常/无回复的模式。
+    // ReplyNonZero/NoReply 在 initialize() 已失败，这里是第二道防线。
+    const data::WorkModeTrust trust = workModeTrust_.load();
+    if (trust == data::WorkModeTrust::ReplyNonZero ||
+        trust == data::WorkModeTrust::NoReply)
+    {
+        denial = "工作模式可信度为异常/无回复，许可不能放行：运动指令未受理";
+        return false;
+    }
+
+    const std::int64_t now = wallNowMs();
+    if (now < acceptancePermit_.validFromEpochMs)
+    {
+        denial = "验收许可尚未生效：运动指令未受理";
+        return false;
+    }
+    if (now >= acceptancePermit_.validUntilEpochMs)
+    {
+        denial = "验收许可已过期：新的运动指令未受理（停止不受影响）";
+        return false;
+    }
+    if (acceptancePermitRemaining_.load() <= 0)
+    {
+        denial = "验收许可执行次数已用尽：运动指令未受理";
+        return false;
+    }
+
+    // 许可不绕过过期/无效样本：没有同一轮的新鲜双轴读数，就无法核对
+    // 当前位移，也无法保证目标相对“当前实际位置”是安全的。
+    double currentAz = 0.0;
+    double currentEl = 0.0;
+    std::uint64_t ts    = 0;
+    std::uint64_t cycle = 0;
+    bool valid = false;
+    data::TurntableMotionState motion = data::TurntableMotionState::IDLE;
+    loadSample(currentAz, currentEl, ts, cycle, valid, motion);
+
+    const std::uint64_t nowNsValue = nowNs();
+    const bool fresh =
+        valid && ts != 0 && nowNsValue >= ts &&
+        (nowNsValue - ts) <= msToNs(config_.sampleStaleMs);
+    if (!fresh)
+    {
+        denial = "无新鲜有效双轴样本，无法核对许可范围/位移："
+                 "运动指令未受理";
+        return false;
+    }
+
+    const double tol = 1e-9;
+    if (azimuthTarget < acceptancePermit_.azimuthMinDeg - tol ||
+        azimuthTarget > acceptancePermit_.azimuthMaxDeg + tol)
+    {
+        denial = "目标方位角超出验收许可范围：运动指令未受理";
+        return false;
+    }
+    if (elevationTarget < acceptancePermit_.elevationMinDeg - tol ||
+        elevationTarget > acceptancePermit_.elevationMaxDeg + tol)
+    {
+        denial = "目标俯仰角超出验收许可范围：运动指令未受理";
+        return false;
+    }
+
+    const double azDelta = circularDeltaDeg(azimuthTarget, currentAz);
+    const double elDelta = std::fabs(elevationTarget - currentEl);
+    if (azDelta > acceptancePermit_.maxDisplacementDeg + tol ||
+        elDelta > acceptancePermit_.maxDisplacementDeg + tol)
+    {
+        denial = "目标相对当前实测角的位移超出验收许可：运动指令未受理";
+        return false;
+    }
+    return true;
+}
+
+bool PelcoDSession::motionPreauthorized() const
+{
+    if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
+    {
+        return false;
+    }
+    if (testMotionGate_)
+    {
+        return true;
+    }
+    return acceptancePermitUsableNow();
+}
+
 std::uint64_t PelcoDSession::nowNs() const
 {
     return clock_ ? clock_() : data::monotonicNowNs();
@@ -662,18 +882,6 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
         error = lastErrorText();
         return false;
     }
-    if (!testMotionGate_)
-    {
-        // 本批没有可放行运动的协议证据：WorkMode 不构成许可。
-        setError(data::kErrTurntableMotionInhibited,
-                 std::string("运动门禁拒绝：WorkMode 可信度 ") +
-                     workModeTrustName(workModeTrust_.load()) +
-                     "，无运动授权",
-                 true, "move/work_mode_gate");
-        error = lastErrorText();
-        return false;
-    }
-
     // ---- 本地输入边界（C1/NaN）：非法命令一个字节都不发 ----
     if (!std::isfinite(command.azimuthCommand) ||
         !std::isfinite(command.elevationCommand))
@@ -702,6 +910,36 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
                  "解析后的目标角非有限，指令未发送", true,
                  "move/resolve_nonfinite");
         motion_.store(data::TurntableMotionState::ERROR);
+        error = lastErrorText();
+        return false;
+    }
+
+    // ---- 运动门禁：WorkMode 不构成许可 ----
+    // 单元测试门只用于 fake transport；生产与验收路径必须由显式安装的
+    // 验收许可放行。所有判据（设备/范围/位移/次数/期限）都在**发送前**
+    // 核对，拒绝时一个运动帧都不发。
+    // 许可一旦安装就**始终**参与判据，单元测试门也不能绕开它。
+    if (acceptancePermitInstalled_)
+    {
+        std::string denial;
+        if (!acceptancePermitAllows(azimuthTarget, elevationTarget, denial))
+        {
+            // 不锁存：修正目标或等到许可有效期内可以重新提交；
+            // 但任何一次发送前都会重新核对，越界/过期永远发不出去。
+            setError(data::kErrTurntableMotionInhibited, denial, false,
+                     "move/acceptance_gate");
+            error = lastErrorText();
+            return false;
+        }
+    }
+    else if (!testMotionGate_)
+    {
+        setError(data::kErrTurntableMotionInhibited,
+                 std::string("无验收许可（acceptance permit），"
+                             "WorkMode 可信度 ") +
+                     workModeTrustName(workModeTrust_.load()) +
+                     " 不构成运动授权：运动指令未受理",
+                 true, "move/work_mode_gate");
         error = lastErrorText();
         return false;
     }
@@ -753,6 +991,14 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
     // 事务归属：新运动开始即分配新编号。上一停止事务的编号保留在
     // stopFactsTransactionId_ 中，读端可据此识别“事实属于旧事务”。
     motionTransactionId_.fetch_add(1);
+
+    // 许可次数在**进入发送阶段**时扣减。发送/回显失败不退款：
+    // 许可约束的是尝试次数，不是成功次数；否则反复失败会突破上限。
+    if (acceptancePermitInstalled_)
+    {
+        acceptancePermitRemaining_.fetch_sub(1);
+        acceptancePermitConsumed_.fetch_add(1);
+    }
 
     bool rejected         = false;
     bool horizontalSent   = false;
@@ -1068,6 +1314,72 @@ void PelcoDSession::stopForFault(int faultCode, const std::string& message,
     }
 }
 
+bool PelcoDSession::sendAcceptanceStopFrameAtRest(std::string& error)
+{
+    error.clear();
+    if (!initialized_.load())
+    {
+        error = "会话未初始化，不能发送验收静止停止帧";
+        return false;
+    }
+    if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
+    {
+        error = "只读会话不发送任何控制帧（含静止停止帧）";
+        return false;
+    }
+    if (!acceptancePermitInstalled_)
+    {
+        error = "无验收许可：静止停止帧未授权";
+        return false;
+    }
+    if (!acceptancePermit_.allowStopFrameAtRest)
+    {
+        error = "验收许可未授权静止停止帧（allow_stop_at_rest=0）";
+        return false;
+    }
+    if (moving_ || stopPending_ || errorLatched_.load() ||
+        motionUncertain_.load() ||
+        motion_.load() == data::TurntableMotionState::MOVING ||
+        motion_.load() == data::TurntableMotionState::ERROR)
+    {
+        error = "当前不是静止/无故障状态：请使用正常 stop()";
+        return false;
+    }
+
+    // “静止”必须由同一轮新鲜有效双轴样本支持；不能只看旧的 motion 标志。
+    double az = 0.0;
+    double el = 0.0;
+    std::uint64_t ts = 0;
+    std::uint64_t cycle = 0;
+    bool valid = false;
+    data::TurntableMotionState motion = data::TurntableMotionState::IDLE;
+    loadSample(az, el, ts, cycle, valid, motion);
+    const std::uint64_t now = nowNs();
+    if (!valid || ts == 0 || now < ts ||
+        (now - ts) > msToNs(config_.sampleStaleMs))
+    {
+        error = "无新鲜有效双轴样本，不能确认静止";
+        return false;
+    }
+
+    if (stopSent_)
+    {
+        error = "本次会话已交付过停止帧，不重复补帧";
+        return false;
+    }
+
+    if (!performStop(0, "验收静止停止", "stop/acceptance_at_rest", false))
+    {
+        error = lastErrorText();
+        if (error.empty())
+        {
+            error = "验收静止停止帧未交付";
+        }
+        return false;
+    }
+    return true;
+}
+
 void PelcoDSession::stop(bool allowRearm)
 {
     if (!initialized_.load())
@@ -1318,6 +1630,7 @@ data::TurntableDiagnostics PelcoDSession::diagnostics() const
                                      : data::TurntableSampleSource::None;
 
     const std::uint64_t now = nowNs();
+    const std::int64_t nowWall = wallNowMs();
     const std::uint64_t ts  = d.sample.sampleTimestampNs;
     d.sampleFresh = initialized_.load() && d.sample.valid && ts != 0 &&
                     now >= ts &&
@@ -1331,6 +1644,16 @@ data::TurntableDiagnostics PelcoDSession::diagnostics() const
     d.errorLatched           = errorLatched_.load();
     d.workModeTrust          = workModeTrust_.load();
     d.motionInhibited        = motionInhibited();
+
+    d.acceptancePermitInstalled = acceptancePermitInstalled_;
+    if (acceptancePermitInstalled_)
+    {
+        d.acceptancePermitScope     = acceptancePermit_.scopeId;
+        d.acceptancePermitExpired   = nowWall >=
+                                      acceptancePermit_.validUntilEpochMs;
+        d.acceptancePermitRemaining =
+            acceptancePermitRemaining_.load();
+    }
 
     {
         std::lock_guard<std::mutex> lock(faultMutex_);
@@ -1353,12 +1676,8 @@ std::string PelcoDSession::lastErrorText() const
 
 bool PelcoDSession::motionInhibited() const
 {
-    if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
-    {
-        return true;
-    }
-    // 本批没有可放行运动的协议证据；单元测试门是唯一例外。
-    return !testMotionGate_;
+    // 只读、无有效许可、许可未生效/过期/次数用尽、或单元测试门未开。
+    return !motionPreauthorized();
 }
 
 void PelcoDSession::setError(int code, const std::string& text, bool latch,

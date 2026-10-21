@@ -32,6 +32,7 @@ aps_add_test(test_pelco_d
         PelcoDTransportTest.cpp
         PelcoDSessionTest.cpp
         PelcoDTurntableControllerTest.cpp
+        PelcoDAcceptancePermitTest.cpp
     DEPENDS
         data
         device

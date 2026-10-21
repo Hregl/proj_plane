@@ -1,0 +1,126 @@
+C-24 离线验证结果摘录（2026-10-21，2026-10-22 补 M/N）
+工具：turntable_acceptance 1.0.3-C24
+构建：build-native-off（GCC 12.3.0）
+原始日志：<仓库根>/验收证据/转台验收工具_2026-10-21/offline_*.log
+⚠ 假设备（127.0.0.1）只证明工具/会话行为，不是实机证据。
+   实机 T0 只读复测见同目录 05_T0_实机只读_记录.md（2026-10-22）。
+
+A 配置目录缺失
+  CONFIG_FAILED dir="/nonexistent-config"
+  CONFIG_ERROR 文件缺失或无法打开：/nonexistent-config/system.yaml
+  exit=2；未打开 socket。
+
+B 许可缺必需键（pelco_address）
+  PERMIT_PARSE_FAILED "许可缺少必需键：pelco_address"
+  exit=2；未打开 socket，控制帧 0。
+
+C 许可设备与配置不一致
+  PERMIT_REJECTED "许可设备（host/port/pelco_address）与配置不一致"
+  CONTROL_FRAMES sent=0（未打开 socket，未发任何帧）
+  exit=2。
+
+D 许可已过期（安装时）
+  PERMIT_REJECTED "许可已过期，拒绝安装"
+  CONTROL_FRAMES sent=0（未打开 socket，未发任何帧）
+  exit=2。
+
+E 只读 + 无设备
+  INIT_FAILED "转台初始化查询失败：接收 UDP 报文失败：Connection refused"
+  CONTROL_FRAMES sent=0
+  exit=1。
+
+F 只读 + 假设备（3 s）
+  INIT_OK
+  FINAL initialized=1 normal_exit=1 control_frames=0 query_frames=121
+        unknown_frames=0 latched=0 first_fault=0
+  EXIT_CODE 0
+
+G 许可 + 运动 + 运动中停止
+  PERMIT_INSTALLED scope="OFFLINE_TOOL_CHECK_20261021"
+  MOVE_REQUEST az=1.0000 el=0.0000 reference_fresh=1 at_motion=IDLE
+  MOVE_ACCEPTED accepted=1 seq=1（true 仅表示已受理）
+  CMD_RESULT seq=1 outcome=Delivered delivered_is_arrival=0
+  MOVE_REQUEST az=5.0000 el=0.0000 reference_fresh=1 at_motion=STABLE
+  CMD_RESULT seq=2 outcome=Delivered delivered_is_arrival=0
+  STOP_REQUEST at_motion=MOVING txn=2 stop_txn=0
+  STOP_RESULT stop_delivered=1 stop_stationary=0 uncertain=0
+              stop_txn=2 motion_txn_before=2 send_path=stop_frame_delivered
+  STOP_OBSERVED_STATIONARY stop_txn=2 az=3.0000 elapsed_ms=401
+  FINAL control_frames=5 stop_delivered=1 stop_stationary=1 uncertain=0
+  EXIT_CODE 0
+  ⚠ “观测到反馈角不变”不是设备 ACK，也不是独立实测静止。
+
+H 许可 + 越界/位移超限/NaN
+  move az 20.0 → MOVE_ACCEPTED accepted=1 seq=1
+                  CMD_RESULT outcome=Failed
+                  msg="目标相对当前实测角的位移超出验收许可：运动指令未受理"
+  move az 100.0 → CMD_RESULT outcome=Failed
+                  msg="目标方位角超出验收许可范围：运动指令未受理"
+  move az nan → MOVE_REJECTED reason=usage_or_nonfinite
+  FINAL control_frames=0
+  EXIT_CODE 0
+  ⚠ 越界命令在命令槽被受理后才在发送点拒绝；帧数 0，结果明确为 Failed。
+
+I 许可次数用尽（max_executions=1）
+  第 1 次：MOVE_ACCEPTED accepted=1 seq=1；CMD_RESULT Delivered；control_frames=2
+  第 2 次：MOVE_ACCEPTED accepted=0 seq=2
+          MOVE_NOT_ACCEPTED outcome=Failed msg="无有效验收许可，命令未进入命令槽"
+  静止停止：STOP_RESULT send_path=no_frame(no_motion_in_flight)
+  FINAL control_frames=2（第 2 次 0 帧）
+  EXIT_CODE 0
+
+J 许可 + 普通 stop 在静止（对照，不是 T1）
+  INIT_OK
+  STOP_REQUEST at_motion=IDLE txn=0
+  STOP_RESULT stop_delivered=0 stop_stationary=0 uncertain=0
+              send_path=no_frame(no_motion_in_flight)
+  FINAL control_frames=0
+  EXIT_CODE 0
+  ⚠ 普通 stop() 静止时是无帧 no-op；不能把这条记作 T1。
+
+M 许可 + stop_at_rest（T1 离线预演，实际发帧）
+  PERMIT ... allow_stop_at_rest=1 ...
+  STOP_AT_REST_REQUEST at_motion=IDLE cycle=10 az=0.0000 el=0.0000 fresh=1
+                      stop_delivered=0
+  STOP_AT_REST_RESULT ok=1 control_frames_added=1 stop_delivered=1
+                     stop_stationary=0 uncertain=0 stop_txn=0
+  再次 stop_at_rest → ok=0 control_frames_added=0
+                     msg="本次会话已交付过停止帧，不重复补帧"
+  EXIT_STOP delivered=1 stationary=1 uncertain=0 waited_ms=0（退出不再补帧）
+  FINAL control_frames=1
+  EXIT_CODE 0
+  ⚠ 本次会话此前无运动，stop_txn=0 表示停止事实归属“无运动事务”；
+     1 帧只证明工具路径发出发送，不证明设备收到或物理停止。
+
+N 许可未授权静止停止帧（allow_stop_at_rest=0）
+  STOP_AT_REST_RESULT ok=0 control_frames_added=0 stop_delivered=0
+                     msg="验收许可未授权静止停止帧（allow_stop_at_rest=0）"
+  FINAL control_frames=0
+  EXIT_CODE 0
+
+K 运动中 SIGINT（现场 Ctrl-C 预演）
+  MOVE_REQUEST az=5.0 → 运动约 250 ms 后发送 SIGINT
+  SIGNAL_INTERRUPT t=245ms：进入停止/正常退出路径
+  EXIT_REQUEST reason=signal_interrupt
+  EXIT_STOP stop_delivered=1 stationary=1 uncertain=0 waited_ms=251
+  FINAL normal_exit=1 control_frames=3
+  EXIT_CODE 0
+  ⚠ 只证明工具收到 Ctrl-C 后走生产停止路径并等待观测窗口；
+    不证明设备在 251 ms 内物理静止。
+
+L 往返重复定位（REPEAT 分组，T4 格式预演）
+  人工依次 move az 1.0 / 0.0 / 1.0 / 0.0 / 1.0，每次等待到位后再下发
+  REPEAT n=3 target_az=1.0000 ... az_std=0.0000
+  REPEAT n=2 target_az=0.0000 ... az_std=0.0000
+  FINAL control_frames=10 normal_exit=1
+  EXIT_CODE 0
+  ⚠ 假设备反馈是理想值，std=0 只证明统计分组正确，不证明实机重复性。
+
+判读：
+- 无许可/坏许可/过期/次数用尽/越界 → 新运动零帧；错误码路径为 2007。
+- 只读会话在正常与失联路径控制帧均为 0。
+- 运动停止的交付与观测分开记录，事务编号一致；普通 `stop` 静止时是无帧
+  no-op（J），不记为“停止帧交付失败”。
+- 获准的 `stop_at_rest` 在静止时**确实发出 1 帧**（M）；未授权、只读、
+  运动中、样本过期或故障锁存时零帧（N 与单元测试）。
+- 以上均为 fake transport 行为，除 M 外无任何工具路径在静止时发控制帧。

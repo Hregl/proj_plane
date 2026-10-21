@@ -62,6 +62,12 @@ void PelcoDTurntableController::setTestMotionGate(bool allow)
     session_->setTestMotionGate(allow);
 }
 
+bool PelcoDTurntableController::enableAcceptancePermit(
+    const data::TurntableAcceptancePermit& permit, std::string& error)
+{
+    return session_->setAcceptancePermit(permit, error);
+}
+
 bool PelcoDTurntableController::initialize()
 {
     if (initialized_.load())
@@ -110,6 +116,22 @@ bool PelcoDTurntableController::move(
         return false;
     }
 
+    // 无有效验收许可（未安装/未生效/过期/次数用尽）时不写命令槽。
+    // 具体目标、位移与最新时间仍在 session 发送前重新核对 —— 这里的
+    // 预检只是让调用方立即得到 false，而不是排队后才发现被拒。
+    if (!session_->motionPreauthorized())
+    {
+        std::uint64_t seq = 0;
+        {
+            std::lock_guard<std::mutex> lock(commandMutex_);
+            seq = ++nextCommandSeq_;
+            latestCommandSeq_ = seq;
+        }
+        setCommandOutcome(seq, data::TurntableCommandOutcome::Failed,
+                          "无有效验收许可，命令未进入命令槽");
+        return false;
+    }
+
     const bool finite = std::isfinite(command.azimuthCommand) &&
                         std::isfinite(command.elevationCommand);
 
@@ -145,6 +167,12 @@ bool PelcoDTurntableController::move(
     commandCv_.notify_all();
     // ⚠ 这里**不**等待回显：true 仅表示已受理。
     return true;
+}
+
+std::uint64_t PelcoDTurntableController::lastAcceptedCommandSeq() const
+{
+    std::lock_guard<std::mutex> lock(commandMutex_);
+    return latestCommandSeq_;
 }
 
 data::TurntableState PelcoDTurntableController::state()
@@ -195,6 +223,64 @@ void PelcoDTurntableController::stop()
     stopWaitCv_.wait_for(lock, waitMs, [this, seq] {
         return stopCompletedSeq_.load() >= seq;
     });
+}
+
+bool PelcoDTurntableController::sendAcceptanceStopFrameAtRest(
+    std::string& error)
+{
+    error.clear();
+    if (!initialized_.load() || !running_.load())
+    {
+        error = "转台未初始化/worker 未运行";
+        return false;
+    }
+    if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
+    {
+        error = "只读会话不发送任何控制帧（含静止停止帧）";
+        return false;
+    }
+
+    std::optional<PendingMove> cancelled;
+    std::uint64_t seq = 0;
+    {
+        std::lock_guard<std::mutex> lock(commandMutex_);
+        seq = stopRequestSeq_.load() + 1;
+        // 先写“本序号是静止停止请求”，再发布停止序号；worker 看到
+        // 新停止序号时必然能匹配到同一序号。
+        acceptanceStopAtRestSeq_.store(seq);
+        stopRequestSeq_.store(seq);
+        if (pendingMove_)
+        {
+            cancelled = pendingMove_;
+            pendingMove_.reset();
+        }
+    }
+    if (cancelled)
+    {
+        setCommandOutcome(cancelled->seq,
+                          data::TurntableCommandOutcome::Cancelled,
+                          "命令被静止停止请求取消");
+    }
+    commandCv_.notify_all();
+
+    const auto waitMs = std::chrono::milliseconds(
+        config_.stopRetryWindowMs > 0 ? config_.stopRetryWindowMs + 1000
+                                      : 1000);
+    {
+        std::unique_lock<std::mutex> lock(stopWaitMutex_);
+        stopWaitCv_.wait_for(lock, waitMs, [this, seq] {
+            return stopCompletedSeq_.load() >= seq;
+        });
+    }
+
+    std::lock_guard<std::mutex> lock(acceptanceStopResultMutex_);
+    if (acceptanceStopResultSeq_ != seq)
+    {
+        error = "等待静止停止帧处理超时，结果未知";
+        return false;
+    }
+    error = acceptanceStopResultError_;
+    return acceptanceStopResultOk_;
 }
 
 data::TurntableDiagnostics PelcoDTurntableController::diagnostics() const
@@ -318,7 +404,23 @@ void PelcoDTurntableController::workerLoop()
             // 外部 stop()（新序号）才允许重臂。
             const bool allowRearm = (stopSeq != stopSeqHandledByCancel_);
             stopSeqHandledByCancel_ = 0;
-            session_->stop(allowRearm);
+            if (acceptanceStopAtRestSeq_.load() == stopSeq)
+            {
+                std::string error;
+                const bool ok =
+                    session_->sendAcceptanceStopFrameAtRest(error);
+                {
+                    std::lock_guard<std::mutex> lock(
+                        acceptanceStopResultMutex_);
+                    acceptanceStopResultSeq_ = stopSeq;
+                    acceptanceStopResultOk_  = ok;
+                    acceptanceStopResultError_ = error;
+                }
+            }
+            else
+            {
+                session_->stop(allowRearm);
+            }
             stopCompletedSeq_.store(stopSeq);
             stopWaitCv_.notify_all();
             continue;
