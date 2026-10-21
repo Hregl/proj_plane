@@ -192,10 +192,12 @@ private:
                      const std::function<bool()>& shouldAbort);
     /// @param frameSent 至少成功发出一帧时为 true（用于“部分发送后取消
     ///        仍必须补发停止帧”的判定）。
+    /// @param permitExpired 发送前复核许可有效期时发现已过期。包括重传：
+    ///        每次调用 `sendFrame` 之前都复核；调用方据此进入停止收口。
     bool sendAndAwaitEcho(const PelcoDFrame& frame, std::string& error,
                           bool& rejected,
                           const std::function<bool()>& shouldAbort,
-                          bool& frameSent);
+                          bool& frameSent, bool& permitExpired);
     /// 地址错误的回复按“没有有效回复”处理（C3）。
     /// @param aborted 因停止屏障放弃（不是通信失败，不参与失败计数）。
     bool queryAngle(bool horizontal, double& out, std::string& error,
@@ -227,8 +229,12 @@ private:
     data::TurntableMotionState updateMotion(double az, double el);
     data::TurntableMotionState handleStopObservation(double az, double el,
                                                      std::uint64_t now);
+    /// @param singleAttempt 验收静止停止专用：只尝试一次，不重发；失败
+    ///        时不置 `motionUncertain`（发送时设备已静止，没有在途运动），
+    ///        也不消耗普通停止的重试预算。普通/故障停止保持默认值 false。
     bool performStop(int faultCode, const std::string& faultMessage,
-                     const std::string& context, bool recordFirstFault);
+                     const std::string& context, bool recordFirstFault,
+                     bool singleAttempt = false);
     bool resolveAzimuth(double command, double& resolved) const;
     bool resolveElevation(double command, double& resolved) const;
     double selectedSpeedDegPerSec(double maxDeltaDeg) const;
@@ -276,6 +282,10 @@ private:
     // 停止状态机（I/O 所有者线程独占）
     bool     stopPending_              = false;
     bool     stopSent_                 = false;
+    // T1 静止停止帧的**会话级**使用记录。不能复用 stopSent_：后者是
+    // “当前运动事务”的停止事实，新运动开始时会清零，会让第二次 T1
+    // 重新获得发帧资格。
+    bool     acceptanceStopAtRestDelivered_ = false;
     bool     stopRetryArmed_           = false;
     // 本次停止请求的重试预算是否已耗尽。预算按“停止请求”而不是按
     // “performStop 调用”计算：取消补帧与停止屏障共享同一份预算，

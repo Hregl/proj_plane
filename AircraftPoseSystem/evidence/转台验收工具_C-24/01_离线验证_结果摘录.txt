@@ -1,5 +1,5 @@
-C-24 离线验证结果摘录（2026-10-21，2026-10-22 补 M/N）
-工具：turntable_acceptance 1.0.3-C24
+C-24 离线验证结果摘录（2026-10-21，2026-10-22 补 M/N/O 与复核修复）
+工具：turntable_acceptance 1.0.4-C24
 构建：build-native-off（GCC 12.3.0）
 原始日志：<仓库根>/验收证据/转台验收工具_2026-10-21/offline_*.log
 ⚠ 假设备（127.0.0.1）只证明工具/会话行为，不是实机证据。
@@ -85,7 +85,7 @@ M 许可 + stop_at_rest（T1 离线预演，实际发帧）
   STOP_AT_REST_RESULT ok=1 control_frames_added=1 stop_delivered=1
                      stop_stationary=0 uncertain=0 stop_txn=0
   再次 stop_at_rest → ok=0 control_frames_added=0
-                     msg="本次会话已交付过停止帧，不重复补帧"
+                     msg="本次会话已交付过静止停止帧，不重复补帧"
   EXIT_STOP delivered=1 stationary=1 uncertain=0 waited_ms=0（退出不再补帧）
   FINAL control_frames=1
   EXIT_CODE 0
@@ -97,6 +97,16 @@ N 许可未授权静止停止帧（allow_stop_at_rest=0）
                      msg="验收许可未授权静止停止帧（allow_stop_at_rest=0）"
   FINAL control_frames=0
   EXIT_CODE 0
+
+O 只授权静止停止帧（allow_absolute_position=0, allow_stop_at_rest=1）
+  PERMIT_INSTALLED scope="OFFLINE_STOP_ONLY_20261022"
+  stop_at_rest → STOP_AT_REST_RESULT ok=1 control_frames_added=1
+                 stop_delivered=1
+  move az 1.0 → MOVE_ACCEPTED accepted=0 seq=1（未进入命令槽）
+  FINAL control_frames=1（只有 T1 的 1 帧，无定位帧）
+  EXIT_CODE 0
+  ⚠ 两个授权互相独立：只授权停止的许可可安装并执行 T1，但绝对定位
+    始终被拒且零定位帧；实机仍需 P8 书面授权。
 
 K 运动中 SIGINT（现场 Ctrl-C 预演）
   MOVE_REQUEST az=5.0 → 运动约 250 ms 后发送 SIGINT
@@ -123,4 +133,12 @@ L 往返重复定位（REPEAT 分组，T4 格式预演）
   no-op（J），不记为“停止帧交付失败”。
 - 获准的 `stop_at_rest` 在静止时**确实发出 1 帧**（M）；未授权、只读、
   运动中、样本过期或故障锁存时零帧（N 与单元测试）。
+- 两个授权互相独立：只授权静止停止帧的许可可安装、T1 发 1 帧，绝对定位
+  零帧（O）；这修复了复核指出的“仅停止许可无法安装”。
+- 许可有效期在**每个定位帧发送前**（含重传）复核；部分发送后到期不再发
+  后续帧并进入停止收口。该路径用 fake transport 单元测试确定性地制造，
+  工具离线组无法注入“帧发出后到期”（见 02 的 M14/M18）。
+- T1 发送预算只有一次：首次失败返回失败，不再借用 `stop_retry_count`
+  自动重发；会话级“最多一帧”记录独立于新运动清零的 `stopSent_`。
+  两条反例均由单元测试覆盖（M15/M16），工具 CLI 无法注入发送失败。
 - 以上均为 fake transport 行为，除 M 外无任何工具路径在静止时发控制帧。

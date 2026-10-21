@@ -109,6 +109,16 @@ int stopFrames(const FakePelcoTransport& fake)
     });
 }
 
+int positioningFrames(const FakePelcoTransport& fake)
+{
+    return fake.countSent([](const PelcoDFrame& frame) {
+        return (frame.data1 == 0x00 &&
+                (frame.data2 == 0x4B || frame.data2 == 0x4D)) ||
+               ((frame.data1 == 0x4B || frame.data1 == 0x4D) &&
+                frame.data2 != 0x00);
+    });
+}
+
 /// 会话直接驱动的夹具：可选注入墙钟与单调时钟，让“过期/样本过期”
 /// 成为确定性判据，而不是依赖真实等待。
 struct SessionFixture
@@ -349,6 +359,63 @@ TEST(PelcoDAcceptancePermitTest, ExpiryAfterMotionRejectsNewMotionButStopStillSe
     EXPECT_TRUE(f.session->diagnostics().stopFrameDelivered);
 }
 
+TEST(PelcoDAcceptancePermitTest, PermitExpiryBetweenAxesStopsWithoutSecondAxis)
+{
+    // 反例：许可在第一轴发出后到期。第二轴不得再发，且已发出的
+    // 第一轴必须进入停止收口。
+    const data::TurntableConfig cfg = makeConfig();
+    SessionFixture f(cfg);
+    ASSERT_TRUE(f.install(makePermit(cfg)));
+    ASSERT_TRUE(f.init());
+    f.fake->sent.clear();
+
+    const auto previous = f.fake->onSend;
+    f.fake->onSend = [&](const std::vector<std::uint8_t>& bytes) {
+        const PelcoDFrame frame = FakePelcoTransport::decode(bytes);
+        if (frame.data1 == 0x00 && frame.data2 == 0x4B)
+        {
+            f.wallMs = 2000001;  // 水平定位帧已发出 ⇒ 许可随即到期
+        }
+        previous(bytes);
+    };
+
+    std::string error;
+    EXPECT_FALSE(f.moveTo(1.0, 1.0, error));
+    EXPECT_NE(error.find("失效"), std::string::npos);
+    EXPECT_EQ(positioningFrames(*f.fake), 1);   // 只有水平帧
+    EXPECT_EQ(stopFrames(*f.fake), 1);          // 部分发送 ⇒ 停止收口
+    EXPECT_TRUE(f.session->diagnostics().stopFrameDelivered);
+    EXPECT_EQ(f.session->lastError().code,
+              data::kErrTurntableMotionInhibited);
+}
+
+TEST(PelcoDAcceptancePermitTest, PermitExpiryDuringEchoWaitDoesNotRetransmit)
+{
+    // 反例：第一轴等待回显期间到期，旧实现会在随后的重传里继续发帧。
+    // 每个定位帧发送前复核后，只允许已发出的那 1 帧，然后停止收口。
+    const data::TurntableConfig cfg = makeConfig();
+    SessionFixture f(cfg);
+    ASSERT_TRUE(f.install(makePermit(cfg)));
+    ASSERT_TRUE(f.init());
+    f.fake->sent.clear();
+    f.fake->dropMoveEchoAxis = 1;  // 水平轴不回显，迫使进入重传分支
+
+    const auto previous = f.fake->onSend;
+    f.fake->onSend = [&](const std::vector<std::uint8_t>& bytes) {
+        const PelcoDFrame frame = FakePelcoTransport::decode(bytes);
+        if (frame.data1 == 0x00 && frame.data2 == 0x4B)
+        {
+            f.wallMs = 2000001;
+        }
+        previous(bytes);
+    };
+
+    std::string error;
+    EXPECT_FALSE(f.moveTo(1.0, 1.0, error));
+    EXPECT_EQ(positioningFrames(*f.fake), 1);  // 没有重传帧
+    EXPECT_EQ(stopFrames(*f.fake), 1);
+}
+
 // ---------------------------------------------------------------------------
 // 3. 只读、WorkMode、锁存、样本新鲜度
 // ---------------------------------------------------------------------------
@@ -398,11 +465,46 @@ TEST(PelcoDAcceptancePermitTest, PermitDoesNotBypassLatchedFault)
         f.session->pollOnce();
     }
     ASSERT_TRUE(f.session->errorLatched());
+    // ⚠ 失联锁存会同时把样本置为无效，因此本用例**不能**区分
+    // “锁存门禁拒绝”与“无新鲜样本拒绝”。可鉴别路径见下一个用例。
+    EXPECT_FALSE(f.session->diagnostics().sampleFresh);
 
     f.fake->sent.clear();
     std::string error;
     EXPECT_FALSE(f.moveTo(1.0, 1.0, error));
     EXPECT_EQ(controlFrames(*f.fake), 0);
+}
+
+TEST(PelcoDAcceptancePermitTest,
+     PermitDoesNotBypassLatchedFaultWithFreshSample)
+{
+    // T5b 的离线**可鉴别**路径：看门狗锁存（2008）发生在样本仍 fresh
+    // 时，拒绝只能来自锁存门禁，而不是样本过期。实机 T5b（拔线）无法
+    // 提供这一区分：拔线后工具的新鲜度预检会先拒绝。
+    data::TurntableConfig cfg = makeConfig();
+    cfg.sampleStaleMs = 10000;  // 让 6 s 后的旧样本仍算 fresh
+    SessionFixture f(cfg, /*injectMono=*/true);
+    ASSERT_TRUE(f.install(makePermit(cfg)));
+    ASSERT_TRUE(f.init());
+    f.dev.snapToTarget = false;  // 设备不动 ⇒ 看门狗到期
+    f.fake->sent.clear();
+
+    std::string error;
+    ASSERT_TRUE(f.moveTo(1.0, 1.0, error));  // travel=1° ⇒ 截止约 5.1 s
+    f.monoNs += 6ULL * 1000ULL * 1000ULL * 1000ULL;
+    f.session->pollOnce();
+
+    ASSERT_TRUE(f.session->errorLatched());
+    ASSERT_TRUE(f.session->diagnostics().sampleFresh);  // 关键鉴别条件
+    ASSERT_EQ(f.session->lastError().code,
+              data::kErrTurntableMotionWatchdog);
+    EXPECT_EQ(stopFrames(*f.fake), 1);  // 故障收口的停止帧已交付
+
+    f.fake->sent.clear();
+    EXPECT_FALSE(f.moveTo(1.0, 1.0, error));
+    EXPECT_EQ(controlFrames(*f.fake), 0);
+    EXPECT_EQ(f.session->lastError().code,
+              data::kErrTurntableMotionWatchdog);
 }
 
 TEST(PelcoDAcceptancePermitTest, StaleSampleBlocksPermitMotion)
@@ -584,6 +686,91 @@ TEST(PelcoDAcceptancePermitTest, AtRestStopAllowedAfterPermitExpiry)
     EXPECT_TRUE(f.session->sendAcceptanceStopFrameAtRest(error));
     EXPECT_EQ(stopFrames(*f.fake), 1);
     EXPECT_TRUE(f.session->diagnostics().acceptancePermitExpired);
+}
+
+TEST(PelcoDAcceptancePermitTest, AtRestStopSingleAttemptNoAutomaticRetry)
+{
+    // 反例：首次发送失败时旧实现沿用 stop_retry_count 自动重发。
+    // T1 必须只有一次发送；失败返回 false，不置 motionUncertain。
+    const data::TurntableConfig cfg = makeConfig();
+    SessionFixture f(cfg);
+    auto permit = makePermit(cfg);
+    permit.allowStopFrameAtRest = true;
+    ASSERT_TRUE(f.install(permit));
+    ASSERT_TRUE(f.init());
+    f.fake->sent.clear();
+    f.fake->failStopSends = 1;
+
+    std::string error;
+    EXPECT_FALSE(f.session->sendAcceptanceStopFrameAtRest(error));
+    EXPECT_EQ(f.fake->stopSendAttempts.load(), 1);  // 不是 3
+    EXPECT_EQ(stopFrames(*f.fake), 0);
+    EXPECT_FALSE(f.session->diagnostics().stopFrameDelivered);
+    EXPECT_FALSE(f.session->diagnostics().motionUncertain);
+    EXPECT_FALSE(error.empty());
+
+    // 显式再调用一次（不是自动重试）：本次发送成功，恰好 1 帧。
+    EXPECT_TRUE(f.session->sendAcceptanceStopFrameAtRest(error));
+    EXPECT_EQ(f.fake->stopSendAttempts.load(), 2);
+    EXPECT_EQ(stopFrames(*f.fake), 1);
+    EXPECT_TRUE(f.session->diagnostics().stopFrameDelivered);
+}
+
+TEST(PelcoDAcceptancePermitTest, AtRestStopOnlyOncePerSessionAcrossMotion)
+{
+    // 反例：T1 → 观测静止 → 正常运动 → 再次 T1。旧实现复用会被新运动
+    // 清零的 stopSent_，第二次仍发帧。会话级记录必须独立保留。
+    const data::TurntableConfig cfg = makeConfig();
+    SessionFixture f(cfg);
+    auto permit = makePermit(cfg);
+    permit.allowStopFrameAtRest = true;
+    ASSERT_TRUE(f.install(permit));
+    ASSERT_TRUE(f.init());
+    f.fake->sent.clear();
+
+    std::string error;
+    ASSERT_TRUE(f.session->sendAcceptanceStopFrameAtRest(error));
+    ASSERT_EQ(stopFrames(*f.fake), 1);
+    for (int i = 0; i < cfg.stableReadCount + 2; ++i)
+    {
+        f.session->pollOnce();
+    }
+    ASSERT_TRUE(f.session->diagnostics().stopObservedStationary);
+
+    ASSERT_TRUE(f.moveTo(1.0, 1.0, error));  // 新运动清零 stopSent_
+    for (int i = 0; i < cfg.stableReadCount + 2; ++i)
+    {
+        f.session->pollOnce();
+    }
+    ASSERT_EQ(f.session->snapshot().motion,
+              data::TurntableMotionState::STABLE);
+
+    EXPECT_FALSE(f.session->sendAcceptanceStopFrameAtRest(error));
+    EXPECT_EQ(stopFrames(*f.fake), 1);  // 仍只有第一次的 1 帧
+    EXPECT_FALSE(f.session->diagnostics().motionUncertain);
+}
+
+TEST(PelcoDAcceptancePermitTest, StopOnlyPermitInstallsButNeverAuthorizesMotion)
+{
+    // 两个授权必须真正独立：只授权静止停止帧的许可可以安装并执行 T1，
+    // 但绝对定位始终被拒且零定位帧。
+    const data::TurntableConfig cfg = makeConfig();
+    SessionFixture f(cfg);
+    auto permit = makePermit(cfg);
+    permit.allowAbsolutePosition = false;
+    permit.allowStopFrameAtRest  = true;
+    ASSERT_TRUE(f.install(permit));
+    ASSERT_TRUE(f.init());
+    f.fake->sent.clear();
+
+    std::string error;
+    EXPECT_TRUE(f.session->sendAcceptanceStopFrameAtRest(error));
+    EXPECT_EQ(stopFrames(*f.fake), 1);
+
+    EXPECT_FALSE(f.moveTo(1.0, 1.0, error));
+    EXPECT_EQ(positioningFrames(*f.fake), 0);
+    EXPECT_NE(error.find("绝对定位"), std::string::npos);
+    EXPECT_TRUE(f.session->diagnostics().motionInhibited);
 }
 
 // ---------------------------------------------------------------------------

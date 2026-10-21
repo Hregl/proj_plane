@@ -143,9 +143,11 @@ bool PelcoDSession::setAcceptancePermit(
         error = "许可缺少验收范围编号（scope_id）";
         return false;
     }
-    if (!permit.allowAbsolutePosition)
+    // 两个操作授权互相独立：只授权静止停止帧的许可合法（用于 T1），
+    // 但它不构成任何运动授权 —— move() 的许可门禁仍会拒绝。
+    if (!permit.allowAbsolutePosition && !permit.allowStopFrameAtRest)
     {
-        error = "许可没有允许任何操作（绝对定位未授权）";
+        error = "许可没有允许任何操作（绝对定位与静止停止帧均未授权）";
         return false;
     }
     if (permit.deviceHost != config_.host ||
@@ -413,16 +415,35 @@ bool PelcoDSession::waitForEcho(const PelcoDFrame& sent, std::string& error,
 
 bool PelcoDSession::sendAndAwaitEcho(
     const PelcoDFrame& frame, std::string& error, bool& rejected,
-    const std::function<bool()>& shouldAbort, bool& frameSent)
+    const std::function<bool()>& shouldAbort, bool& frameSent,
+    bool& permitExpired)
 {
-    rejected  = false;
-    frameSent = false;
+    rejected      = false;
+    frameSent     = false;
+    permitExpired = false;
     for (int attempt = 0; attempt <= kCommandRetries; ++attempt)
     {
         if (shouldAbort && shouldAbort())
         {
             error = "指令被停止屏障取消";
             return false;
+        }
+        // 许可有效期必须在**每一个定位帧**发送前复核，重传也一样。
+        // 只在 move() 入口核对一次会留下“第一轴发出后到期、第二轴或
+        // 重传仍继续发”的缺口。次数已在命令入口按逻辑命令扣减一次，
+        // 这里只核对期限与操作授权，不重复扣减。
+        if (acceptancePermitInstalled_)
+        {
+            const std::int64_t nowWall = wallNowMs();
+            if (!acceptancePermit_.allowAbsolutePosition ||
+                nowWall < acceptancePermit_.validFromEpochMs ||
+                nowWall >= acceptancePermit_.validUntilEpochMs)
+            {
+                error = "验收许可在发送过程中失效（过期或未授权定位）："
+                        "定位帧未发送";
+                permitExpired = true;
+                return false;
+            }
         }
         if (!sendFrame(frame, error))
         {
@@ -1003,11 +1024,27 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
     bool rejected         = false;
     bool horizontalSent   = false;
     bool verticalSent     = false;
+    bool permitExpired    = false;
     std::string failure;
 
     if (!sendAndAwaitEcho(horizontalFrame, failure, rejected, shouldAbort,
-                          horizontalSent))
+                          horizontalSent, permitExpired))
     {
+        if (permitExpired)
+        {
+            // 许可在发送阶段失效。若第一轴已经发出，设备**可能**已经
+            // 开始运动：必须进入停止收口，不能按“未受理”静默返回。
+            // 停止本身不受许可期限限制。
+            setError(data::kErrTurntableMotionInhibited, failure, false,
+                     "move/permit_expired");
+            if (horizontalSent)
+            {
+                performStop(0, "许可到期后补发停止",
+                            "move/permit_expired", false);
+            }
+            error = failure;
+            return false;
+        }
         if (shouldAbort && shouldAbort())
         {
             // 停止屏障已取消本次命令。⚠ 若第一轴已经发出，设备**可能
@@ -1031,8 +1068,18 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
     }
 
     if (!sendAndAwaitEcho(verticalFrame, failure, rejected, shouldAbort,
-                          verticalSent))
+                          verticalSent, permitExpired))
     {
+        if (permitExpired)
+        {
+            // 水平轴已经交付：部分发送后许可失效，必须补发停止帧。
+            setError(data::kErrTurntableMotionInhibited, failure, false,
+                     "move/permit_expired");
+            performStop(0, "许可到期后补发停止", "move/permit_expired",
+                        false);
+            error = failure;
+            return false;
+        }
         if (shouldAbort && shouldAbort())
         {
             // 水平轴已交付（或至少已发出）：必须请求停止，不能留下
@@ -1186,7 +1233,7 @@ void PelcoDSession::pollOnce(const std::function<bool()>& shouldAbort)
 
 bool PelcoDSession::performStop(int faultCode, const std::string& faultMessage,
                                 const std::string& context,
-                                bool recordFirstFault)
+                                bool recordFirstFault, bool singleAttempt)
 {
     // 只读模式：所有路径均不得产生控制帧（C1）。
     if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
@@ -1223,14 +1270,18 @@ bool PelcoDSession::performStop(int faultCode, const std::string& faultMessage,
     bool delivered = false;
     std::string lastFailure;
 
-    for (int attempt = 0; attempt <= config_.stopRetryCount; ++attempt)
+    // 验收静止停止是“证明线上能发出这一帧”的验收操作，不是故障停止：
+    // 只尝试一次，首次失败即返回；不得借用普通停止的重试预算。
+    const int maxAttempts =
+        singleAttempt ? 1 : (config_.stopRetryCount + 1);
+    for (int attempt = 0; attempt < maxAttempts; ++attempt)
     {
         if (sendFrame(stopFrame, lastFailure))
         {
             delivered = true;
             break;
         }
-        if (attempt >= config_.stopRetryCount)
+        if (attempt + 1 >= maxAttempts)
         {
             break;
         }
@@ -1265,6 +1316,20 @@ bool PelcoDSession::performStop(int faultCode, const std::string& faultMessage,
             motion_.store(data::TurntableMotionState::MOVING);
         }
         return true;
+    }
+
+    if (singleAttempt)
+    {
+        // 单次发送失败：不重发、不把已在静止的会话置为 motionUncertain，
+        // 也不占用普通停止的预算；只如实记录本次未交付。
+        stopSent_               = false;
+        stopFrameDelivered_     = false;
+        stopObservedStationary_ = false;
+        stopPending_            = false;
+        setError(data::kErrTurntableStopNotDelivered,
+                 "验收静止停止帧未交付（单次发送失败）：" + lastFailure,
+                 false, context);
+        return false;
     }
 
     // 窗口耗尽仍无法交付：2005 + motionUncertain，停止自动重试。
@@ -1362,13 +1427,14 @@ bool PelcoDSession::sendAcceptanceStopFrameAtRest(std::string& error)
         return false;
     }
 
-    if (stopSent_)
+    if (stopSent_ || acceptanceStopAtRestDelivered_)
     {
-        error = "本次会话已交付过停止帧，不重复补帧";
+        error = "本次会话已交付过静止停止帧，不重复补帧";
         return false;
     }
 
-    if (!performStop(0, "验收静止停止", "stop/acceptance_at_rest", false))
+    if (!performStop(0, "验收静止停止", "stop/acceptance_at_rest", false,
+                     /*singleAttempt=*/true))
     {
         error = lastErrorText();
         if (error.empty())
@@ -1377,6 +1443,9 @@ bool PelcoDSession::sendAcceptanceStopFrameAtRest(std::string& error)
         }
         return false;
     }
+    // 独立于 stopSent_ 保留：中间发生过运动并清零 stopSent_ 后，
+    // 本会话仍然不得再发第二帧 T1 停止帧。
+    acceptanceStopAtRestDelivered_ = true;
     return true;
 }
 

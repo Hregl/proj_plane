@@ -1304,14 +1304,20 @@ bool sendAcceptanceStopFrameAtRest(std::string& error);
 // 验收 T1 专用：静止时**实际发送一帧停止指令**并等待交付结果。
 // 需已安装许可且 allowStopFrameAtRest=true；不消耗运动次数、不读有效期。
 // 只读会话、非静止、故障锁存/不确定、已交付过停止帧 ⇒ false 且零帧。
+// 发送预算只有一次：首次发送失败即返回 false，不自动重发；成功帧每会话
+// 最多一帧，使用记录独立于随新运动事务清零的停止状态。
 ```
 
 * 这三个方法只存在于 `PelcoDTurntableController`（真实后端），**不在**
   `ITurntableController` 冻结接口中；生产装配不调用 `enableAcceptancePermit`。
 * `stop()` 在静止时仍是**无帧 no-op**（C1）；T1 的“静止时确实发出停止帧”
   必须经 `sendAcceptanceStopFrameAtRest()`，不能用先运动再 `stop()` 冒充。
-* 许可在**发送点**再次核对（目标范围、相对新鲜样本的位移、次数、有效期），
-  因此 `sendPolicy=MotionEnabled` 本身不是运动授权。
+* 许可在 `move()` 入口核对目标范围、相对新鲜样本的位移与次数，并在
+  **每一个定位帧发送前**（含底层重传）复核有效期与绝对定位授权；部分
+  发送后到期 ⇒ 不再发后续帧并执行停止收口。因此 `sendPolicy=MotionEnabled`
+  本身不是运动授权。
+* 两个操作标志互相独立：只授权 `allowStopFrameAtRest` 的许可可以安装并
+  执行 T1，但 `move()` 始终拒绝（2007、零定位帧）。
 * `move()==true` 仍仅表示**已受理**；`lastAcceptedCommandSeq()` 不表示交付或到位。
 
 ---

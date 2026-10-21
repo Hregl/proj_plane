@@ -80,7 +80,7 @@ using aircraft::device::TransportResult;
 using aircraft::device::TransportStatus;
 using aircraft::infrastructure::ConfigManager;
 
-constexpr const char* kToolVersion = "1.0.3-C24";
+constexpr const char* kToolVersion = "1.0.4-C24";
 
 using Clock = std::chrono::steady_clock;
 

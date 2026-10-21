@@ -1,7 +1,7 @@
 # C-24 转台实机验收入口与验收运动许可——交付 diff
 # 基线：develop 65e4f64；不含未提交的 V1–V4 UI 批与 C-23 补正。
 # 旧版冻结文档已原样移入同级 archive/：patch 同时包含旧路径删除与 archive/ 新增，两者内容相同。
-# 工具版本：turntable_acceptance 1.0.3-C24（2026-10-22 补 T1 静止停止帧）。
+# 工具版本：turntable_acceptance 1.0.4-C24（2026-10-22 复核补正：逐帧复查、T1 单次发送与会话级最多一帧、仅停止许可）。
 
 diff --git a/AircraftPoseSystem/README.md b/AircraftPoseSystem/README.md
 index ea3f806..62d4133 100644
@@ -31,12 +31,12 @@ index ea3f806..62d4133 100644
  | **SYS-18 §3** | **各阶段部署形态及相应约束**（部署形态权威） |
 diff --git a/AircraftPoseSystem/evidence/转台验收工具_C-24/01_离线验证_结果摘录.txt b/AircraftPoseSystem/evidence/转台验收工具_C-24/01_离线验证_结果摘录.txt
 new file mode 100644
-index 0000000..23a18c3
+index 0000000..ced0a48
 --- /dev/null
 +++ b/AircraftPoseSystem/evidence/转台验收工具_C-24/01_离线验证_结果摘录.txt
-@@ -0,0 +1,126 @@
-+C-24 离线验证结果摘录（2026-10-21，2026-10-22 补 M/N）
-+工具：turntable_acceptance 1.0.3-C24
+@@ -0,0 +1,144 @@
++C-24 离线验证结果摘录（2026-10-21，2026-10-22 补 M/N/O 与复核修复）
++工具：turntable_acceptance 1.0.4-C24
 +构建：build-native-off（GCC 12.3.0）
 +原始日志：<仓库根>/验收证据/转台验收工具_2026-10-21/offline_*.log
 +⚠ 假设备（127.0.0.1）只证明工具/会话行为，不是实机证据。
@@ -122,7 +122,7 @@ index 0000000..23a18c3
 +  STOP_AT_REST_RESULT ok=1 control_frames_added=1 stop_delivered=1
 +                     stop_stationary=0 uncertain=0 stop_txn=0
 +  再次 stop_at_rest → ok=0 control_frames_added=0
-+                     msg="本次会话已交付过停止帧，不重复补帧"
++                     msg="本次会话已交付过静止停止帧，不重复补帧"
 +  EXIT_STOP delivered=1 stationary=1 uncertain=0 waited_ms=0（退出不再补帧）
 +  FINAL control_frames=1
 +  EXIT_CODE 0
@@ -134,6 +134,16 @@ index 0000000..23a18c3
 +                     msg="验收许可未授权静止停止帧（allow_stop_at_rest=0）"
 +  FINAL control_frames=0
 +  EXIT_CODE 0
++
++O 只授权静止停止帧（allow_absolute_position=0, allow_stop_at_rest=1）
++  PERMIT_INSTALLED scope="OFFLINE_STOP_ONLY_20261022"
++  stop_at_rest → STOP_AT_REST_RESULT ok=1 control_frames_added=1
++                 stop_delivered=1
++  move az 1.0 → MOVE_ACCEPTED accepted=0 seq=1（未进入命令槽）
++  FINAL control_frames=1（只有 T1 的 1 帧，无定位帧）
++  EXIT_CODE 0
++  ⚠ 两个授权互相独立：只授权停止的许可可安装并执行 T1，但绝对定位
++    始终被拒且零定位帧；实机仍需 P8 书面授权。
 +
 +K 运动中 SIGINT（现场 Ctrl-C 预演）
 +  MOVE_REQUEST az=5.0 → 运动约 250 ms 后发送 SIGINT
@@ -160,19 +170,27 @@ index 0000000..23a18c3
 +  no-op（J），不记为“停止帧交付失败”。
 +- 获准的 `stop_at_rest` 在静止时**确实发出 1 帧**（M）；未授权、只读、
 +  运动中、样本过期或故障锁存时零帧（N 与单元测试）。
++- 两个授权互相独立：只授权静止停止帧的许可可安装、T1 发 1 帧，绝对定位
++  零帧（O）；这修复了复核指出的“仅停止许可无法安装”。
++- 许可有效期在**每个定位帧发送前**（含重传）复核；部分发送后到期不再发
++  后续帧并进入停止收口。该路径用 fake transport 单元测试确定性地制造，
++  工具离线组无法注入“帧发出后到期”（见 02 的 M14/M18）。
++- T1 发送预算只有一次：首次失败返回失败，不再借用 `stop_retry_count`
++  自动重发；会话级“最多一帧”记录独立于新运动清零的 `stopSent_`。
++  两条反例均由单元测试覆盖（M15/M16），工具 CLI 无法注入发送失败。
 +- 以上均为 fake transport 行为，除 M 外无任何工具路径在静止时发控制帧。
 diff --git a/AircraftPoseSystem/evidence/转台验收工具_C-24/02_变异检查记录.md b/AircraftPoseSystem/evidence/转台验收工具_C-24/02_变异检查记录.md
 new file mode 100644
-index 0000000..3f5df32
+index 0000000..782ab3f
 --- /dev/null
 +++ b/AircraftPoseSystem/evidence/转台验收工具_C-24/02_变异检查记录.md
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,68 @@
 +# C-24 定向变异检查（先红后绿）
 +
-+基线：`develop` `65e4f64` + 本批工作树。
-+构建：`build-native-off`（M1–M8）与 `build-native-on`（M9–M13），目标 `test_pelco_d`。
++基线：`develop` `65e4f64` + 本批工作树（含 2026-10-22 复核补正）。
++构建：`build-native-off`（M1–M8、M14–M19）与 `build-native-on`（M9–M13），目标 `test_pelco_d`。
 +恢复：每项均用编辑恢复源码（**未使用文件复制恢复**）。
-+执行方式：每项只运行受影响的用例，确认断言变红；恢复后整套 **109/109** 通过。
++执行方式：每项只运行受影响的用例，确认断言变红；恢复后整套 **115/115** 通过。
 +
 +| # | 变异（改回错误实现） | 预期断言 | 实测结果 |
 +|---|---|---|---|
@@ -189,6 +207,12 @@ index 0000000..3f5df32
 +| M11 | 删除静止/故障状态检查块 | `AtRestStopRejectedWhileMoving` | **红**：运动中仍发送静止停止帧 |
 +| M12 | 删除新鲜有效双轴样本检查 | `AtRestStopRejectedWhenSampleStale` | **红**：过期样本下仍发送 |
 +| M13 | worker 静止停止分支改为始终调用普通 `session_->stop()` | `ControllerAtRestStopSendsOneFrameAndRejectsSecond` | **红**：返回 false 且停止帧 0（退回静止 no-op） |
++| M14 | `sendAndAwaitEcho()` 每帧复查前的条件改为 `if (false && acceptancePermitInstalled_)`（取消逐帧复查） | `PermitExpiryBetweenAxesStopsWithoutSecondAxis`、`PermitExpiryDuringEchoWaitDoesNotRetransmit` | **红 ×2**：`move()` 返回 true；到期后仍发出后续定位帧，定位帧数 >1 且停止帧 0 |
++| M15 | `performStop()` 忽略 `singleAttempt`，恢复 `maxAttempts = stopRetryCount + 1` | `AtRestStopSingleAttemptNoAutomaticRetry` | **红**：`ok=true`、发送尝试 3、停止帧 1（首次失败被自动重发并成功） |
++| M16 | `sendAcceptanceStopFrameAtRest()` 只判 `stopSent_`，去掉会话级 `acceptanceStopAtRestDelivered_` | `AtRestStopOnlyOncePerSessionAcrossMotion` | **红**：T1→运动→再次 T1 第二次返回 true，累计停止帧 2 |
++| M17 | `setAcceptancePermit()` 恢复无条件要求 `allowAbsolutePosition` | `StopOnlyPermitInstallsButNeverAuthorizesMotion` | **红**：仅停止许可安装失败（返回 false，提示“许可没有允许任何操作”） |
++| M18 | 到期分支改为 `if (false && horizontalSent)`（取消水平已发送后的补停止） | `PermitExpiryDuringEchoWaitDoesNotRetransmit` | **红**：停止帧 0（等待回显期间到期后无停止收口）。单独跑 M18 时“两轴之间到期”用例仍绿，因垂直分支自身也会补停止；以本用例为覆盖证据 |
++| M19 | 控制器运动受理处去掉 `errorLatched_` 判断（`if (false && errorLatched_.load())`） | `PermitDoesNotBypassLatchedFaultWithFreshSample` | **红**：锁存后新运动被受理并发出定位帧，返回 true（预期 2008、零帧） |
 +
 +## 判读
 +
@@ -205,20 +229,36 @@ index 0000000..3f5df32
 +* `WorkModeTrust` 相关断言不通过“改写许可”变异检验：`ReplyNonZero`/`NoReply`
 +  在 `initialize()` 已失败，许可无法进入发送点；该检查是第二道防线，
 +  由 `PermitDoesNotChangeWorkModeTrust` 与既有 WorkMode 用例共同保持。
++* M14 与 M18 分测“复查点”和“到期收口”：M14 取消逐帧复查后，到期帧照发；
++  M18 保留复查但取消水平已发后的补停止，帧不再发出但停止帧为 0。
++  两者都红才说明“发帧前复查”和“部分发送后停止收口”各自独立成立。
++  M14 覆盖重传路径（echowait 用例在等待回显期间到期，下一次重传前被拦下）。
++* M15 与 M16 对应复核指出的 T1 两处缺陷：单次发送预算（M15）和
++  会话级“最多一帧”记录（M16）。两者分开变异，因为一个是预算、
++  一个是使用记录，任一单独恢复都会重新打开对应缺陷。
++* M17 对应“仅停止许可无法安装”；M19 对应 T5b 的离线可鉴别路径：
++  用固定单调时钟让样本保持新鲜、以看门狗锁存制造故障，从而把
++  “锁存门禁”与“新鲜度检查”分开——实机拔线路径无法做到这一点。
++* 复核方手动编译运行了 92 条测试；本仓库 `test_pelco_d` 登记 115 条
++  （含复核后新增的 6 条）。数量差异来自编译入口，不是用例缺失。
 +
 +## 恢复后结果
 +
 +```text
-+[==========] 109 tests from 5 test suites ran.
-+[  PASSED  ] 109 tests.       # build-native-off
-+[  PASSED  ] 109 tests.       # build-native-on
++[==========] 115 tests from 5 test suites ran.
++[  PASSED  ] 115 tests.       # build-native-off
++[  PASSED  ] 115 tests.       # build-native-on
++
++# 同轮其他套件（两个构建树一致）
++[==========] 26 tests from 1 test suite ran.   [  PASSED  ] 26 tests.   # test_system_initializer
++[==========] 46 tests from 1 test suite ran.   [  PASSED  ] 46 tests.   # test_measurement_flow
 +```
 diff --git a/AircraftPoseSystem/evidence/转台验收工具_C-24/03_执行卡.md b/AircraftPoseSystem/evidence/转台验收工具_C-24/03_执行卡.md
 new file mode 100644
-index 0000000..286a938
+index 0000000..dff96d0
 --- /dev/null
 +++ b/AircraftPoseSystem/evidence/转台验收工具_C-24/03_执行卡.md
-@@ -0,0 +1,273 @@
+@@ -0,0 +1,297 @@
 +# 转台实机验收执行卡（T0–T5）
 +
 +> **本卡是待确认的执行方案，不是运动授权。**
@@ -226,26 +266,45 @@ index 0000000..286a938
 +> 实机运动授权（设备、轴、角度范围、时间、操作者、急停方式）之前，
 +> **不得执行 T1–T5 的任何运动指令**。
 +>
-+> 工具：`turntable_acceptance` `1.0.3-C24`
++> 工具：`turntable_acceptance` `1.0.4-C24`
 +> 构建：`build-native-off`（现场建议使用与离线验证相同的构建）
 +> 配置：`use_speed_control=false`（设备默认速度）
 +
-+## 1. 现场前置（全部满足才可开始）
++## 1. 现场前置与阻塞范围
 +
-+| # | 前置 | 判据 |
-+|---|---|---|
-+| P1 | T0 只读复测完成 | 控制帧 0（工具计数 + 抓包双证）；样本 `valid`、`fresh`；正常退出 |
-+| P2 | 实际设备速度已确认 **（当前未取得，阻塞 T3）** | 从设备面板/说明书/维护记录取得**默认速度数值**并记录**来源**；`use_speed_control=false` 只表示“定位指令不带速度字段”，**不等于速度已确认**；`fine_speed`/`coarse_speed` 不是受控速度。未取得前不得执行 T3（见 §3 T3） |
-+| P3 | 设备身份记录 | 型号/序列号（可见则记录）、`pelco_address`、端口；**host 在进库记录中脱敏** |
-+| P4 | 抓包就绪 | 现场主机对 UDP 6666 抓包；原始 pcap 存 `验收证据/`，逐件 SHA-256 |
-+| P5 | 停止手段就位 | 见 §5；工具停止路径可用，且**独立停止措施**（设备停止/急停按钮或断动力）在操作者可立即执行范围内 |
-+| P6 | 现场人员 | 设备旁 1 人专职执行**独立停止措施**；操作者 1 人只发命令 |
-+| P7 | 许可文件已生成（T1 前） | 以 T0 的 R 为基准；本卡 §2 数值；有效期覆盖 T1–T4 |
-+| P8 | 书面授权 | 明确设备、轴、角度范围、次数、时间窗、操作者、停止方式 |
++**不写“全部满足才可开始”。** 未满足项如实保留状态，并逐项说明阻塞哪些
++步骤；未列为阻塞的步骤可以在授权后执行，但结论口径受对应限制。
++
++| # | 前置 | 当前状态 | 阻塞范围 |
++|---|---|---|---|
++| P1 | T0 **工具路径**只读复测 | **已执行**（2026-10-22）：工具 seam 日志控制帧 0；样本 `valid=1 fresh=1`；正常退出 | 不阻塞 |
++| P2 | 实际默认速度已确认 | **未取得**（见 §4） | **仅阻塞 T3**；T1/T2/T4/T5 不依赖速度数值 |
++| P3 | 设备身份记录 | 待现场 | 阻塞 T1–T5（缺记录不得开始） |
++| P4 | **独立抓包**就绪 | **未执行**（现场无 `tcpdump`/`dumpcap`/`tshark` 与 `CAP_NET_RAW`；不为赶进度扩大现场权限） | 不阻塞执行；但 T1–T5 的线上帧结论只能写**工具日志口径**，不得称独立抓包。若书面授权或现场规程要求独立抓包，则阻塞 T1–T5 直至满足 |
++| P5 | 停止手段就位 | 待现场确认 | 阻塞 T1–T5 |
++| P6 | 现场人员 | 待确认 | 阻塞 T1–T5 |
++| P7 | 许可文件已生成（T1 前） | 待生成（以 T0 的 R 为基准） | 阻塞 T1–T4 |
++| P8 | 书面授权 | **未取得** | 阻塞 T1–T5 |
++
++> P1 只覆盖工具输出；P4 是独立证据通道，两者不得互相替代。P2 只阻塞 T3，
++> 不得据此推迟或跳过 T1/T2/T4；反过来说，T3 未执行也不影响其他步骤的记录。
 +
 +## 2. 许可参数（以 T0 的同一轮双轴样本 R=(az0, el0) 为基准）
 +
 +T0 结束后**只取一轮** `valid && fresh` 的样本作为 R，写入许可：
++
++### 2.0 角度坐标口径与单侧规则
++
++* **软件有符号角**（`az0`、许可范围、`move` 目标）：本卡所有数值都是这个
++  口径，单位为度。
++* **协议角**：Pelco-D 水平轴按 `软件角 mod 360` 编码到 `[0, 360)`；它只用于
++  帧编码，不参与许可算术。`359.9` 与 `-0.1` 是同一个软件位置的两种表示。
++* **单侧规则**（避免目标跨越 0/360 的数值分界）：
++  * `-2.0 ≤ az0 < 0` ⇒ 许可 `[az0 - 2.0, az0]`，所有目标取 **≤ az0 的一侧**；
++  * `0 ≤ az0 < 2.0` ⇒ 许可 `[az0, az0 + 2.0]`，所有目标取 **≥ az0 的一侧**；
++  * 其他情况 ⇒ `[az0 - 2.0, az0 + 2.0]`。
++* 单侧规则只约束**数值区间**；设备实际走哪条路径必须由逐帧反馈观察，
++  **不得**用数值跨度推定“短路径/长路径”。
 +
 +| 键 | 值 | 说明 |
 +|---|---|---|
@@ -255,8 +314,8 @@ index 0000000..286a938
 +| `pelco_address` | `1`（按现场配置） | 帧地址，不是 IP |
 +| `allow_absolute_position` | `1` | 只允许绝对定位 |
 +| `allow_stop_at_rest` | `1` | 仅 T1 需要：静止时实际发一帧停止。必需键，缺失即解析失败 |
-+| `azimuth_min_deg` | `az0 - 2.0` | 若 `az0 < 2.0`，改用 `[az0, az0 + 2.0]`，禁止跨 0/360 数值回绕 |
-+| `azimuth_max_deg` | `az0 + 2.0` | 同上，单侧范围 |
++| `azimuth_min_deg` | 见下 | 软件有符号角；按 §2.0 的单侧规则取值 |
++| `azimuth_max_deg` | 见下 | 同上 |
 +| `elevation_min_deg` | `el0 - 1.0` | 不跨俯仰限位 |
 +| `elevation_max_deg` | `el0 + 1.0` | 同上 |
 +| `max_displacement_deg` | `2.0` | 单次目标相对当前实测角的最大位移 |
@@ -264,8 +323,8 @@ index 0000000..286a938
 +| `valid_from_epoch_ms` | 生成时刻 | 现场生成 |
 +| `valid_until_epoch_ms` | 生成时刻 + 90 min | 覆盖 T1–T4；过期只拒新运动，停止不受影响 |
 +
-+> 方位角按数值区间核对，不是环形区间。R 距 0/360 小于 2° 时使用
-+> 单侧范围，并在记录中写明原因。
++> 方位角按**软件有符号角**的数值区间核对，不是环形区间。R 距 0 小于 2°
++> 时按 §2.0 使用背向 0 的单侧范围，并在记录中写明软件角与协议角两种表示。
 +>
 +> 本卡**不设置**额外运动次数。任一命令结果不符合预期时，停止并
 +> 结束本卡，不靠“再来一次”凑结果；如需重测，重新确认许可。
@@ -277,15 +336,15 @@ index 0000000..286a938
 +
 +| 项 | 具体值 |
 +|---|---|
-+| 许可方位范围 | `[-2.1200°, +1.8800°]` |
++| 许可方位范围（软件角） | `[-2.1200°, -0.1200°]`（`az0` 在 `[-2,0)` ⇒ 取负向单侧） |
 +| 许可俯仰范围 | `[-0.9500°, +1.0500°]` |
-+| T2a 方位正向 | `move az 0.3800`（el 目标取同轮 reference） |
-+| T2b 方位反向 | `move az -0.1200` |
++| T2a 方位远离 0 | `move az -0.6200`（`az0 - 0.5`；el 目标取同轮 reference） |
++| T2b 方位回基准 | `move az -0.1200`（`az0`） |
 +| T2c 俯仰正向 | `move el 0.3500`（az 目标取同轮 reference） |
 +| T2d 俯仰反向 | `move el 0.0500` |
-+| T3 运动中停止 | `move az 1.3800`（取正向一侧，距许可上界 0.5°） |
-+| T4 A/B | A=`(0.3800, 0.0500)`，B=`(-0.1200, 0.0500)`，A 点到 3 次 |
-+| T5b 目标 | 拔线前最后一个新鲜方位角 C（目标=当前位置） |
++| T3 运动中停止 | `move az -1.6200`（`az0 - 1.5`，距许可下界 0.5°） |
++| T4 A/B | A=`(-0.6200, 0.0500)`，B=`(-0.1200, 0.0500)`，A 点到 3 次 |
++| 协议角对照 | R=`359.8800°`、A=`359.3800°`、T3=`358.3800°`；仅编码表示，不参与许可算术 |
 +
 +## 3. 执行顺序与判据
 +
@@ -347,8 +406,8 @@ index 0000000..286a938
 +
 +| 步 | 命令 | 目标 | 通过判据（除“反馈到目标±0.2°”外） |
 +|---|---|---|---|
-+| T2a | `move az <az0 + 0.5>` | az 正向 | 方位反馈增大；俯仰目标 = 同轮 `reference_el`；俯仰反馈保持 |
-+| T2b | `move az <az0>` | az 反向 | 方位反馈减小；俯仰目标 = 同轮 `reference_el` |
++| T2a | `move az <az0 - 0.5>` | az 负向（远离 0/360 分界） | 方位反馈减小；俯仰目标 = 同轮 `reference_el`；俯仰反馈保持 |
++| T2b | `move az <az0>` | az 回到基准 | 方位反馈增大；俯仰目标 = 同轮 `reference_el` |
 +| T2c | `move el <el0 + 0.3>` | el 正向 | 俯仰反馈增大；方位目标 = 同轮 `reference_az` |
 +| T2d | `move el <el0>` | el 反向 | 俯仰反馈减小；方位目标 = 同轮 `reference_az` |
 +
@@ -365,7 +424,7 @@ index 0000000..286a938
 +| 项 | 值 |
 +|---|---|
 +| 前置 | **P2 实际默认速度已记录（当前未取得 ⇒ T3 不执行）**；不得用 T2 的 `ARRIVAL_OBSERVED elapsed_ms` 反推速度作为确认 |
-+| 命令 | `move az <az0 + 1.5>`（或反向 `<az0 - 1.5>`，取离限位更远的一侧） |
++| 命令 | `move az <az0 - 1.5>`（本次 `az0=-0.12` ⇒ `-1.62`；负向单侧，见 §2.0） |
 +| 停止方式 | 操作者在本终端紧接着输入 `stop`（走生产停止路径，与 `quit`/`Ctrl-C` 同一程序与通信链） |
 +| 通过判据 | `STOP_REQUEST at_motion=MOVING`；`STOP_RESULT stop_delivered=1`；随后 `STOP_OBSERVED_STATIONARY`；`stop_txn == motion_txn_before` |
 +| 未完成判据 | `stop` 到达时 `at_motion` 已为 `STABLE`，或 `stop_delivered=0` 且 `send_path=no_frame(no_motion_in_flight)` → 记录 **T3 未完成（行程过短）** |
@@ -376,18 +435,19 @@ index 0000000..286a938
 +
 +### T4 重复定位（只统计设备反馈重复性）
 +
-+以 A=`(az0 + 0.5, el0)`、B=`(az0, el0)` 往返，**人工逐条下发**：
++以 A=`(az0 - 0.5, el0)`、B=`(az0, el0)` 往返（负向单侧，见 §2.0），
++**人工逐条下发**：
 +
 +```text
-+move az <az0 + 0.5>   # A，到位后记录
++move az <az0 - 0.5>   # A，到位后记录
 +move az <az0>         # B，到位后记录
-+move az <az0 + 0.5>   # A
++move az <az0 - 0.5>   # A
 +move az <az0>         # B
-+move az <az0 + 0.5>   # A（第 5 条，最后停在 A）
++move az <az0 - 0.5>   # A（第 5 条，最后停在 A）
 +quit
 +```
 +
-+**T4 结束位置是 A=`(az0 + 0.5, el0)`，不是基准点 B。** 不追加回零，
++**T4 结束位置是 A=`(az0 - 0.5, el0)`，不是基准点 B。** 不追加回零，
 +也不把 B 当作结束点。
 +
 +| 记录 | 通过判据 |
@@ -405,15 +465,19 @@ index 0000000..286a938
 +3. 全程 `control_frames` 保持 0；
 +4. 恢复链路，`quit` 正常退出；如故障已锁存，记录 `latched=1`。
 +
-+**T5b 锁存故障下许可不能放行**
++**T5b 锁存故障下许可不能放行（实机不可鉴别，改记离线判据）**
 +
-+1. 新开许可会话（许可 `max_executions=1`，范围仍为 §2），初始化成功；
-+2. 不运动，拔链路 ≥5 s，直到故障锁存；
-+3. 记拔线前最后一个新鲜方位角为 C，输入 `move az <C>`（目标=当前位置，
-+   即使门禁失效也**不产生位移**）；
-+4. 通过判据：`MOVE_NOT_ACCEPTED` 或 `CMD_RESULT outcome=Failed`；
-+   `control_frames` 不增加；`WorkModeTrust` 保持实际值，不因许可改写；
-+5. 恢复链路，`stop`、`quit`。
++实机拔线后，工具的新鲜度预检会在控制器之前拒绝 `move`，因此“零帧”
++**不能归因于锁存门禁**。本项不列为实机通过项：
++
++1. 现场若执行，只记录：拔线 ≥5 s 后 `move` 被 `MOVE_REJECTED
++   reason=no_fresh_reference` 拒绝、零帧；**状态写“未鉴别/未执行”**，
++   不写“锁存门禁已验证”。
++2. 可鉴别的离线路径＝`PelcoDAcceptancePermitTest.
++   PermitDoesNotBypassLatchedFaultWithFreshSample`：用看门狗锁存（2008）
++   制造“已锁存且样本仍 `fresh=1`”，断言 `move` 被拒、零帧、错误码仍为
++   2008 而非 2007“无新鲜样本”。该用例不连接实机。
++3. `WorkModeTrust` 不被许可改写由既有 fake transport 用例覆盖。
 +
 +**T5c 样本过期/无效**：如现场没有不破坏设备的注入手段，
 +记录 **T5c 未执行（无安全注入手段）**；该路径由离线用例
@@ -425,7 +489,7 @@ index 0000000..286a938
 +|---|---|
 +| **上层定位命令总数** | **10 条**：T2 4 条 + T3 1 条 + T4 5 条 |
 +| 与帧数的关系 | **10 条上层命令 ≠ 10 个控制帧**。每条绝对定位命令在实现中按两轴拆分发送；底层发送失败时可能按既有重试策略重传；实际帧数从 `FINAL control_frames` 与逐帧 TX 日志读取并**单独报告**。不得用命令数推算帧数，也不得用帧数反推命令数。T1 的 1 帧也计入 `FINAL control_frames`，报告时单列，不算运动帧 |
-+| 计数不含 | 重做 T3、额外回零、T5b 的“目标=当前位置”命令（若其零帧被拒，不计入 10 条；若发生发送，立即中止并按异常记录） |
++| 计数不含 | 重做 T3、额外回零；T5b 不列为实机通过项，不占 10 条 |
 +| 许可上限 | `max_executions=10`，只统计**被受理的绝对定位命令**；T1 静止停止帧不计数 |
 +| 速度条件 | **实际默认速度：未取得（阻塞 T3）**。`use_speed_control=false` 只表示定位指令不带速度字段；本卡不指定、不改变速度，`fine_speed`/`coarse_speed` 不是受控速度。P2 记录**数值与来源**之前不得执行 T3；T2 的 `ARRIVAL_OBSERVED elapsed_ms` 只作观测值，不能当作速度确认 |
 +| 自动循环/自动重试/自动回零 | **无**；每条命令由操作者单独输入；**不重做 T3、不追加回零** |
@@ -441,7 +505,7 @@ index 0000000..286a938
 +* 三者**共享同一程序与通信链**，不是三套独立保障：
 +  * `stop`：走生产停止屏障，记录 `STOP_REQUEST/RESULT`；
 +  * `quit`：走退出路径，先停止、等待观测窗口，再关闭；
-+  * `Ctrl-C`：工具 `1.0.3-C24` 捕获 SIGINT/SIGTERM 后进入同一停止/退出
++  * `Ctrl-C`：工具 `1.0.4-C24` 捕获 SIGINT/SIGTERM 后进入同一停止/退出
 +    路径（`SIGNAL_INTERRUPT`），不是直接杀进程。
 +* 程序无响应、进程崩溃或通信失效时，上述三条都可能**同时失效**；
 +  此时不得继续等待软件操作。
@@ -494,10 +558,10 @@ index 0000000..286a938
 +本卡参数确认后，才生成许可文件并执行 T1；T0 可先行。
 diff --git a/AircraftPoseSystem/evidence/转台验收工具_C-24/05_T0_实机只读_记录.md b/AircraftPoseSystem/evidence/转台验收工具_C-24/05_T0_实机只读_记录.md
 new file mode 100644
-index 0000000..a8d52b5
+index 0000000..a9c7691
 --- /dev/null
 +++ b/AircraftPoseSystem/evidence/转台验收工具_C-24/05_T0_实机只读_记录.md
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,83 @@
 +# T0 实机只读复测记录（2026-10-22）
 +
 +> **性质：实机只读。** 未安装验收许可，未发送任何运动/停止控制帧。
@@ -517,8 +581,9 @@ index 0000000..a8d52b5
 +| 时间 | 2026-10-22 00:03:21–00:04:21（UTC+8） |
 +
 +> T0 执行时的工具版本是 `1.0.2-C24`（原始日志 `TOOL ... version=1.0.2-C24`）。
-+> 之后的 `1.0.3-C24` 只新增 `stop_at_rest` 与 `allow_stop_at_rest`，不改变
-+> 只读路径与 T0 的结论；T0 原始日志不改写。
++> 之后的 `1.0.3-C24` 新增 `stop_at_rest` 与 `allow_stop_at_rest`，`1.0.4-C24`
++> 补正许可逐帧复查、T1 单次发送与会话级最多一帧、仅停止许可安装；这些
++> 改动都不涉及只读路径，不改变 T0 的结论；T0 原始日志不改写。
 +
 +## 2. 命令
 +
@@ -582,24 +647,27 @@ index 0000000..a8d52b5
 +  不证明运动、停止、定位或精度。
 diff --git a/AircraftPoseSystem/evidence/转台验收工具_C-24/README.md b/AircraftPoseSystem/evidence/转台验收工具_C-24/README.md
 new file mode 100644
-index 0000000..b6028e3
+index 0000000..e92345c
 --- /dev/null
 +++ b/AircraftPoseSystem/evidence/转台验收工具_C-24/README.md
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,86 @@
 +# 转台实机验收入口与验收运动许可（C-24）
 +
 +> **状态：已实施待验证。**
 +> 软件与离线验证完成；**实机 T0 只读复测已于 2026-10-22 执行并通过**
 +> （控制帧 0，独立抓包未执行）；**T1–T5 未执行**。
-+> T1 的“静止时实际发送停止帧”实现与正反测试已完成（工具 1.0.3-C24），
-+> 但**实机 T1 仍未执行**。本目录与其中的执行卡**不构成实机运动授权**。
++> 2026-10-22 独立复核提出的 4 处代码缺口与 3 处执行卡问题已集中补正
++> （工具 1.0.4-C24）：逐定位帧许可复查、T1 单次发送预算、会话级
++> “最多一帧”、仅停止许可可安装；执行卡的前置阻塞、角度口径与 T5b
++> 判别路径同步修正。**实机 T1 仍未执行**。本目录与其中的执行卡
++> **不构成实机运动授权**。
 +
 +## 1. 基线与范围
 +
 +| 项 | 值 |
 +|---|---|
 +| 代码基线 | `develop` `65e4f64` + 本批工作树改动（另含未提交的 V1–V4 UI 批，本批未修改、未复用） |
-+| 工具 | `turntable_acceptance` `1.0.3-C24`（`AircraftPoseSystem/tools/turntable_acceptance.cpp`） |
++| 工具 | `turntable_acceptance` `1.0.4-C24`（`AircraftPoseSystem/tools/turntable_acceptance.cpp`） |
 +| 构建 | CMake 3.31.4 / GCC 12.3.0 / UOS Desktop 25；`build-native-on`、`build-native-off` |
 +| 设备 | Pelco-D/UDP，`pelco_address=1`，端口 6666；**host 在记录中一律脱敏** |
 +| 验收范围 | 停止、单轴/双轴定位、状态反馈、正常退出、故障收口 |
@@ -609,12 +677,12 @@ index 0000000..b6028e3
 +
 +| 文件 | 改动 |
 +|---|---|
-+| `src/data/TurntableAcceptancePermit.h`（新增） | 验收运动许可值类型：设备、允许操作、两轴范围、单次位移、次数、有效期 |
++| `src/data/TurntableAcceptancePermit.h`（新增） | 验收运动许可值类型：设备、两项独立操作授权、两轴范围、单次位移、次数、有效期 |
 +| `src/data/TurntableDiagnostics.h` | 四个许可诊断字段 |
-+| `src/device/turntable/PelcoDSession.{h,cpp}` | 许可安装/核对；发送点复核；只拒新运动，stop/退出不受影响；`sendAcceptanceStopFrameAtRest()`（T1 静止停止帧） |
++| `src/device/turntable/PelcoDSession.{h,cpp}` | 许可安装/核对；**每个定位帧发送前（含重传）复查期限与定位授权**，部分发送后到期进入停止收口，逻辑命令次数只扣一次；`sendAcceptanceStopFrameAtRest()`（T1：单次发送预算、会话级最多一帧、独立于运动事务的 `stopSent_`）；仅停止许可可安装 |
 +| `src/device/turntable/PelcoDTurntableController.{h,cpp}` | `enableAcceptancePermit()`、`lastAcceptedCommandSeq()`、命令槽预检；静止停止帧经 worker 停止屏障、结果按停止序号回传 |
 +| `tools/turntable_acceptance.cpp`（新增） | 独立验收工具：只读默认、许可解析（含 `allow_stop_at_rest`）、`stop_at_rest` 命令、TX/RX 单调时间记录、T0–T5 记录格式；SIGINT/SIGTERM 走停止路径；退出前等待停止观测窗口；`REPEAT` 按目标分组 |
-+| `tests/device/PelcoDAcceptancePermitTest.cpp`（新增） | **22 条**许可门禁/静止停止帧用例 |
++| `tests/device/PelcoDAcceptancePermitTest.cpp`（新增） | **28 条**许可门禁/静止停止帧/复核反例用例（复核后新增 6 条） |
 +
 +冻结文档已配对升版（旧版均已移入同级 `archive/`）：
 +
@@ -625,12 +693,12 @@ index 0000000..b6028e3
 +
 +| 项 | 结果 |
 +|---|---|
-+| `test_pelco_d`（`build-native-on`） | **109/109** 通过 |
-+| `test_pelco_d`（`build-native-off`） | **109/109** 通过 |
-+| `test_system_initializer` | 26/26 通过 |
-+| `test_measurement_flow` | 46/46 通过 |
-+| 定向变异（13 项：原 8 + 静止停止帧 5） | 每项先红后绿，见 `02_变异检查记录.md` |
-+| 离线假设备 A–N（14 组） | 见 `01_离线验证_结果摘录.txt`；J 为普通 `stop` 静止无帧、M 为 `stop_at_rest` 实发 1 帧、N 为未授权零帧；K 为 Ctrl-C 停止路径，L 为 `REPEAT` 分组 |
++| `test_pelco_d`（`build-native-on`） | **115/115** 通过 |
++| `test_pelco_d`（`build-native-off`） | **115/115** 通过 |
++| `test_system_initializer`（两树） | 26/26 通过 |
++| `test_measurement_flow`（两树） | 46/46 通过 |
++| 定向变异（19 项：原 8 + 静止停止帧 5 + 复核补正 6） | 每项先红后绿，见 `02_变异检查记录.md` |
++| 离线假设备 A–O（15 组） | 见 `01_离线验证_结果摘录.txt`；J 为普通 `stop` 静止无帧、M 为 `stop_at_rest` 实发 1 帧、N 为未授权零帧、O 为仅停止许可（T1 1 帧、定位 0 帧）；K 为 Ctrl-C 停止路径，L 为 `REPEAT` 分组 |
 +| 实机 T0 只读（60 s） | 控制帧 0、样本 valid/fresh、正常退出；见 `05_T0_实机只读_记录.md` |
 +
 +**离线验证只证明工具与会话在假设备上的行为，不证明任何实机特性。**
@@ -655,6 +723,20 @@ index 0000000..b6028e3
 +* 许可安装 ≠ `WorkMode` 正常；`WorkModeTrust` 保持实际值。
 +* `move()==true` 只表示**已受理**，不表示交付或到位。
 +* 实机 T0–T5 必须在执行卡参数经用户确认并另行书面授权后进行。
++
++## 6. 2026-10-22 复核补正对照
++
++| 复核问题 | 补正 | 证据 |
++|---|---|---|
++| 许可到期后仍发送后续定位帧（含重传） | `sendAndAwaitEcho()` 每次发送（含重传）前复查期限与 `allowAbsolutePosition`；部分发送后到期进入停止收口；次数仍按逻辑命令扣一次 | 单测 `PermitExpiryBetweenAxesStopsWithoutSecondAxis`、`PermitExpiryDuringEchoWaitDoesNotRetransmit`；M14/M18 |
++| T1 借用生产停止重试 | `performStop()` 增加 `singleAttempt`，T1 首次失败即返回失败、尝试数 1；普通/故障停止语义不变 | 单测 `AtRestStopSingleAttemptNoAutomaticRetry`；M15 |
++| “会话最多一帧”被新运动重置 | 新增独立会话级 `acceptanceStopAtRestDelivered_`，不复用随运动事务清零的 `stopSent_` | 单测 `AtRestStopOnlyOncePerSessionAcrossMotion`；M16 |
++| 仅停止许可无法安装 | 安装时要求两项授权至少一项；定位仍由 `move()` 门禁拒绝 | 单测 `StopOnlyPermitInstallsButNeverAuthorizesMotion`；工具离线 O 组；M17 |
++| T5b 零帧无法归因锁存门禁 | 执行卡将实机 T5b 记为“未鉴别/未执行”；离线改用“固定时钟保持样本新鲜 + 看门狗锁存”的确定性路径，并删除“旧读数作目标也不会位移”的保证 | 单测 `PermitDoesNotBypassLatchedFaultWithFreshSample`；M19；执行卡 §T5b |
++| 角度坐标口径冲突 | 执行卡 §2.0 区分软件有符号角与协议角（mod 360），统一单侧/双侧规则与 §2.1 具体值；不以数值跨度推定设备路径 | 执行卡 §2.0/§2.1 |
++| 前置条件互相矛盾 | 执行卡 §1 改为逐项阻塞矩阵（P2 仅阻塞 T3，P3/P5/P6/P8 阻塞 T1–T5 等），保留未满足状态 | 执行卡 §1 |
++
++T0 原始日志复核计数仍为 **2003 条 TX**（水平查询 1001、垂直查询 1001、工作模式查询 1）；该计数只支持工具日志口径，不替代独立抓包。
 diff --git a/AircraftPoseSystem/src/data/TurntableAcceptancePermit.h b/AircraftPoseSystem/src/data/TurntableAcceptancePermit.h
 new file mode 100644
 index 0000000..d7900a7
@@ -770,10 +852,10 @@ index 5165ca0..4bb8f8d 100644
  
  }  // namespace data
 diff --git a/AircraftPoseSystem/src/device/turntable/PelcoDSession.cpp b/AircraftPoseSystem/src/device/turntable/PelcoDSession.cpp
-index 790945d..eaf30c9 100644
+index 790945d..dc94cdc 100644
 --- a/AircraftPoseSystem/src/device/turntable/PelcoDSession.cpp
 +++ b/AircraftPoseSystem/src/device/turntable/PelcoDSession.cpp
-@@ -106,6 +106,226 @@ void PelcoDSession::setClock(std::function<std::uint64_t()> clock)
+@@ -106,6 +106,228 @@ void PelcoDSession::setClock(std::function<std::uint64_t()> clock)
      clock_ = std::move(clock);
  }
  
@@ -814,9 +896,11 @@ index 790945d..eaf30c9 100644
 +        error = "许可缺少验收范围编号（scope_id）";
 +        return false;
 +    }
-+    if (!permit.allowAbsolutePosition)
++    // 两个操作授权互相独立：只授权静止停止帧的许可合法（用于 T1），
++    // 但它不构成任何运动授权 —— move() 的许可门禁仍会拒绝。
++    if (!permit.allowAbsolutePosition && !permit.allowStopFrameAtRest)
 +    {
-+        error = "许可没有允许任何操作（绝对定位未授权）";
++        error = "许可没有允许任何操作（绝对定位与静止停止帧均未授权）";
 +        return false;
 +    }
 +    if (permit.deviceHost != config_.host ||
@@ -1000,7 +1084,47 @@ index 790945d..eaf30c9 100644
  std::uint64_t PelcoDSession::nowNs() const
  {
      return clock_ ? clock_() : data::monotonicNowNs();
-@@ -662,18 +882,6 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
+@@ -193,10 +415,12 @@ bool PelcoDSession::waitForEcho(const PelcoDFrame& sent, std::string& error,
+ 
+ bool PelcoDSession::sendAndAwaitEcho(
+     const PelcoDFrame& frame, std::string& error, bool& rejected,
+-    const std::function<bool()>& shouldAbort, bool& frameSent)
++    const std::function<bool()>& shouldAbort, bool& frameSent,
++    bool& permitExpired)
+ {
+-    rejected  = false;
+-    frameSent = false;
++    rejected      = false;
++    frameSent     = false;
++    permitExpired = false;
+     for (int attempt = 0; attempt <= kCommandRetries; ++attempt)
+     {
+         if (shouldAbort && shouldAbort())
+@@ -204,6 +428,23 @@ bool PelcoDSession::sendAndAwaitEcho(
+             error = "指令被停止屏障取消";
+             return false;
+         }
++        // 许可有效期必须在**每一个定位帧**发送前复核，重传也一样。
++        // 只在 move() 入口核对一次会留下“第一轴发出后到期、第二轴或
++        // 重传仍继续发”的缺口。次数已在命令入口按逻辑命令扣减一次，
++        // 这里只核对期限与操作授权，不重复扣减。
++        if (acceptancePermitInstalled_)
++        {
++            const std::int64_t nowWall = wallNowMs();
++            if (!acceptancePermit_.allowAbsolutePosition ||
++                nowWall < acceptancePermit_.validFromEpochMs ||
++                nowWall >= acceptancePermit_.validUntilEpochMs)
++            {
++                error = "验收许可在发送过程中失效（过期或未授权定位）："
++                        "定位帧未发送";
++                permitExpired = true;
++                return false;
++            }
++        }
+         if (!sendFrame(frame, error))
+         {
+             return false;
+@@ -662,18 +903,6 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
          error = lastErrorText();
          return false;
      }
@@ -1019,7 +1143,7 @@ index 790945d..eaf30c9 100644
      // ---- 本地输入边界（C1/NaN）：非法命令一个字节都不发 ----
      if (!std::isfinite(command.azimuthCommand) ||
          !std::isfinite(command.elevationCommand))
-@@ -706,6 +914,36 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
+@@ -706,6 +935,36 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
          return false;
      }
  
@@ -1056,7 +1180,7 @@ index 790945d..eaf30c9 100644
      const data::TurntableState current = snapshot();
      const double azDelta = circularDeltaDeg(azimuthTarget, current.azimuth);
      const double elDelta = std::fabs(elevationTarget - current.elevation);
-@@ -754,6 +992,14 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
+@@ -754,14 +1013,38 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
      // stopFactsTransactionId_ 中，读端可据此识别“事实属于旧事务”。
      motionTransactionId_.fetch_add(1);
  
@@ -1071,7 +1195,103 @@ index 790945d..eaf30c9 100644
      bool rejected         = false;
      bool horizontalSent   = false;
      bool verticalSent     = false;
-@@ -1068,6 +1314,72 @@ void PelcoDSession::stopForFault(int faultCode, const std::string& message,
++    bool permitExpired    = false;
+     std::string failure;
+ 
+     if (!sendAndAwaitEcho(horizontalFrame, failure, rejected, shouldAbort,
+-                          horizontalSent))
++                          horizontalSent, permitExpired))
+     {
++        if (permitExpired)
++        {
++            // 许可在发送阶段失效。若第一轴已经发出，设备**可能**已经
++            // 开始运动：必须进入停止收口，不能按“未受理”静默返回。
++            // 停止本身不受许可期限限制。
++            setError(data::kErrTurntableMotionInhibited, failure, false,
++                     "move/permit_expired");
++            if (horizontalSent)
++            {
++                performStop(0, "许可到期后补发停止",
++                            "move/permit_expired", false);
++            }
++            error = failure;
++            return false;
++        }
+         if (shouldAbort && shouldAbort())
+         {
+             // 停止屏障已取消本次命令。⚠ 若第一轴已经发出，设备**可能
+@@ -785,8 +1068,18 @@ bool PelcoDSession::move(const data::TurntableCommand& command,
+     }
+ 
+     if (!sendAndAwaitEcho(verticalFrame, failure, rejected, shouldAbort,
+-                          verticalSent))
++                          verticalSent, permitExpired))
+     {
++        if (permitExpired)
++        {
++            // 水平轴已经交付：部分发送后许可失效，必须补发停止帧。
++            setError(data::kErrTurntableMotionInhibited, failure, false,
++                     "move/permit_expired");
++            performStop(0, "许可到期后补发停止", "move/permit_expired",
++                        false);
++            error = failure;
++            return false;
++        }
+         if (shouldAbort && shouldAbort())
+         {
+             // 水平轴已交付（或至少已发出）：必须请求停止，不能留下
+@@ -940,7 +1233,7 @@ void PelcoDSession::pollOnce(const std::function<bool()>& shouldAbort)
+ 
+ bool PelcoDSession::performStop(int faultCode, const std::string& faultMessage,
+                                 const std::string& context,
+-                                bool recordFirstFault)
++                                bool recordFirstFault, bool singleAttempt)
+ {
+     // 只读模式：所有路径均不得产生控制帧（C1）。
+     if (config_.sendPolicy == data::TurntableSendPolicy::ReadOnly)
+@@ -977,14 +1270,18 @@ bool PelcoDSession::performStop(int faultCode, const std::string& faultMessage,
+     bool delivered = false;
+     std::string lastFailure;
+ 
+-    for (int attempt = 0; attempt <= config_.stopRetryCount; ++attempt)
++    // 验收静止停止是“证明线上能发出这一帧”的验收操作，不是故障停止：
++    // 只尝试一次，首次失败即返回；不得借用普通停止的重试预算。
++    const int maxAttempts =
++        singleAttempt ? 1 : (config_.stopRetryCount + 1);
++    for (int attempt = 0; attempt < maxAttempts; ++attempt)
+     {
+         if (sendFrame(stopFrame, lastFailure))
+         {
+             delivered = true;
+             break;
+         }
+-        if (attempt >= config_.stopRetryCount)
++        if (attempt + 1 >= maxAttempts)
+         {
+             break;
+         }
+@@ -1021,6 +1318,20 @@ bool PelcoDSession::performStop(int faultCode, const std::string& faultMessage,
+         return true;
+     }
+ 
++    if (singleAttempt)
++    {
++        // 单次发送失败：不重发、不把已在静止的会话置为 motionUncertain，
++        // 也不占用普通停止的预算；只如实记录本次未交付。
++        stopSent_               = false;
++        stopFrameDelivered_     = false;
++        stopObservedStationary_ = false;
++        stopPending_            = false;
++        setError(data::kErrTurntableStopNotDelivered,
++                 "验收静止停止帧未交付（单次发送失败）：" + lastFailure,
++                 false, context);
++        return false;
++    }
++
+     // 窗口耗尽仍无法交付：2005 + motionUncertain，停止自动重试。
+     stopBudgetSpent_      = true;
+     motionUncertain_      = true;
+@@ -1068,6 +1379,76 @@ void PelcoDSession::stopForFault(int faultCode, const std::string& message,
      }
  }
  
@@ -1123,13 +1343,14 @@ index 790945d..eaf30c9 100644
 +        return false;
 +    }
 +
-+    if (stopSent_)
++    if (stopSent_ || acceptanceStopAtRestDelivered_)
 +    {
-+        error = "本次会话已交付过停止帧，不重复补帧";
++        error = "本次会话已交付过静止停止帧，不重复补帧";
 +        return false;
 +    }
 +
-+    if (!performStop(0, "验收静止停止", "stop/acceptance_at_rest", false))
++    if (!performStop(0, "验收静止停止", "stop/acceptance_at_rest", false,
++                     /*singleAttempt=*/true))
 +    {
 +        error = lastErrorText();
 +        if (error.empty())
@@ -1138,13 +1359,16 @@ index 790945d..eaf30c9 100644
 +        }
 +        return false;
 +    }
++    // 独立于 stopSent_ 保留：中间发生过运动并清零 stopSent_ 后，
++    // 本会话仍然不得再发第二帧 T1 停止帧。
++    acceptanceStopAtRestDelivered_ = true;
 +    return true;
 +}
 +
  void PelcoDSession::stop(bool allowRearm)
  {
      if (!initialized_.load())
-@@ -1318,6 +1630,7 @@ data::TurntableDiagnostics PelcoDSession::diagnostics() const
+@@ -1318,6 +1699,7 @@ data::TurntableDiagnostics PelcoDSession::diagnostics() const
                                       : data::TurntableSampleSource::None;
  
      const std::uint64_t now = nowNs();
@@ -1152,7 +1376,7 @@ index 790945d..eaf30c9 100644
      const std::uint64_t ts  = d.sample.sampleTimestampNs;
      d.sampleFresh = initialized_.load() && d.sample.valid && ts != 0 &&
                      now >= ts &&
-@@ -1332,6 +1645,16 @@ data::TurntableDiagnostics PelcoDSession::diagnostics() const
+@@ -1332,6 +1714,16 @@ data::TurntableDiagnostics PelcoDSession::diagnostics() const
      d.workModeTrust          = workModeTrust_.load();
      d.motionInhibited        = motionInhibited();
  
@@ -1169,7 +1393,7 @@ index 790945d..eaf30c9 100644
      {
          std::lock_guard<std::mutex> lock(faultMutex_);
          d.firstFault = firstFault_;
-@@ -1353,12 +1676,8 @@ std::string PelcoDSession::lastErrorText() const
+@@ -1353,12 +1745,8 @@ std::string PelcoDSession::lastErrorText() const
  
  bool PelcoDSession::motionInhibited() const
  {
@@ -1185,7 +1409,7 @@ index 790945d..eaf30c9 100644
  
  void PelcoDSession::setError(int code, const std::string& text, bool latch,
 diff --git a/AircraftPoseSystem/src/device/turntable/PelcoDSession.h b/AircraftPoseSystem/src/device/turntable/PelcoDSession.h
-index 4ed3c07..a58fc9c 100644
+index 4ed3c07..6e96e90 100644
 --- a/AircraftPoseSystem/src/device/turntable/PelcoDSession.h
 +++ b/AircraftPoseSystem/src/device/turntable/PelcoDSession.h
 @@ -23,7 +23,17 @@
@@ -1261,7 +1485,34 @@ index 4ed3c07..a58fc9c 100644
      /// 故障收口使用的停止：保留原始首因，记录停止结果；停止未交付/
      /// 未观测到静止时升级为 2005/2006 并锁存 motionUncertain。
      void stopForFault(int faultCode, const std::string& message,
-@@ -192,11 +235,33 @@ private:
+@@ -149,10 +192,12 @@ private:
+                      const std::function<bool()>& shouldAbort);
+     /// @param frameSent 至少成功发出一帧时为 true（用于“部分发送后取消
+     ///        仍必须补发停止帧”的判定）。
++    /// @param permitExpired 发送前复核许可有效期时发现已过期。包括重传：
++    ///        每次调用 `sendFrame` 之前都复核；调用方据此进入停止收口。
+     bool sendAndAwaitEcho(const PelcoDFrame& frame, std::string& error,
+                           bool& rejected,
+                           const std::function<bool()>& shouldAbort,
+-                          bool& frameSent);
++                          bool& frameSent, bool& permitExpired);
+     /// 地址错误的回复按“没有有效回复”处理（C3）。
+     /// @param aborted 因停止屏障放弃（不是通信失败，不参与失败计数）。
+     bool queryAngle(bool horizontal, double& out, std::string& error,
+@@ -184,19 +229,45 @@ private:
+     data::TurntableMotionState updateMotion(double az, double el);
+     data::TurntableMotionState handleStopObservation(double az, double el,
+                                                      std::uint64_t now);
++    /// @param singleAttempt 验收静止停止专用：只尝试一次，不重发；失败
++    ///        时不置 `motionUncertain`（发送时设备已静止，没有在途运动），
++    ///        也不消耗普通停止的重试预算。普通/故障停止保持默认值 false。
+     bool performStop(int faultCode, const std::string& faultMessage,
+-                     const std::string& context, bool recordFirstFault);
++                     const std::string& context, bool recordFirstFault,
++                     bool singleAttempt = false);
+     bool resolveAzimuth(double command, double& resolved) const;
+     bool resolveElevation(double command, double& resolved) const;
+     double selectedSpeedDegPerSec(double maxDeltaDeg) const;
      void armWatchdog(double targetAz, double targetEl);
      bool finiteConfig(std::string& error) const;
  
@@ -1295,6 +1546,17 @@ index 4ed3c07..a58fc9c 100644
      // ---- I/O 所有者线程独占的状态 ----
      bool     moving_              = false;
      bool     hasLastRead_         = false;
+@@ -211,6 +282,10 @@ private:
+     // 停止状态机（I/O 所有者线程独占）
+     bool     stopPending_              = false;
+     bool     stopSent_                 = false;
++    // T1 静止停止帧的**会话级**使用记录。不能复用 stopSent_：后者是
++    // “当前运动事务”的停止事实，新运动开始时会清零，会让第二次 T1
++    // 重新获得发帧资格。
++    bool     acceptanceStopAtRestDelivered_ = false;
+     bool     stopRetryArmed_           = false;
+     // 本次停止请求的重试预算是否已耗尽。预算按“停止请求”而不是按
+     // “performStop 调用”计算：取消补帧与停止屏障共享同一份预算，
 diff --git a/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp b/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp
 index 0fa605e..2dc671a 100644
 --- a/AircraftPoseSystem/src/device/turntable/PelcoDTurntableController.cpp
@@ -1503,10 +1765,10 @@ index ad90387..25f8bbd 100644
          device
 diff --git a/AircraftPoseSystem/tests/device/PelcoDAcceptancePermitTest.cpp b/AircraftPoseSystem/tests/device/PelcoDAcceptancePermitTest.cpp
 new file mode 100644
-index 0000000..71acb10
+index 0000000..12fe46f
 --- /dev/null
 +++ b/AircraftPoseSystem/tests/device/PelcoDAcceptancePermitTest.cpp
-@@ -0,0 +1,654 @@
+@@ -0,0 +1,841 @@
 +// ============================================================================
 +//  tests/device/PelcoDAcceptancePermitTest.cpp
 +//
@@ -1615,6 +1877,16 @@ index 0000000..71acb10
 +    return fake.countSent([](const PelcoDFrame& frame) {
 +        return frame.data1 == 0x00 && frame.data2 == 0x00 &&
 +               frame.data3 == 0x00 && frame.data4 == 0x00;
++    });
++}
++
++int positioningFrames(const FakePelcoTransport& fake)
++{
++    return fake.countSent([](const PelcoDFrame& frame) {
++        return (frame.data1 == 0x00 &&
++                (frame.data2 == 0x4B || frame.data2 == 0x4D)) ||
++               ((frame.data1 == 0x4B || frame.data1 == 0x4D) &&
++                frame.data2 != 0x00);
 +    });
 +}
 +
@@ -1858,6 +2130,63 @@ index 0000000..71acb10
 +    EXPECT_TRUE(f.session->diagnostics().stopFrameDelivered);
 +}
 +
++TEST(PelcoDAcceptancePermitTest, PermitExpiryBetweenAxesStopsWithoutSecondAxis)
++{
++    // 反例：许可在第一轴发出后到期。第二轴不得再发，且已发出的
++    // 第一轴必须进入停止收口。
++    const data::TurntableConfig cfg = makeConfig();
++    SessionFixture f(cfg);
++    ASSERT_TRUE(f.install(makePermit(cfg)));
++    ASSERT_TRUE(f.init());
++    f.fake->sent.clear();
++
++    const auto previous = f.fake->onSend;
++    f.fake->onSend = [&](const std::vector<std::uint8_t>& bytes) {
++        const PelcoDFrame frame = FakePelcoTransport::decode(bytes);
++        if (frame.data1 == 0x00 && frame.data2 == 0x4B)
++        {
++            f.wallMs = 2000001;  // 水平定位帧已发出 ⇒ 许可随即到期
++        }
++        previous(bytes);
++    };
++
++    std::string error;
++    EXPECT_FALSE(f.moveTo(1.0, 1.0, error));
++    EXPECT_NE(error.find("失效"), std::string::npos);
++    EXPECT_EQ(positioningFrames(*f.fake), 1);   // 只有水平帧
++    EXPECT_EQ(stopFrames(*f.fake), 1);          // 部分发送 ⇒ 停止收口
++    EXPECT_TRUE(f.session->diagnostics().stopFrameDelivered);
++    EXPECT_EQ(f.session->lastError().code,
++              data::kErrTurntableMotionInhibited);
++}
++
++TEST(PelcoDAcceptancePermitTest, PermitExpiryDuringEchoWaitDoesNotRetransmit)
++{
++    // 反例：第一轴等待回显期间到期，旧实现会在随后的重传里继续发帧。
++    // 每个定位帧发送前复核后，只允许已发出的那 1 帧，然后停止收口。
++    const data::TurntableConfig cfg = makeConfig();
++    SessionFixture f(cfg);
++    ASSERT_TRUE(f.install(makePermit(cfg)));
++    ASSERT_TRUE(f.init());
++    f.fake->sent.clear();
++    f.fake->dropMoveEchoAxis = 1;  // 水平轴不回显，迫使进入重传分支
++
++    const auto previous = f.fake->onSend;
++    f.fake->onSend = [&](const std::vector<std::uint8_t>& bytes) {
++        const PelcoDFrame frame = FakePelcoTransport::decode(bytes);
++        if (frame.data1 == 0x00 && frame.data2 == 0x4B)
++        {
++            f.wallMs = 2000001;
++        }
++        previous(bytes);
++    };
++
++    std::string error;
++    EXPECT_FALSE(f.moveTo(1.0, 1.0, error));
++    EXPECT_EQ(positioningFrames(*f.fake), 1);  // 没有重传帧
++    EXPECT_EQ(stopFrames(*f.fake), 1);
++}
++
 +// ---------------------------------------------------------------------------
 +// 3. 只读、WorkMode、锁存、样本新鲜度
 +// ---------------------------------------------------------------------------
@@ -1907,11 +2236,46 @@ index 0000000..71acb10
 +        f.session->pollOnce();
 +    }
 +    ASSERT_TRUE(f.session->errorLatched());
++    // ⚠ 失联锁存会同时把样本置为无效，因此本用例**不能**区分
++    // “锁存门禁拒绝”与“无新鲜样本拒绝”。可鉴别路径见下一个用例。
++    EXPECT_FALSE(f.session->diagnostics().sampleFresh);
 +
 +    f.fake->sent.clear();
 +    std::string error;
 +    EXPECT_FALSE(f.moveTo(1.0, 1.0, error));
 +    EXPECT_EQ(controlFrames(*f.fake), 0);
++}
++
++TEST(PelcoDAcceptancePermitTest,
++     PermitDoesNotBypassLatchedFaultWithFreshSample)
++{
++    // T5b 的离线**可鉴别**路径：看门狗锁存（2008）发生在样本仍 fresh
++    // 时，拒绝只能来自锁存门禁，而不是样本过期。实机 T5b（拔线）无法
++    // 提供这一区分：拔线后工具的新鲜度预检会先拒绝。
++    data::TurntableConfig cfg = makeConfig();
++    cfg.sampleStaleMs = 10000;  // 让 6 s 后的旧样本仍算 fresh
++    SessionFixture f(cfg, /*injectMono=*/true);
++    ASSERT_TRUE(f.install(makePermit(cfg)));
++    ASSERT_TRUE(f.init());
++    f.dev.snapToTarget = false;  // 设备不动 ⇒ 看门狗到期
++    f.fake->sent.clear();
++
++    std::string error;
++    ASSERT_TRUE(f.moveTo(1.0, 1.0, error));  // travel=1° ⇒ 截止约 5.1 s
++    f.monoNs += 6ULL * 1000ULL * 1000ULL * 1000ULL;
++    f.session->pollOnce();
++
++    ASSERT_TRUE(f.session->errorLatched());
++    ASSERT_TRUE(f.session->diagnostics().sampleFresh);  // 关键鉴别条件
++    ASSERT_EQ(f.session->lastError().code,
++              data::kErrTurntableMotionWatchdog);
++    EXPECT_EQ(stopFrames(*f.fake), 1);  // 故障收口的停止帧已交付
++
++    f.fake->sent.clear();
++    EXPECT_FALSE(f.moveTo(1.0, 1.0, error));
++    EXPECT_EQ(controlFrames(*f.fake), 0);
++    EXPECT_EQ(f.session->lastError().code,
++              data::kErrTurntableMotionWatchdog);
 +}
 +
 +TEST(PelcoDAcceptancePermitTest, StaleSampleBlocksPermitMotion)
@@ -2095,6 +2459,91 @@ index 0000000..71acb10
 +    EXPECT_TRUE(f.session->diagnostics().acceptancePermitExpired);
 +}
 +
++TEST(PelcoDAcceptancePermitTest, AtRestStopSingleAttemptNoAutomaticRetry)
++{
++    // 反例：首次发送失败时旧实现沿用 stop_retry_count 自动重发。
++    // T1 必须只有一次发送；失败返回 false，不置 motionUncertain。
++    const data::TurntableConfig cfg = makeConfig();
++    SessionFixture f(cfg);
++    auto permit = makePermit(cfg);
++    permit.allowStopFrameAtRest = true;
++    ASSERT_TRUE(f.install(permit));
++    ASSERT_TRUE(f.init());
++    f.fake->sent.clear();
++    f.fake->failStopSends = 1;
++
++    std::string error;
++    EXPECT_FALSE(f.session->sendAcceptanceStopFrameAtRest(error));
++    EXPECT_EQ(f.fake->stopSendAttempts.load(), 1);  // 不是 3
++    EXPECT_EQ(stopFrames(*f.fake), 0);
++    EXPECT_FALSE(f.session->diagnostics().stopFrameDelivered);
++    EXPECT_FALSE(f.session->diagnostics().motionUncertain);
++    EXPECT_FALSE(error.empty());
++
++    // 显式再调用一次（不是自动重试）：本次发送成功，恰好 1 帧。
++    EXPECT_TRUE(f.session->sendAcceptanceStopFrameAtRest(error));
++    EXPECT_EQ(f.fake->stopSendAttempts.load(), 2);
++    EXPECT_EQ(stopFrames(*f.fake), 1);
++    EXPECT_TRUE(f.session->diagnostics().stopFrameDelivered);
++}
++
++TEST(PelcoDAcceptancePermitTest, AtRestStopOnlyOncePerSessionAcrossMotion)
++{
++    // 反例：T1 → 观测静止 → 正常运动 → 再次 T1。旧实现复用会被新运动
++    // 清零的 stopSent_，第二次仍发帧。会话级记录必须独立保留。
++    const data::TurntableConfig cfg = makeConfig();
++    SessionFixture f(cfg);
++    auto permit = makePermit(cfg);
++    permit.allowStopFrameAtRest = true;
++    ASSERT_TRUE(f.install(permit));
++    ASSERT_TRUE(f.init());
++    f.fake->sent.clear();
++
++    std::string error;
++    ASSERT_TRUE(f.session->sendAcceptanceStopFrameAtRest(error));
++    ASSERT_EQ(stopFrames(*f.fake), 1);
++    for (int i = 0; i < cfg.stableReadCount + 2; ++i)
++    {
++        f.session->pollOnce();
++    }
++    ASSERT_TRUE(f.session->diagnostics().stopObservedStationary);
++
++    ASSERT_TRUE(f.moveTo(1.0, 1.0, error));  // 新运动清零 stopSent_
++    for (int i = 0; i < cfg.stableReadCount + 2; ++i)
++    {
++        f.session->pollOnce();
++    }
++    ASSERT_EQ(f.session->snapshot().motion,
++              data::TurntableMotionState::STABLE);
++
++    EXPECT_FALSE(f.session->sendAcceptanceStopFrameAtRest(error));
++    EXPECT_EQ(stopFrames(*f.fake), 1);  // 仍只有第一次的 1 帧
++    EXPECT_FALSE(f.session->diagnostics().motionUncertain);
++}
++
++TEST(PelcoDAcceptancePermitTest, StopOnlyPermitInstallsButNeverAuthorizesMotion)
++{
++    // 两个授权必须真正独立：只授权静止停止帧的许可可以安装并执行 T1，
++    // 但绝对定位始终被拒且零定位帧。
++    const data::TurntableConfig cfg = makeConfig();
++    SessionFixture f(cfg);
++    auto permit = makePermit(cfg);
++    permit.allowAbsolutePosition = false;
++    permit.allowStopFrameAtRest  = true;
++    ASSERT_TRUE(f.install(permit));
++    ASSERT_TRUE(f.init());
++    f.fake->sent.clear();
++
++    std::string error;
++    EXPECT_TRUE(f.session->sendAcceptanceStopFrameAtRest(error));
++    EXPECT_EQ(stopFrames(*f.fake), 1);
++
++    EXPECT_FALSE(f.moveTo(1.0, 1.0, error));
++    EXPECT_EQ(positioningFrames(*f.fake), 0);
++    EXPECT_NE(error.find("绝对定位"), std::string::npos);
++    EXPECT_TRUE(f.session->diagnostics().motionInhibited);
++}
++
 +// ---------------------------------------------------------------------------
 +// 5. 控制器层：无许可时连命令槽都不写；静止停止帧经过 worker 只发一帧
 +// ---------------------------------------------------------------------------
@@ -2210,7 +2659,7 @@ index d0df70b..6ec7fe4 100644
  
 diff --git a/AircraftPoseSystem/tools/turntable_acceptance.cpp b/AircraftPoseSystem/tools/turntable_acceptance.cpp
 new file mode 100644
-index 0000000..613dda8
+index 0000000..ea29676
 --- /dev/null
 +++ b/AircraftPoseSystem/tools/turntable_acceptance.cpp
 @@ -0,0 +1,1398 @@
@@ -2296,7 +2745,7 @@ index 0000000..613dda8
 +using aircraft::device::TransportStatus;
 +using aircraft::infrastructure::ConfigManager;
 +
-+constexpr const char* kToolVersion = "1.0.3-C24";
++constexpr const char* kToolVersion = "1.0.4-C24";
 +
 +using Clock = std::chrono::steady_clock;
 +
@@ -6377,10 +6826,10 @@ index 3c4a074..0000000
 -在两边**逐条对应**；只引用一边会得到自相矛盾的两份契约（ENG-09 V2.6 §12.2 同有此警告）。
 diff --git a/项目文档/系统设计/SYS-04_接口控制文件ICD_V2.9_验收运动许可与诊断字段版.md b/项目文档/系统设计/SYS-04_接口控制文件ICD_V2.9_验收运动许可与诊断字段版.md
 new file mode 100644
-index 0000000..5af2628
+index 0000000..a20a555
 --- /dev/null
 +++ b/项目文档/系统设计/SYS-04_接口控制文件ICD_V2.9_验收运动许可与诊断字段版.md
-@@ -0,0 +1,2757 @@
+@@ -0,0 +1,2763 @@
 +# SYS-04_ICD接口控制文件_V2.9（验收运动许可与诊断字段版）
 +
 +> **V2.9 相比 V2.8 的变更（2026-10-21，2026-10-22 补正，转台实机验收入口与控制验证批，裁决 C-24）**
@@ -7687,14 +8136,20 @@ index 0000000..5af2628
 +// 验收 T1 专用：静止时**实际发送一帧停止指令**并等待交付结果。
 +// 需已安装许可且 allowStopFrameAtRest=true；不消耗运动次数、不读有效期。
 +// 只读会话、非静止、故障锁存/不确定、已交付过停止帧 ⇒ false 且零帧。
++// 发送预算只有一次：首次发送失败即返回 false，不自动重发；成功帧每会话
++// 最多一帧，使用记录独立于随新运动事务清零的停止状态。
 +```
 +
 +* 这三个方法只存在于 `PelcoDTurntableController`（真实后端），**不在**
 +  `ITurntableController` 冻结接口中；生产装配不调用 `enableAcceptancePermit`。
 +* `stop()` 在静止时仍是**无帧 no-op**（C1）；T1 的“静止时确实发出停止帧”
 +  必须经 `sendAcceptanceStopFrameAtRest()`，不能用先运动再 `stop()` 冒充。
-+* 许可在**发送点**再次核对（目标范围、相对新鲜样本的位移、次数、有效期），
-+  因此 `sendPolicy=MotionEnabled` 本身不是运动授权。
++* 许可在 `move()` 入口核对目标范围、相对新鲜样本的位移与次数，并在
++  **每一个定位帧发送前**（含底层重传）复核有效期与绝对定位授权；部分
++  发送后到期 ⇒ 不再发后续帧并执行停止收口。因此 `sendPolicy=MotionEnabled`
++  本身不是运动授权。
++* 两个操作标志互相独立：只授权 `allowStopFrameAtRest` 的许可可以安装并
++  执行 T1，但 `move()` 始终拒绝（2007、零定位帧）。
 +* `move()==true` 仍仅表示**已受理**；`lastAcceptedCommandSeq()` 不表示交付或到位。
 +
 +---
@@ -10264,10 +10719,10 @@ index 7282aa0..0000000
 -V2.7 行中“§13 未动”的描述作为**当时的事实保留**。
 diff --git a/项目文档/系统设计/SYS-06_Device设备抽象层设计_V2.9_验收运动许可版.md b/项目文档/系统设计/SYS-06_Device设备抽象层设计_V2.9_验收运动许可版.md
 new file mode 100644
-index 0000000..4749160
+index 0000000..fb31eca
 --- /dev/null
 +++ b/项目文档/系统设计/SYS-06_Device设备抽象层设计_V2.9_验收运动许可版.md
-@@ -0,0 +1,1152 @@
+@@ -0,0 +1,1154 @@
 +# SYS-06_Device设备抽象层设计_V2.9（验收运动许可版）
 +
 +---
@@ -11051,7 +11506,9 @@ index 0000000..4749160
 +  在**静止**且许可 `allowStopFrameAtRest=1` 时实际发送一帧 `0x00`。它
 +  不是 `stop()`（后者静止时无帧 no-op），必须单独授权；不消耗运动次数、
 +  不读有效期，只拒新运动。只读、运动中、故障锁存、样本过期或本会话已
-+  交付过停止帧 ⇒ 拒绝且零帧；每次会话最多成功一次，不自动补帧。
++  交付过停止帧 ⇒ 拒绝且零帧；每次会话最多成功一次，不自动补帧。发送
++  预算只有一次（首次失败即返回，不自动重发）；会话级使用记录独立于随
++  新运动事务清零的停止状态。只授权静止停止帧的许可合法，但不放行运动。
 +
 +⚠ 本类实现 Device 层的 `ITurntableController`，但**不是** ENG-09 §4.3
 +类清单之外的新抽象；`PelcoDFrame` / `IPelcoTransport` / `UdpPelcoTransport` /
@@ -12372,10 +12829,10 @@ index 877b006..0000000
 -本文档作为 AircraftPoseSystem V2.1 视觉闭环转台控制设计基线。
 diff --git a/项目文档/系统设计/SYS-10_转台控制与目标对准设计_V1.3_验收运动许可版.md b/项目文档/系统设计/SYS-10_转台控制与目标对准设计_V1.3_验收运动许可版.md
 new file mode 100644
-index 0000000..692afd7
+index 0000000..e47684f
 --- /dev/null
 +++ b/项目文档/系统设计/SYS-10_转台控制与目标对准设计_V1.3_验收运动许可版.md
-@@ -0,0 +1,1023 @@
+@@ -0,0 +1,1039 @@
 +# SYS-10_转台控制与目标对准设计_V1.3（验收运动许可版）
 +
 +> **V1.3 相比 V1.2 的变更（2026-10-21，2026-10-22 补正，转台实机验收入口与控制验证批，裁决 C-24）**
@@ -12383,12 +12840,15 @@ index 0000000..692afd7
 +> 1. **§6.5**：新增**验收运动许可**（`TurntableAcceptancePermit`）门禁。许可
 +>    只在**独立验收工具**中、于 `initialize()` 之前由代码安装；它不是配置键，
 +>    生产装配没有调用路径。许可限定设备（host/port/pelco_address）、允许的
-+>    操作（本版仅绝对定位）、两轴角度范围、单次位移上限、执行次数与有效期。
-+>    未安装、未生效、过期、次数用尽、目标越界或位移超限 ⇒ **2007，不发运动帧**。
++>    操作（绝对定位与静止停止帧两个独立标志）、两轴角度范围、单次位移上限、
++>    执行次数与有效期。未安装、未生效、过期、次数用尽、目标越界或位移超限
++>    ⇒ **2007，不发运动帧**。有效期在**每个定位帧发送前**（含重传）复核；
++>    部分发送后到期 ⇒ 不再发后续帧并进入停止收口。
 +> 2. **§6.5**：许可**只管新的运动**。`stop()`、退出清理与故障收口**不受**
 +>    许可状态或有效期影响，仍遵守 C-23 的停止预算与三事实区分。例外是验收
 +>    T1 的**静止停止帧**：它是主动改变线上流量的操作，须许可显式授权
-+>    （`allowStopFrameAtRest`），但不消耗运动次数、不读有效期。
++>    （`allowStopFrameAtRest`），但不消耗运动次数、不读有效期；发送预算
++>    只有一次，每会话最多一帧，使用记录独立于运动事务的停止状态。
 +> 3. **§6.5 / §13**：安装许可**不改变** `WorkModeTrust`，也不把 `EchoOnly`/
 +>    `Unknown` 改写成“协议已确认为正常”；`ReplyNonZero`/`NoReply` 在
 +>    `initialize()` 仍失败，许可不能绕过。许可同样**不绕过**已锁存错误、
@@ -12786,10 +13246,15 @@ index 0000000..692afd7
 +  在 `initialize()` **之前**通过 `enableAcceptancePermit()` 安装；每个会话
 +  最多安装一次，不可替换。
 +* 许可至少限定：设备 `host`/`port`/`pelco_address`（必须与配置逐项一致）、
-+  允许的操作（本版仅绝对定位）、方位/俯仰目标范围、相对**当前新鲜样本**的
-+  单次位移上限、最大执行次数、有效期 `[valid_from, valid_until)`（墙钟）。
-+* 执行次数在**进入发送阶段**时扣减；被拒绝的命令不扣减。次数用尽只拒绝
-+  **新运动**，不锁死会话，也不影响停止与退出。
++  允许的操作（绝对定位与静止停止帧两个**互相独立**的标志，安装时至少
++  一个为 1）、方位/俯仰目标范围、相对**当前新鲜样本**的单次位移上限、
++  最大执行次数、有效期 `[valid_from, valid_until)`（墙钟）。只授权静止
++  停止帧的许可合法，但不构成任何运动授权。
++* 执行次数在**进入发送阶段**时扣减**一次**（按逻辑命令，不按帧）；被拒绝的
++  命令不扣减。次数用尽只拒绝**新运动**，不锁死会话，也不影响停止与退出。
++* 有效期在 `move()` 入口核对后，还必须在**每一个定位帧发送前**（含底层
++  重传）复核。部分发送后到期 ⇒ 不再发送后续定位帧，对已发出的帧执行
++  停止收口（停止不受许可限制）；不得按“未受理”静默返回。
 +* `move()==true` 仍只表示**已受理**；许可通过不等于交付、到位或精度达标。
 +* 许可不是 `sendPolicy`、不是 YAML 键、不是 `WorkMode` 证据，也不得调用
 +  `setTestMotionGate(true)` 代替。生产装配与 `config/` 没有任何安装路径。
@@ -12802,8 +13267,10 @@ index 0000000..692afd7
 +  标志为 1、非只读、当前静止（同轮新鲜有效双轴样本、无待观测停止、无锁存
 +  故障/不确定）、本次会话尚未交付过停止帧。它**不消耗**运动次数、**不读**
 +  有效期（属于停止/安全收口，不是新运动），执行后由既有停止观测流程给出
-+  `stopObservedStationary`；不自动重复补帧。T1 必须是本操作，不得先运动
-+  再以 `stop()` 记作 T1。
++  `stopObservedStationary`。**发送预算只有一次**：首次发送失败即返回失败，
++  不自动重发；“每会话最多一帧”的使用记录**独立**于随新运动事务清零的
++  停止状态，因此中途运动不能使第二次 T1 重新获得发帧资格。T1 必须是本
++  操作，不得先运动再以 `stop()` 记作 T1。
 +
 +看门狗：`预期行程时间 × 1.5 + 5 s`，上限 600 s。`use_speed_control=false` 时
 +按 12 °/s 保守估计。
@@ -13346,6 +13813,12 @@ index 0000000..692afd7
 +| 运动中请求静止停止 | 拒绝；应改用 `stop()`，不得借此多发一帧 |
 +| 样本过期 / 故障锁存 | 拒绝，零帧 |
 +| 许可过期后请求静止停止 | 允许（停止/安全收口，不是新运动），仍只发 1 帧 |
++| 许可在第一轴发出后、第二轴发送前到期 | 第二轴不再发送；已发出的帧进入停止收口；返回失败 |
++| 许可在第一轴等待回显期间到期 | 不再重传定位帧；已发出的帧进入停止收口 |
++| T1 首次停止发送失败 | 只尝试 1 次，返回失败；不自动重试、不置 `motionUncertain` |
++| T1 成功后发生正常运动并再次 T1 | 第二次拒绝，累计仍只有 1 帧 |
++| 只授权静止停止（`allowAbsolutePosition=0`） | 许可可安装；T1 可执行；绝对定位始终 2007 且零定位帧 |
++| 锁存故障 + 样本仍 fresh | 拒绝且零帧（与“样本过期拒绝”可鉴别） |
 +
 +另需覆盖：许可缺少必需键/重复键/非有限值在**工具解析阶段**失败且不发帧；
 +`max_executions` 在发送阶段扣减，被拒绝命令不扣减；`allow_stop_at_rest`
@@ -21300,10 +21773,10 @@ index 0000000..b2633e4
 +作为**当时的事实保留**。
 diff --git a/项目文档/软件工程设计/ENG-09_类型与命名冻结表_V2.10_验收运动许可版.md b/项目文档/软件工程设计/ENG-09_类型与命名冻结表_V2.10_验收运动许可版.md
 new file mode 100644
-index 0000000..1c088d2
+index 0000000..7dd617a
 --- /dev/null
 +++ b/项目文档/软件工程设计/ENG-09_类型与命名冻结表_V2.10_验收运动许可版.md
-@@ -0,0 +1,2759 @@
+@@ -0,0 +1,2767 @@
 +# AircraftPoseSystem 类型与命名冻结表 V2.10（验收运动许可版）
 +
 +## 1 文档目的
@@ -21332,7 +21805,9 @@ index 0000000..1c088d2
 +>    单次位移、执行次数、有效期）。它是**验收工具专用**的显式授权，不是
 +>    配置结构体，也不是 `sendPolicy`。许可含两个操作标志：
 +>    `allowAbsolutePosition`（新运动）与 `allowStopFrameAtRest`（静止时
-+>    主动发一帧停止，T1 专用；不消耗运动次数，不读有效期）。
++>    主动发一帧停止，T1 专用；不消耗运动次数，不读有效期；单次发送、
++>    每会话最多一帧）。两者互相独立，安装时至少一个为 1。
++>    2026-10-22 复核补正见 §5.35 冻结规则 3。
 +> 2. **§5.34** `TurntableDiagnostics` 增补 `acceptancePermitInstalled` /
 +>    `acceptancePermitExpired` / `acceptancePermitRemaining` /
 +>    `acceptancePermitScope`；冻结规则 5 补充：`MotionEnabled` 只能由
@@ -23140,13 +23615,19 @@ index 0000000..1c088d2
 +2. 安装必须在 `initialize()` 之前，每个会话最多一次；设备三项必须与配置
 +   逐项一致；范围/位移必须有限且不超出机械行程；有效期必须
 +   `0 < from < until`，已过期许可在安装时即拒绝。
-+3. 许可授权两类操作：
-+   - `allowAbsolutePosition`：**新的绝对定位运动**。`move()` 在发送前核对
-+     范围、位移、次数与有效期。
++3. 许可授权两类**互相独立**的操作；安装时至少有一个标志为 1，
++   只授权静止停止帧的许可**合法**，但它不构成任何运动授权：
++   - `allowAbsolutePosition`：**新的绝对定位运动**。`move()` 在入口核对
++     范围、位移、次数与有效期，并在**每一个定位帧发送前**（含重传）
++     复核期限与操作授权；期限在部分发送后到达 ⇒ 不再发送后续帧，
++     对已发出的帧执行停止收口。次数仍按**一条逻辑命令**扣减一次，
++     不逐帧扣减。
 +   - `allowStopFrameAtRest`：**静止状态下主动发送一帧停止指令**（验收 T1
 +     专用，`sendAcceptanceStopFrameAtRest()`）。它不是新运动：
 +     **不消耗** `maxExecutions`，**不读**有效期；但要求已安装许可、该标志为 1、
-+     当前静止且本次会话尚未交付过停止帧。每次会话最多发送一次，不自动补帧。
++     当前静止且本次会话尚未交付过停止帧。**单次发送预算**：首次发送失败
++     即返回失败，不自动重发；成功帧每会话最多一帧，使用记录独立于随
++     运动事务清零的停止状态。
 +   `stop()`、退出清理、故障收口**不读**许可的任何字段（停止是安全动作，
 +   不受许可门禁）。
 +4. 许可**不改变** `WorkModeTrust`，不绕过 `errorLatched`/`motionUncertain`/
