@@ -1,9 +1,12 @@
 test_arrival_interval_overlap_does_not_launch (__main__.T4DriverTest.test_arrival_interval_overlap_does_not_launch) ... ok
+test_arrival_processing_pause_after_deadline_is_invalidated (__main__.T4DriverTest.test_arrival_processing_pause_after_deadline_is_invalidated) ... ok
 test_arrival_timeout_sends_one_stop_then_quit (__main__.T4DriverTest.test_arrival_timeout_sends_one_stop_then_quit) ... ok
 test_cmd_failed_sends_one_stop (__main__.T4DriverTest.test_cmd_failed_sends_one_stop) ... ok
+test_final_stats_log_error_is_not_success (__main__.T4DriverTest.test_final_stats_log_error_is_not_success) ... ok
 test_five_moves_ababa_and_per_target_stats (__main__.T4DriverTest.test_five_moves_ababa_and_per_target_stats) ... ok
 test_invalid_target_pairs_do_not_launch (__main__.T4DriverTest.test_invalid_target_pairs_do_not_launch) ... ok
 test_late_arrival_after_deadline_is_not_accepted (__main__.T4DriverTest.test_late_arrival_after_deadline_is_not_accepted) ... ok
+test_log_error_during_ack_keeps_stop_and_exit_budget (__main__.T4DriverTest.test_log_error_during_ack_keeps_stop_and_exit_budget) ... ok
 test_log_write_error_blocks_all_moves (__main__.T4DriverTest.test_log_write_error_blocks_all_moves) ... ok
 test_missing_ack_sends_stop_because_move_may_be_in_flight (__main__.T4DriverTest.test_missing_ack_sends_stop_because_move_may_be_in_flight) ... ok
 test_move_rejected_does_not_send_stop (__main__.T4DriverTest.test_move_rejected_does_not_send_stop) ... ok
@@ -17,7 +20,7 @@ test_target_outside_expected_envelope_does_not_launch (__main__.T4DriverTest.tes
 test_wrong_target_arrival_is_rejected (__main__.T4DriverTest.test_wrong_target_arrival_is_rejected) ... ok
 
 ----------------------------------------------------------------------
-Ran 17 tests in 4.447s
+Ran 20 tests in 6.402s
 
 OK
 T4_DRIVER_RESULT ok=0 outcome=invalid_plan reason=A/B separation 0.3000 deg <= required 0.4000 deg (2*arrival_tolerance=0.2)

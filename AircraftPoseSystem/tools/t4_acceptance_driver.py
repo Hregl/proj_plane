@@ -261,8 +261,9 @@ class _Session:
                      cutoff: Optional[float] = None,
                      apply_state: bool = True) -> None:
         self._write(line)
-        if self.log_error is not None:
-            return
+        # 日志故障后仍继续解析收尾行（STOP_RESULT / EXIT_CODE 等），
+        # 否则停止与退出等待会失去判定依据。失败结论由 run() 锁定，
+        # 不允许此处解析出的状态把结局改回成功。
         if not apply_state:
             tag = ("LATE_EVENT"
                    if (cutoff is not None and recv_at is not None and
@@ -462,10 +463,11 @@ class _Session:
                               apply_state=False)
 
     def _wait(self, pred: Callable[[], bool], timeout_s: float,
-              label: str) -> bool:
+              label: str, abort_on_log_error: bool = True,
+              on_expired: Optional[Callable[[], None]] = None) -> bool:
         deadline = time.monotonic() + timeout_s
         while True:
-            if self.log_error is not None:
+            if abort_on_log_error and self.log_error is not None:
                 self.notes.append(
                     "LOG_ERROR_WAIT label=%s %s" % (label, self.log_error))
                 return False
@@ -484,12 +486,25 @@ class _Session:
                 recv_at, line = self.q.get(timeout=min(remaining, 0.05))
             except queue.Empty:
                 continue
-            processed_at = time.monotonic()
+            started_at = time.monotonic()
             self._handle_line(
                 line, recv_at, cutoff=deadline,
-                apply_state=(processed_at <= deadline))
-            # 处理也在截止内完成，才允许本事件满足谓词/释放下一条命令。
-            if processed_at <= deadline and pred():
+                apply_state=(started_at <= deadline))
+            finished_at = time.monotonic()
+            # 处理本身也必须在截止内完成，才允许本事件满足谓词或
+            # 释放下一条命令。处理跨过期限时，撤销该事件留下的有效
+            # 到位状态，随后按超时收尾。
+            if started_at <= deadline and finished_at > deadline:
+                if on_expired is not None:
+                    on_expired()
+                self._note(
+                    "PROCESS_AFTER_DEADLINE label=%s started=%.6f "
+                    "finished=%.6f cutoff=%.6f"
+                    % (label, started_at, finished_at, deadline))
+                self._drain_late(deadline)
+                self._note("WAIT_TIMEOUT label=%s" % label)
+                return False
+            if started_at <= deadline and pred():
                 return True
 
     def _move_remaining(self, timeout_s: float) -> float:
@@ -524,9 +539,21 @@ class _Session:
         self.arrival_window_open = True
         self.arrival_deadline = base + timeout_s
         try:
-            return self._wait(pred, remaining, label)
+            return self._wait(
+                pred, remaining, label,
+                on_expired=self._expire_arrival_after_deadline)
         finally:
             self.arrival_window_open = False
+
+    def _expire_arrival_after_deadline(self) -> None:
+        """处理跨过期限时，撤销刚留下的到位状态，避免释放下一条命令。"""
+        p = self.pending
+        if p is None or p.arrival is None:
+            return
+        cycle = p.arrival[0]
+        p.arrival = None
+        self.used_cycles.discard(cycle)
+        self._note("ARRIVAL_INVALIDATED reason=processed_after_deadline")
 
     def _pending_failure_reason(self) -> Optional[str]:
         p = self.pending
@@ -553,9 +580,11 @@ class _Session:
         return self._send("stop")
 
     def _wait_stop_result(self) -> None:
+        # 日志故障不得缩短停止收尾预算；仍须读完 STOP_RESULT。
         self._wait(lambda: self.stop_result_seen or
                    (self.eof.is_set() and self.q.empty()),
-                   self.stop_wait_s, "STOP_RESULT")
+                   self.stop_wait_s, "STOP_RESULT",
+                   abort_on_log_error=False)
         if not self.stop_result_seen:
             self._note("STOP_RESULT_MISSING")
 
@@ -563,8 +592,10 @@ class _Session:
         if not self.quit_sent:
             self.quit_sent = True
             self._send("quit")
+        # 日志故障不得缩短退出收尾预算；仍须读完 EXIT_CODE。
         self._wait(lambda: self.exit_code_line is not None and
-                   self.eof.is_set(), self.exit_timeout_s, "EXIT")
+                   self.eof.is_set(), self.exit_timeout_s, "EXIT",
+                   abort_on_log_error=False)
         if self.proc is not None:
             try:
                 self.proc.wait(timeout=1.0)
@@ -750,6 +781,9 @@ class _Session:
                         outcome, reason = ("move_ack_timeout",
                                            "no MOVE_ACCEPTED")
                     break
+                if self.log_error is not None:
+                    outcome, reason = "log_error", self.log_error
+                    break
                 fail = self._pending_failure_reason()
                 if fail is not None:
                     outcome, reason = fail, fail
@@ -761,6 +795,9 @@ class _Session:
                     else:
                         outcome, reason = ("arrival_timeout",
                                            "no ARRIVAL_OBSERVED")
+                    break
+                if self.log_error is not None:
+                    outcome, reason = "log_error", self.log_error
                     break
                 fail = self._pending_failure_reason()
                 if fail is not None:
@@ -831,6 +868,10 @@ class _Session:
                 outcome, reason = "repeat_crosscheck", "REPEAT mismatch"
             if outcome == "complete" and len(self.visits) != len(self.plan):
                 outcome, reason = "visit_count", "missing visits"
+            # 末尾统计/交叉核对写入也可能失败；成功判断必须覆盖这些
+            # 必要日志写入，不能带着 log_error 返回成功。
+            if outcome == "complete" and self.log_error is not None:
+                outcome, reason = "log_error", self.log_error
 
             result = T4Result(
                 driver_ok=(outcome == "complete"),

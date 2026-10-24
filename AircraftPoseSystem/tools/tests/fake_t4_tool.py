@@ -8,7 +8,9 @@
   逗号分隔，按该目标的访问顺序取用（不足则循环）。
 
 额外反例模式：``no_ack`` 只回 ``MOVE_REQUEST`` 不回 ``MOVE_ACCEPTED``；
-``real_exit_3`` 打印 ``EXIT_CODE 0`` 后以真实退出码 3 退出。
+``real_exit_3`` 打印 ``EXIT_CODE 0`` 后以真实退出码 3 退出；
+``slow_stop`` 在 ``STOP_REQUEST`` 后延迟 1.4 s 才回 ``STOP_RESULT``，
+用于核对日志故障时停止/退出收尾不会被固定 1 s 强杀路径截断。
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import argparse
 import math
 import os
 import sys
+import time
 from typing import Dict, List, Tuple
 
 
@@ -116,6 +119,8 @@ class Fake:
     def handle_stop(self) -> None:
         out("STOP_REQUEST t=200ms stop_id=1 at_motion=MOVING cycle=%d "
             "az=0.0000 el=0.0000 fresh=1 txn=1 stop_txn=0" % self.cycle)
+        if self.mode == "slow_stop":
+            time.sleep(1.4)
         out("STOP_RESULT t=200ms stop_id=1 request_seq=1 completed_seq=1 "
             "stop_delivered=1 stop_stationary=0 uncertain=0 stop_txn=1 "
             "motion_txn_before=1 send_path=stop_frame_delivered")

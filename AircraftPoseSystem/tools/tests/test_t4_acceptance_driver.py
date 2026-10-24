@@ -18,7 +18,11 @@
   14. 日志写入持续 OSError：不发送任何 move，也不报告成功；
   15. 主线程暂停、到位行在截止后到达：不得接受，也不释放下一条；
   16. move 已写入但未收到 MOVE_ACCEPTED：按可能在途执行一次 stop；
-  17. A/B 间距不足以区分两个 ±τ 到位区间：不启动工具。
+  17. A/B 间距不足以区分两个 ±τ 到位区间：不启动工具；
+  18. 到位行在接收后被处理期间跨过期限：撤销到位、不释放下一条；
+  19. 末尾 T4_STATS 日志写入失败：不得返回成功；
+  20. 日志在受理行处理时故障、停止需 1.4 s：仍读全 STOP_RESULT
+      与 EXIT_CODE，不被固定 1 s 强杀路径截断。
 """
 
 from __future__ import annotations
@@ -244,6 +248,87 @@ class T4DriverTest(unittest.TestCase):
         self.assertIsNone(session.pending.arrival)
         self.assertTrue(any("DRAINED_AFTER_DEADLINE" in n
                             for n in session.notes))
+
+    def test_arrival_processing_pause_after_deadline_is_invalidated(self):
+        tmp = tempfile.TemporaryDirectory(prefix="t4-driver-test-")
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        log = root / "session.log"
+        notes = root / "notes.txt"
+        session = driver._Session(
+            command=[], log_path=log, notes_path=notes,
+            plan=[("A", 0.0, 0.0)], init_timeout_s=1.0,
+            state_timeout_s=1.0, move_ack_timeout_s=1.0,
+            move_timeout_s=1.0, stop_wait_s=1.0,
+            exit_timeout_s=1.0)
+        session.log = log.open("w", encoding="utf-8")
+        self.addCleanup(session.log.close)
+        session.pending = driver._Pending(1, "A", 0.0, 0.0, seq=1)
+        session.pending.sent_at = time.monotonic()
+
+        # 行在截止前收到；主线程在“处理该行内部”暂停 250 ms。
+        original_handle = session._handle_line
+
+        def slow_handle(line, *args, **kwargs):
+            time.sleep(0.25)
+            return original_handle(line, *args, **kwargs)
+
+        session._handle_line = slow_handle
+        line = ("ARRIVAL_OBSERVED seq=1 cycle=11 az=0.0000 el=0.0000 "
+                "target=[0.0000,0.0000] elapsed_ms=150 feedback_only=1")
+        session.q.put((time.monotonic(), line))
+
+        ok = session._wait_arrival(0.05, "ARRIVAL")
+        self.assertFalse(ok)
+        self.assertIsNone(session.pending.arrival)
+        self.assertNotIn(11, session.used_cycles)
+        self.assertTrue(any("PROCESS_AFTER_DEADLINE" in n
+                            for n in session.notes))
+        self.assertTrue(any("ARRIVAL_INVALIDATED" in n
+                            for n in session.notes))
+
+    def test_final_stats_log_error_is_not_success(self):
+        original_write = driver._Session._write
+
+        def failing_write(session, text):
+            # 前面正常；首次写 T4_STATS 起持续失败。
+            if session.log_error is not None or "T4_STATS" in text:
+                if session.log_error is None:
+                    session.log_error = "OSError: simulated stats failure"
+                return
+            return original_write(session, text)
+
+        with mock.patch.object(driver._Session, "_write", failing_write):
+            result, text, notes = self.run_mode("normal")
+        self.assertFalse(result.driver_ok)
+        self.assertEqual(result.outcome, "log_error")
+        self.assertIn("simulated stats failure", result.log_error)
+        self.assertEqual(len(result.visits), 5)
+
+    def test_log_error_during_ack_keeps_stop_and_exit_budget(self):
+        original_write = driver._Session._write
+
+        def failing_write(session, text):
+            # 第一条 move 已发出；处理 MOVE_ACCEPTED 时开始持续失败。
+            if session.log_error is not None or "MOVE_ACCEPTED" in text:
+                if session.log_error is None:
+                    session.log_error = "OSError: simulated ack failure"
+                return
+            return original_write(session, text)
+
+        with mock.patch.object(driver._Session, "_write", failing_write):
+            result, text, notes = self.run_mode(
+                "slow_stop", stop_wait_s=2.0, exit_timeout_s=3.0)
+        self.assertFalse(result.driver_ok)
+        self.assertEqual(result.outcome, "log_error")
+        self.assertEqual(result.stop_send_count, 1)
+        self.assertTrue(result.stop_requested)
+        self.assertTrue(result.stop_result_seen)
+        self.assertTrue(result.stop_delivered)
+        self.assertEqual(result.process_returncode, 0)
+        self.assertGreaterEqual(result.elapsed_s, 1.4)
+        self.assertNotIn("PROC_FORCE_KILL", notes)
+        self.assertEqual(len(result.visits), 0)
 
     def test_missing_ack_sends_stop_because_move_may_be_in_flight(self):
         result, text, notes = self.run_mode(
