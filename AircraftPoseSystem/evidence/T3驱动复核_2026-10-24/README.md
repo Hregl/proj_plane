@@ -11,7 +11,8 @@
 | `01_t3_acceptance_driver.py` | `tools/t3_acceptance_driver.py` |
 | `02_fake_t3_tool.py` | `tools/tests/fake_t3_tool.py` |
 | `03_test_t3_acceptance_driver.py` | `tools/tests/test_t3_acceptance_driver.py` |
-| `04_测试输出_九条.txt` | 上述测试的完整输出（9 tests, OK, EXIT_CODE 0） |
+| `04_测试输出_九条.txt` | 复核前九条输出（历史，9 tests, OK） |
+| `09_测试输出_十一条.txt` | 修订后完整输出（11 tests, OK, EXIT_CODE 0） |
 
 逐件 SHA-256 见 `05_SHA256SUMS.txt`。
 
@@ -29,23 +30,36 @@
 
 ### 2. 停止结果只认本次 stop
 
-* 只有 `stop_requested` 之后的 `STOP_RESULT` 才置 `stop_result_seen`
-  （`:283-292`）；请求前的旧结果记 `STOP_RESULT_BEFORE_REQUEST`
-  并忽略。
+* 解析工具 `STOP_REQUEST` 的 `request_seq`（`:289-292`）。
+* 只有同时满足以下条件的 `STOP_RESULT` 才置 `stop_result_seen`：
+  已发出本次 stop；该行接收时刻不早于 stop 请求时刻；`request_seq`
+  与本次 `STOP_REQUEST` 一致（`:295-327`）。
+* 已排队但接收于请求之前的旧结果记 `STOP_RESULT_BEFORE_REQUEST`；
+  编号不符记 `STOP_RESULT_SEQ_MISMATCH`；两者都忽略。
 * 到位、拒绝、反向、超时、工具终结、读取异常都走同一收尾路径
-  （`:518-568`、`:600-650`）。
-* `no_stop_result` 假工具在启动时先输出一条无请求的旧结果，收到 stop
-  后不再输出结果；测试断言旧结果未被采用、`stop_delivered` 保持未知。
-* 变异检查：取消上述门控后该用例变红；恢复后 9/9 绿。
+  （`:555-605`、`:637-687`）。
+* 反例：先放旧结果、后处理 stop，旧结果仍被拒；编号不符也被拒。
+* 变异检查：取消该门控后 `test_queued_old_stop_result_is_rejected`
+  变红；恢复后 11/11 绿。
 
-### 3. 收尾
+### 3. 反向锁存
+
+* 达到反向判据后立即置 `direction_fault` 并发送一次普通 stop
+  （`:418-425`）；后续递减样本因 `stop_requested` 被忽略，不能改回
+  正常触发。
+* 反例：`3.19→3.20→3.18→3.16→3.14` 必须停在反向点，不得在后续
+  三个递减变化后记 `triggered`。
+* 变异检查：去掉反向 stop 后 `test_reverse_then_normal_cannot_trigger`
+  变红；恢复后 11/11 绿。
+
+### 4. 收尾
 
 * EOF 只在读取线程正常结束时置位；读取异常单独记 `reader_error`，
   不冒充 EOF（`:202-215`）。
-* `_wait_for` 全部有期限（`:473-499`）；退出等待有期限，超时则强制
-  终止并记 `forced_termination`（`:620-632`）。
+* `_wait_for` 全部有期限；退出等待有期限，超时则强制终止并记
+  `forced_termination`。
 * 实际进程退出码取自 `Popen.returncode`；`driver_ok` 同时要求
-  `exit_code == 0`、EOF、无读取/日志/驱动异常（`:653-665`）。
+  `exit_code == 0`、EOF、无读取/日志/驱动异常（`:693-705`）。
 
 ## 运行
 

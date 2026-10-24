@@ -47,9 +47,10 @@ RX_RE = re.compile(
 )
 STATE_RE = re.compile(r"\bSTATE\b.*\baz=([-+0-9.]+)\s+el=([-+0-9.]+)")
 MOVE_ACCEPTED_RE = re.compile(r"\bMOVE_ACCEPTED\s+accepted=(\d+)")
+STOP_REQUEST_RE = re.compile(r"\bSTOP_REQUEST\b.*?\brequest_seq=(\d+)")
 STOP_RESULT_RE = re.compile(
-    r"\bSTOP_RESULT\b.*?\bstop_delivered=(\d).*?"
-    r"\bstop_stationary=(\d).*?\bsend_path=(\S+)"
+    r"\bSTOP_RESULT\b.*?\brequest_seq=(\d+).*?\bcompleted_seq=(\d+).*?"
+    r"\bstop_delivered=(\d).*?\bstop_stationary=(\d).*?\bsend_path=(\S+)"
 )
 EXIT_CODE_RE = re.compile(r"^\s*EXIT_CODE\s+(-?\d+)\s*$")
 NORMAL_EXIT_RE = re.compile(r"\bnormal_exit=(\d+)\b")
@@ -73,8 +74,10 @@ class T3Result:
     trigger_angle: Optional[float] = None
     trigger_deltas: List[float] = field(default_factory=list)
     arrival_before_trigger: bool = False
+    direction_fault: bool = False
     stop_result_seen: bool = False
     stop_result_before_request: int = 0
+    stop_result_seq_mismatch: int = 0
     stop_delivered: Optional[bool] = None
     stop_stationary: Optional[bool] = None
     stop_send_path: Optional[str] = None
@@ -154,6 +157,8 @@ class _Session:
         self.stop_requested_at: Optional[float] = None
         self.stop_result_seen = False
         self.stop_result_before_request = 0
+        self.stop_result_seq_mismatch = 0
+        self.stop_request_seq: Optional[int] = None
         self.stop_delivered: Optional[bool] = None
         self.stop_stationary: Optional[bool] = None
         self.stop_send_path: Optional[str] = None
@@ -169,6 +174,7 @@ class _Session:
         self.consecutive_deltas: List[float] = []
         self.saw_direction = False
         self.saw_opposite = False
+        self.direction_fault = False
         self.timed_out = False
         self.forced_termination = False
         self.quit_sent = False
@@ -280,22 +286,46 @@ class _Session:
             self._set_terminal("MOTION_ERROR: " + line.strip())
             return
 
+        m = STOP_REQUEST_RE.search(line)
+        if m:
+            self.stop_request_seq = int(m.group(1))
+            self._note("STOP_REQUEST seq=%d" % self.stop_request_seq)
+            return
+
         m = STOP_RESULT_RE.search(line)
         if m:
+            seq = int(m.group(1))
+            delivered = int(m.group(3))
+            stationary = int(m.group(4))
+            path = m.group(5)
+            reason = None
             if not self.stop_requested:
-                # 只接受本次 stop 请求之后的 STOP_RESULT；会话开始或
-                # 其他路径留下的旧结果不得解除本次收尾等待。
-                self.stop_result_before_request += 1
-                self._note("STOP_RESULT_BEFORE_REQUEST ignored path=%s"
-                           % m.group(3))
+                reason = "no_stop_request"
+            elif (recv_at is None or self.stop_requested_at is None
+                  or recv_at < self.stop_requested_at):
+                # 结果行虽在处理时 stop 已发出，但接收时刻早于本次请求：
+                # 它属于旧请求，不能解除本次收尾等待。
+                reason = "received_before_stop"
+            elif self.stop_request_seq is None:
+                reason = "stop_request_seq_unknown"
+            elif seq != self.stop_request_seq:
+                reason = "seq_mismatch expected=%d" % self.stop_request_seq
+            if reason is not None:
+                if (reason.startswith("seq_mismatch")
+                        or reason == "stop_request_seq_unknown"):
+                    self.stop_result_seq_mismatch += 1
+                else:
+                    self.stop_result_before_request += 1
+                self._note("STOP_RESULT_REJECTED reason=%s seq=%d path=%s"
+                           % (reason, seq, path))
                 return
             self.stop_result_seen = True
-            self.stop_delivered = int(m.group(1)) == 1
-            self.stop_stationary = int(m.group(2)) == 1
-            self.stop_send_path = m.group(3)
+            self.stop_delivered = delivered == 1
+            self.stop_stationary = stationary == 1
+            self.stop_send_path = path
             self._note(
-                "STOP_RESULT delivered=%d stationary=%d path=%s"
-                % (int(m.group(1)), int(m.group(2)), m.group(3))
+                "STOP_RESULT seq=%d delivered=%d stationary=%d path=%s"
+                % (seq, delivered, stationary, path)
             )
             return
 
@@ -384,8 +414,15 @@ class _Session:
                     self.saw_direction = True
                     self.consecutive_deltas.append(delta)
                 elif opposite:
+                    # 方向异常一旦达到现有判据即锁存，后续正常方向不得
+                    # 覆盖为正常触发；直接进入一次普通停止收尾。
                     self.saw_opposite = True
+                    self.direction_fault = True
                     self.consecutive_deltas = []
+                    self._note(
+                        "T3_DIRECTION_FAULT tool_t=%dms delta=%.4f "
+                        "direction=%s" % (t_ms, delta, self.direction))
+                    self._send_stop("direction_fault")
                 else:
                     self.consecutive_deltas = []
         self.last_sample_recv = recv_at
@@ -539,6 +576,7 @@ class _Session:
         # 触发或超时；stop 只由这里（或收尾路径）发送一次。
         self._wait_for(
             lambda: (self.triggered or self.arrival_before_trigger
+                     or self.stop_requested
                      or self.terminal_reason is not None),
             self.motion_timeout_s, "TRIGGER")
 
@@ -548,6 +586,8 @@ class _Session:
             outcome = "arrival_before_trigger"
         elif self.terminal_reason is not None:
             outcome = "tool_terminal"
+        elif self.direction_fault:
+            outcome = "wrong_direction"
         elif self.saw_direction:
             outcome = "trigger_timeout"
         elif self.saw_opposite:
@@ -653,8 +693,8 @@ class _Session:
             driver_ok = (
                 outcome in (
                     "triggered", "no_motion_timeout", "trigger_timeout",
-                    "wrong_direction_timeout", "arrival_before_trigger",
-                    "move_rejected")
+                    "wrong_direction", "wrong_direction_timeout",
+                    "arrival_before_trigger", "move_rejected")
                 and self.stop_requested
                 and self.stop_write_ok
                 and self.stop_result_seen
@@ -682,8 +722,10 @@ class _Session:
                 trigger_angle=self.trigger_angle,
                 trigger_deltas=list(self.trigger_deltas),
                 arrival_before_trigger=self.arrival_before_trigger,
+                direction_fault=self.direction_fault,
                 stop_result_seen=self.stop_result_seen,
                 stop_result_before_request=self.stop_result_before_request,
+                stop_result_seq_mismatch=self.stop_result_seq_mismatch,
                 stop_delivered=self.stop_delivered,
                 stop_stationary=self.stop_stationary,
                 stop_send_path=self.stop_send_path,
@@ -756,9 +798,12 @@ class _Session:
                 "%.4f" % d for d in result.trigger_deltas),
             "ARRIVAL_BEFORE_TRIGGER=%d"
             % (1 if result.arrival_before_trigger else 0),
+            "DIRECTION_FAULT=%d" % (1 if result.direction_fault else 0),
             "STOP_RESULT_SEEN=%d" % (1 if result.stop_result_seen else 0),
             "STOP_RESULT_BEFORE_REQUEST=%d"
             % result.stop_result_before_request,
+            "STOP_RESULT_SEQ_MISMATCH=%d"
+            % result.stop_result_seq_mismatch,
             "STOP_DELIVERED=%s" % result.stop_delivered,
             "STOP_STATIONARY=%s" % result.stop_stationary,
             "STOP_SEND_PATH=%s" % result.stop_send_path,

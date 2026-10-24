@@ -8,6 +8,8 @@
   4. 触发前已到位：不得把收尾 stop 当作运动中的停止；
   5. 缺少 STOP_RESULT：不得把“stop 已发”当成“发送结果已知”，也不得
      用本次 stop 请求之前的旧 STOP_RESULT 解除等待。
+  6. 旧结果已排队、处理时 stop 已发：按接收时刻与请求编号拒绝。
+  7. 先反向再连续正常方向：方向异常锁存，不得改回正常触发。
 """
 
 from __future__ import annotations
@@ -104,7 +106,8 @@ class T3DriverTest(unittest.TestCase):
     def test_opposite_direction_does_not_trigger(self):
         result, text, notes = self.run_mode("wrong_direction")
         self.assertTrue(result.driver_ok, result.__dict__)
-        self.assertEqual(result.outcome, "wrong_direction_timeout")
+        self.assertEqual(result.outcome, "wrong_direction")
+        self.assertTrue(result.direction_fault)
         self.assertEqual(result.stop_send_count, 1)
         self.assertEqual(result.trigger_samples, 0)
         self.assertEqual(text.count('DRIVER_SEND cmd="stop"'), 1)
@@ -131,7 +134,7 @@ class T3DriverTest(unittest.TestCase):
         self.assertEqual(result.stop_send_count, 1)
         # 启动时的无请求旧结果必须被忽略，不能解除本次收尾等待。
         self.assertEqual(result.stop_result_before_request, 1)
-        self.assertIn("STOP_RESULT_BEFORE_REQUEST ignored", notes)
+        self.assertIn("STOP_RESULT_REJECTED reason=no_stop_request", notes)
         self.assertFalse(result.stop_result_seen)
         self.assertIsNone(result.stop_delivered)
         self.assertFalse(result.driver_ok)
@@ -206,6 +209,45 @@ class T3DriverTest(unittest.TestCase):
         self.assertEqual(session.stop_send_count, 1)
         session._on_angle_sample(base + 1.24, 2240, 2.9900)
         self.assertEqual(session.stop_send_count, 1)
+
+    def test_queued_old_stop_result_is_rejected(self):
+        session = self.make_session(fresh_s=5.0)
+        old_recv = time.monotonic()
+        time.sleep(0.01)
+        session._send_stop("queued_old")
+        old_line = (
+            "STOP_RESULT t=5ms request_seq=1 completed_seq=1 "
+            "stop_delivered=1 stop_stationary=1 uncertain=0 "
+            "stop_txn=1 motion_txn_before=0 "
+            "send_path=acceptance_stop")
+        # 旧结果接收时刻早于本次 stop 请求，但处理时 stop 已发出。
+        session._handle_line(old_line, recv_at=old_recv)
+        self.assertFalse(session.stop_result_seen)
+        self.assertEqual(session.stop_result_before_request, 1)
+        self.assertIn("reason=received_before_stop",
+                      "\n".join(session.notes))
+
+        # 接收时刻新，但请求编号不是本次 stop 的编号：同样拒绝。
+        session.stop_request_seq = 7
+        session._handle_line(
+            old_line.replace("request_seq=1", "request_seq=6"),
+            recv_at=time.monotonic())
+        self.assertFalse(session.stop_result_seen)
+        self.assertEqual(session.stop_result_seq_mismatch, 1)
+        self.assertIn("reason=seq_mismatch expected=7",
+                      "\n".join(session.notes))
+
+    def test_reverse_then_normal_cannot_trigger(self):
+        session = self.make_session(fresh_s=5.0)
+        base = time.monotonic()
+        for i, angle in enumerate((3.19, 3.20, 3.18, 3.16, 3.14)):
+            session._on_angle_sample(base + i * 0.06, 1000 + i * 60, angle)
+        self.assertTrue(session.direction_fault)
+        self.assertTrue(session.stop_requested)
+        self.assertFalse(session.triggered)
+        self.assertEqual(session.stop_send_count, 1)
+        self.assertEqual(session.trigger_deltas, [])
+        self.assertIn("T3_DIRECTION_FAULT", "\n".join(session.notes))
 
 
 if __name__ == "__main__":
