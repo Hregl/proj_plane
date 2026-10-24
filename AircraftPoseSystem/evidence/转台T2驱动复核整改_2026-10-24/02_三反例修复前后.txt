@@ -1,0 +1,96 @@
+T2 执行驱动三处缺陷——修复前后对照（2026-10-24）
+
+环境：UOS Desktop 25，Python 3.12；不连接 UDP、不访问真实设备。
+修复前驱动：上一轮复核包中的 t2_acceptance_driver.py，SHA-256
+70b166ec0546c290766a5fe8d49e9207b6fcbe4c8602637f26942b09f4350b6a。
+修复后驱动：AircraftPoseSystem/tools/t2_acceptance_driver.py，
+SHA-256 6e0d372f8d189a9f8194368f18163bd0d16567915159336b47094cc404766fdd。
+
+三个场景使用同一个离线假子进程（fake_t2_tool.py），只替换驱动文件；
+原始完整输出见仓库根 验收证据/转台T2驱动复核整改_2026-10-24/ 的
+01_三反例修复前.log、02_三反例修复后.log。
+
+一、缺陷一：主线程停顿 300 ms，到位在 150 ms 才到（等待期限 50 ms）
+
+修复前：
+  success=True
+  timed_out=False
+  arrivals=[1, 2]
+  reason='ok'
+  p2_sent=True
+  log_has_late_arrival=True
+
+修复后：
+  success=False
+  timed_out=True
+  arrivals=[]
+  reason='P1 timeout after 0.05s'
+  p2_sent=False
+  log_has_late_arrival=True
+
+说明：迟到行仍留在日志中，但按 reader 打点的接收时刻判为迟到，不解除
+超时，也不触发 P2。
+
+二、缺陷二：完整收尾行之后写入非法 UTF-8
+
+修复前（reader 线程打印 UnicodeDecodeError，但 finally 仍置 eof）：
+  success=True
+  eof_seen=True
+  reader_error=None
+  reason='ok'
+  log_has_final=True
+
+修复后：
+  success=False
+  eof_seen=False
+  reader_error="UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff ..."
+  reason="reader failed: UnicodeDecodeError: ..."
+  log_has_final=True
+
+说明：收尾行确实收到，但读取失败不能再被当作正常 EOF；eof 与 reader_ok
+两个判据均不通过。
+
+三、缺陷三：P1 发出后，处理 MOVE_ACCEPTED 时注入一次 OSError
+
+修复前（异常直接抛到调用方）：
+  raised='OSError: injected log write failure'
+  success=None
+  exit_code=None
+  reason=None
+  stop_sent=False
+  quit_sent=False
+  process_alive_after_run=True
+
+修复后：
+  raised=None
+  success=False
+  exit_code=0
+  reason='driver exception: OSError: injected log write failure'
+  stop_sent=True
+  quit_sent=True
+  process_alive_after_run=False
+
+说明：日志写入异常不再阻断停止/退出尝试；驱动返回失败结果，子进程已被
+回收。强杀只作为退出超时后的最后手段，本场景未触发。
+
+四、离线回归
+
+原有 7 条测试保留，新增 3 条独立反例，共 10 条：
+
+  test_exit_hang_is_killed_and_fails ... ok
+  test_late_arrival_after_scheduling_pause_does_not_release_timeout ... ok
+  test_late_arrival_times_out ... ok
+  test_log_exit_nonzero_fails_even_with_real_exit_zero ... ok
+  test_log_write_exception_stops_and_reaps_child ... ok
+  test_missing_final_is_not_success ... ok
+  test_normal_success_control ... ok
+  test_reader_decode_error_is_not_normal_eof ... ok
+  test_real_exit_nonzero_fails_even_with_log_exit_zero ... ok
+  test_tail_output_is_collected_to_eof ... ok
+
+  Ran 10 tests in 2.692s
+  OK
+  EXIT_CODE=0
+
+边界：本对照只验证驱动状态机与假子进程行为；不证明真实工具、真实退出
+阶段或真实设备行为。“退出阶段零补帧”仍需逐帧核对。本批未重发实机命令。

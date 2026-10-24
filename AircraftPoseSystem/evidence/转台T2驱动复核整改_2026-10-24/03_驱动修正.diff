@@ -1,0 +1,751 @@
+--- a/AircraftPoseSystem/tools/t2_acceptance_driver.py
++++ b/AircraftPoseSystem/tools/t2_acceptance_driver.py
+@@ -54,6 +54,9 @@
+     eof_seen: bool = False
+     timed_out: bool = False
+     forced_termination: bool = False
++    reader_error: Optional[str] = None
++    log_error: Optional[str] = None
++    driver_exception: Optional[str] = None
+     elapsed_s: float = 0.0
+     log_path: str = ""
+     notes_path: str = ""
+@@ -69,6 +72,9 @@
+             "final_normal_exit_1": self.final_seen and self.normal_exit,
+             "exit_code_line_zero": self.exit_code_line == 0,
+             "eof": self.eof_seen,
++            "reader_ok": self.reader_error is None,
++            "log_ok": self.log_error is None,
++            "no_driver_exception": self.driver_exception is None,
+             "not_timed_out": not self.timed_out,
+             "not_forced": not self.forced_termination,
+             "no_tool_terminal_error": self.terminal_reason is None,
+@@ -100,14 +106,23 @@
+ 
+         self.proc: Optional[subprocess.Popen] = None
+         self.log = None
+-        self.q: "queue.Queue[str]" = queue.Queue()
++        # 每个元素是 (单调接收时刻, 原始行)。时间戳由 reader 线程在读到
++        # 行之后立即打点，主线程即使被调度停顿，也不会把迟到行当准时行。
++        self.q: "queue.Queue[Tuple[float, str]]" = queue.Queue()
+         self.eof = threading.Event()
++        self.reader_done = threading.Event()
++        self.reader_error: Optional[str] = None
++        self.log_error: Optional[str] = None
++        self.driver_exception: Optional[str] = None
+         self.reader: Optional[threading.Thread] = None
+ 
+         self.init_ok = False
+         self.state_seen = False
+         self.last_state: Optional[Tuple[float, float]] = None
+         self.arrivals: List[int] = []
++        self.late_arrivals: List[int] = []
++        self.arrival_deadlines: Dict[int, float] = {}
++        self.deferred: List[Tuple[float, str]] = []
+         self.terminal_reason: Optional[str] = None
+         self.final_seen = False
+         self.normal_exit = False
+@@ -122,27 +137,61 @@
+ 
+     # ---- 日志与输出收集 -------------------------------------------------
+     def _write(self, text: str) -> None:
+-        if self.log is not None:
++        # 日志写入失败不能让收尾路径抛异常；记录错误，由主流程判失败。
++        if self.log is None:
++            return
++        try:
+             self.log.write(text)
+             self.log.flush()
++        except (OSError, ValueError) as exc:
++            if self.log_error is None:
++                self.log_error = "%s: %s" % (type(exc).__name__, exc)
+ 
+     def _note(self, text: str) -> None:
+         self.notes.append(text)
+         self._write("DRIVER_NOTE " + text + "\n")
+ 
++    def _safe_note(self, text: str) -> None:
++        try:
++            self._note(text)
++        except Exception as exc:  # 收尾阶段不允许日志问题再次打断清理
++            self.notes.append("NOTE_FAILED %s: %s" % (type(exc).__name__, exc))
++
+     def _reader_main(self, stream) -> None:
++        # 正常 EOF 才置 eof；读取失败单独记录，不能被当成完整输出。
+         try:
+             while True:
+                 line = stream.readline()
+                 if line == "":
+                     break
+-                self.q.put(line)
++                self.q.put((time.monotonic(), line))
++        except Exception as exc:
++            self.reader_error = "%s: %s" % (type(exc).__name__, exc)
+         finally:
+-            self.eof.set()
++            if self.reader_error is None:
++                self.eof.set()
++            self.reader_done.set()
+ 
+-    def _handle_line(self, line: str) -> None:
++    def _handle_line(
++        self,
++        line: str,
++        recv_at: Optional[float] = None,
++        cutoff: Optional[float] = None,
++    ) -> None:
+         self._write(line)
++        if self.log_error is not None:
++            return
++        if cutoff is not None and recv_at is not None and recv_at > cutoff:
++            # 迟到行保留并记入日志，但不能满足本次等待或触发下一步。
++            self.deferred.append((recv_at, line))
++            self._note(
++                "LATE_EVENT late_by=%.3fs line=%r"
++                % (recv_at - cutoff, line.strip())
++            )
++            return
++        self._apply_line(line, recv_at)
+ 
++    def _apply_line(self, line: str, recv_at: Optional[float] = None) -> None:
+         if "INIT_OK" in line:
+             self.init_ok = True
+             return
+@@ -160,6 +209,20 @@
+             m = SEQ_RE.search(line)
+             if m:
+                 seq = int(m.group(1))
++                deadline = self.arrival_deadlines.get(seq)
++                if (
++                    deadline is not None
++                    and recv_at is not None
++                    and recv_at > deadline
++                ):
++                    if seq not in self.late_arrivals:
++                        self.late_arrivals.append(seq)
++                        self.timed_out = True
++                        self._note(
++                            "LATE_ARRIVAL seq=%d late_by=%.3fs"
++                            % (seq, recv_at - deadline)
++                        )
++                    return
+                 if seq not in self.arrivals:
+                     self.arrivals.append(seq)
+                     self._note("ARRIVAL seq=%d" % seq)
+@@ -210,41 +273,94 @@
+             self.terminal_reason = reason
+             self._note("TOOL_TERMINAL " + reason)
+ 
+-    def _pump_once(self, timeout_s: float) -> bool:
++    def _pump_once(
++        self, timeout_s: float, deadline: Optional[float] = None
++    ) -> bool:
+         try:
+-            line = self.q.get(timeout=max(0.0, timeout_s))
++            recv_at, line = self.q.get(timeout=max(0.0, timeout_s))
+         except queue.Empty:
+             return False
+-        self._handle_line(line)
++        self._handle_line(line, recv_at, deadline)
+         return True
+ 
+-    def _drain_available(self) -> None:
++    def _drain_available(self, cutoff: Optional[float] = None) -> None:
+         while True:
+             try:
+-                line = self.q.get_nowait()
++                recv_at, line = self.q.get_nowait()
+             except queue.Empty:
+                 return
+-            self._handle_line(line)
++            self._handle_line(line, recv_at, cutoff)
+ 
+-    def _wait_for(self, predicate: Callable[[], bool], timeout_s: float) -> bool:
+-        deadline = time.monotonic() + timeout_s
++    def _drain_deferred(self) -> None:
++        while self.deferred:
++            recv_at, line = self.deferred.pop(0)
++            self._apply_line(line, recv_at)
++
++    def _wait_for(
++        self,
++        predicate: Callable[[], bool],
++        timeout_s: float,
++        deadline: Optional[float] = None,
++    ) -> bool:
++        if deadline is None:
++            deadline = time.monotonic() + timeout_s
+         while True:
++            if self.log_error is not None:
++                return False
++            if self.reader_error is not None and self.q.empty():
++                self._drain_available(deadline)
++                return False
+             if predicate():
+                 return True
+             remaining = deadline - time.monotonic()
+             if remaining <= 0:
+-                # 截止前最后一次把已到达的行消费完，避免“刚好在边界”的
+-                # 到位记录被误判为超时。
+-                self._drain_available()
+-                return predicate()
++                # 截止前消费已到达的行；接收时刻晚于截止时间的行只留档，
++                # 不参与判据，避免调度停顿后把迟到到位当成功。
++                self._drain_available(deadline)
++                return (
++                    predicate()
++                    and self.reader_error is None
++                    and self.log_error is None
++                )
+             if (
+                 self.proc is not None
+                 and self.proc.poll() is not None
+-                and self.eof.is_set()
++                and self.reader_done.is_set()
+                 and self.q.empty()
+             ):
+-                return predicate()
+-            self._pump_once(min(0.05, remaining))
++                self._drain_available(deadline)
++                return (
++                    predicate()
++                    and self.reader_error is None
++                    and self.log_error is None
++                )
++            self._pump_once(min(0.05, remaining), deadline)
++
++    def _wait_arrival(self, seq: int, timeout_s: float) -> bool:
++        deadline = time.monotonic() + timeout_s
++        self.arrival_deadlines[seq] = deadline
++        return self._wait_for(
++            lambda: seq in self.arrivals
++            or self.terminal_reason is not None,
++            timeout_s,
++            deadline,
++        )
++
++    def _fault_reason(self) -> Optional[str]:
++        if self.driver_exception is not None:
++            return "driver exception: " + self.driver_exception
++        if self.log_error is not None:
++            return "log write failed: " + self.log_error
++        if self.reader_error is not None:
++            return "reader failed: " + self.reader_error
++        return None
++
++    def _timeout_reason(self, label: str, timeout_s: float) -> str:
++        fault = self._fault_reason()
++        if fault is not None:
++            return fault
++        self.timed_out = True
++        return "%s timeout after %.2fs" % (label, timeout_s)
+ 
+     # ---- 发送与收尾 -----------------------------------------------------
+     def send(self, command: str) -> bool:
+@@ -277,7 +393,7 @@
+             if (
+                 self.proc is not None
+                 and self.proc.poll() is not None
+-                and self.eof.is_set()
++                and self.reader_done.is_set()
+                 and self.q.empty()
+             ):
+                 return True
+@@ -287,7 +403,7 @@
+                 return (
+                     self.proc is not None
+                     and self.proc.poll() is not None
+-                    and self.eof.is_set()
++                    and self.reader_done.is_set()
+                     and self.q.empty()
+                 )
+             time.sleep(min(0.02, remaining))
+@@ -306,6 +422,77 @@
+         self._close_stdin()
+ 
+     # ---- 主流程 ---------------------------------------------------------
++    def _execute_steps(self, p1: float, p2: float) -> str:
++        """依次完成初始化、P1、P2、quit；返回成功 "ok" 或失败原因。"""
++        if not self._wait_for(lambda: self.init_ok, self.init_timeout_s):
++            return self._timeout_reason("INIT_OK", self.init_timeout_s)
++        fault = self._fault_reason()
++        if fault is not None:
++            return fault
++
++        if not self._wait_for(lambda: self.state_seen, self.state_timeout_s):
++            return self._timeout_reason("STATE", self.state_timeout_s)
++        fault = self._fault_reason()
++        if fault is not None:
++            return fault
++
++        if (
++            self.expect_az is not None
++            and self.last_state is not None
++            and not (
++                self.expect_az[0] <= self.last_state[0] <= self.expect_az[1]
++            )
++        ):
++            return "preflight az=%.4f outside [%.4f, %.4f]" % (
++                self.last_state[0],
++                self.expect_az[0],
++                self.expect_az[1],
++            )
++        if self.last_state is not None:
++            self._note(
++                "PREFLIGHT az=%.4f el=%.4f"
++                % (self.last_state[0], self.last_state[1])
++            )
++        fault = self._fault_reason()
++        if fault is not None:
++            return fault
++
++        # P1：发送后必须等到 seq=1 的明确到位或工具侧失败。
++        if not self.send("move el %.4f" % p1):
++            return "P1 send failed"
++        if not self._wait_arrival(1, self.move_timeout_s):
++            return self._timeout_reason("P1", self.move_timeout_s)
++        fault = self._fault_reason()
++        if fault is not None:
++            return fault
++        if self.terminal_reason is not None:
++            return "P1 tool terminal: " + self.terminal_reason
++        self._note("P1 ARRIVED")
++        fault = self._fault_reason()
++        if fault is not None:
++            return fault
++
++        # P2：序号必须递增，不能只看“某次到位”。
++        if not self.send("move el %.4f" % p2):
++            return "P2 send failed"
++        if not self._wait_arrival(2, self.move_timeout_s):
++            return self._timeout_reason("P2", self.move_timeout_s)
++        fault = self._fault_reason()
++        if fault is not None:
++            return fault
++        if self.terminal_reason is not None:
++            return "P2 tool terminal: " + self.terminal_reason
++        self._note("P2 ARRIVED")
++        fault = self._fault_reason()
++        if fault is not None:
++            return fault
++
++        # 两步都到位后才正常退出。
++        if not self.send("quit"):
++            return "quit send failed"
++        self._close_stdin()
++        return "ok"
++
+     def run(self, p1: float, p2: float) -> RunResult:
+         self.started_at = time.monotonic()
+         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+@@ -313,98 +500,60 @@
+         self.log = self.log_path.open("w", encoding="utf-8", newline="\n")
+ 
+         reason = "ok"
++        fatal: Optional[BaseException] = None
+         try:
+-            self.proc = subprocess.Popen(
+-                self.command,
+-                stdin=subprocess.PIPE,
+-                stdout=subprocess.PIPE,
+-                stderr=subprocess.STDOUT,
+-                text=True,
+-                bufsize=1,
+-            )
+-            assert self.proc.stdout is not None
+-            self.reader = threading.Thread(
+-                target=self._reader_main,
+-                args=(self.proc.stdout,),
+-                name="t2-driver-reader",
+-                daemon=True,
+-            )
+-            self.reader.start()
+-
+-            # 1. 初始化与同轮状态。先读状态再发任何定位命令。
+-            if not self._wait_for(lambda: self.init_ok, self.init_timeout_s):
+-                reason = "no INIT_OK within %.1fs" % self.init_timeout_s
+-                self.timed_out = True
+-            elif not self._wait_for(
+-                lambda: self.state_seen, self.state_timeout_s
+-            ):
+-                reason = "no STATE within %.1fs" % self.state_timeout_s
+-                self.timed_out = True
+-            elif (
+-                self.expect_az is not None
+-                and self.last_state is not None
+-                and not (
+-                    self.expect_az[0]
+-                    <= self.last_state[0]
+-                    <= self.expect_az[1]
++            try:
++                self.proc = subprocess.Popen(
++                    self.command,
++                    stdin=subprocess.PIPE,
++                    stdout=subprocess.PIPE,
++                    stderr=subprocess.STDOUT,
++                    text=True,
++                    encoding="utf-8",
++                    errors="strict",
++                    bufsize=1,
+                 )
+-            ):
+-                reason = "preflight az=%.4f outside [%.4f, %.4f]" % (
+-                    self.last_state[0],
+-                    self.expect_az[0],
+-                    self.expect_az[1],
++                assert self.proc.stdout is not None
++                self.reader = threading.Thread(
++                    target=self._reader_main,
++                    args=(self.proc.stdout,),
++                    name="t2-driver-reader",
++                    daemon=True,
+                 )
+-            else:
+-                if self.last_state is not None:
+-                    self._note(
+-                        "PREFLIGHT az=%.4f el=%.4f"
+-                        % (self.last_state[0], self.last_state[1])
+-                    )
+-
+-                # 2. P1：发送后必须等到 seq=1 的明确到位或工具侧失败。
+-                if not self.send("move el %.4f" % p1):
+-                    reason = "P1 send failed"
+-                elif not self._wait_for(
+-                    lambda: 1 in self.arrivals
+-                    or self.terminal_reason is not None,
+-                    self.move_timeout_s,
+-                ):
+-                    reason = "P1 timeout after %.1fs" % self.move_timeout_s
+-                    self.timed_out = True
+-                elif self.terminal_reason is not None:
+-                    reason = "P1 tool terminal: " + self.terminal_reason
+-                else:
+-                    self._note("P1 ARRIVED")
+-
+-                    # 3. P2：序号必须递增，不能只看“某次到位”。
+-                    if not self.send("move el %.4f" % p2):
+-                        reason = "P2 send failed"
+-                    elif not self._wait_for(
+-                        lambda: 2 in self.arrivals
+-                        or self.terminal_reason is not None,
+-                        self.move_timeout_s,
+-                    ):
+-                        reason = "P2 timeout after %.1fs" % self.move_timeout_s
+-                        self.timed_out = True
+-                    elif self.terminal_reason is not None:
+-                        reason = "P2 tool terminal: " + self.terminal_reason
+-                    else:
+-                        self._note("P2 ARRIVED")
+-                        # 4. 两步都到位后才正常退出。
+-                        if not self.send("quit"):
+-                            reason = "quit send failed"
+-                        self._close_stdin()
++                self.reader.start()
++                reason = self._execute_steps(p1, p2)
++            except BaseException as exc:
++                # 驱动自身异常（含受控的日志写入失败）也必须走有界收尾，
++                # 不能让子进程留在运行状态。
++                self.driver_exception = "%s: %s" % (type(exc).__name__, exc)
++                reason = "driver exception: " + self.driver_exception
++                self._safe_note("DRIVER_EXCEPTION " + self.driver_exception)
++                if not isinstance(exc, Exception):
++                    fatal = exc
+ 
+             # 失败路径：先 stop 再 quit；成功路径已经发过 quit。
+-            if reason != "ok" and self.proc.poll() is None:
+-                self._stop_then_quit()
+-
+-            # 5. 无论成功失败，都收集到 EOF；退出超时明确判失败并强杀。
+-            if not self._wait_exit(self.exit_timeout_s):
++            if (
++                reason != "ok"
++                and self.proc is not None
++                and self.proc.poll() is None
++            ):
++                try:
++                    self._stop_then_quit()
++                except Exception as exc:
++                    cleanup_error = "%s: %s" % (type(exc).__name__, exc)
++                    if self.driver_exception is None:
++                        self.driver_exception = cleanup_error
++                    self._safe_note("STOP_QUIT_FAILED " + cleanup_error)
++
++            # 无论成功失败，都收集到 EOF；退出超时明确判失败并强杀。
++            exit_ok = False
++            if self.proc is not None:
++                exit_ok = self._wait_exit(self.exit_timeout_s)
++            if not exit_ok and self.proc is not None:
+                 if self.proc.poll() is None:
+                     self.forced_termination = True
+                     self._note(
+-                        "EXIT_TIMEOUT after %.1fs; killing process"
++                        "EXIT_TIMEOUT after %.2fs; killing process"
+                         % self.exit_timeout_s
+                     )
+                     try:
+@@ -417,21 +566,31 @@
+                         self._note("KILL_WAIT_TIMEOUT")
+                 # 强杀后给 reader 最多 1 s 收 EOF。
+                 eof_deadline = time.monotonic() + 1.0
+-                while not self.eof.is_set() and time.monotonic() < eof_deadline:
++                while (
++                    not self.reader_done.is_set()
++                    and time.monotonic() < eof_deadline
++                ):
+                     self._drain_available()
+                     time.sleep(0.01)
+                 self._drain_available()
+                 if reason == "ok":
+-                    reason = "exit timeout after %.1fs" % self.exit_timeout_s
++                    reason = "exit timeout after %.2fs" % self.exit_timeout_s
+                 self.timed_out = True
+ 
+-            # 6. 读取剩余队列，确保日志与 EOF 判定一致。
++            # 读取剩余队列与迟到留档，确保日志与 EOF 判定一致。
+             self._drain_available()
+             if self.reader is not None:
+                 self.reader.join(timeout=1.0)
+             self._drain_available()
++            self._drain_deferred()
+ 
+-            exit_code = self.proc.returncode
++            fault = self._fault_reason()
++            if reason == "ok" and fault is not None:
++                reason = fault
++
++            exit_code = (
++                self.proc.returncode if self.proc is not None else None
++            )
+             checks = self._checks_dict(
+                 exit_code,
+                 eof_seen=self.eof.is_set(),
+@@ -457,14 +616,30 @@
+                 eof_seen=self.eof.is_set(),
+                 timed_out=self.timed_out,
+                 forced_termination=self.forced_termination,
++                reader_error=self.reader_error,
++                log_error=self.log_error,
++                driver_exception=self.driver_exception,
+                 elapsed_s=time.monotonic() - self.started_at,
+                 log_path=str(self.log_path),
+                 notes_path=str(self.notes_path),
+             )
+             self._write_result(result)
+             self._write_notes(result)
++            if fatal is not None:
++                raise fatal
+             return result
+         finally:
++            # 最后一道兜底：即使收尾代码自身异常，也不留下运行中的子进程。
++            if self.proc is not None and self.proc.poll() is None:
++                try:
++                    self._close_stdin()
++                except Exception:
++                    pass
++                try:
++                    self.proc.kill()
++                    self.proc.wait(timeout=2.0)
++                except (OSError, subprocess.TimeoutExpired):
++                    pass
+             if self.log is not None:
+                 try:
+                     self.log.close()
+@@ -473,7 +648,7 @@
+             if (
+                 self.proc is not None
+                 and self.proc.stdout is not None
+-                and self.eof.is_set()
++                and self.reader_done.is_set()
+             ):
+                 try:
+                     self.proc.stdout.close()
+@@ -493,6 +668,9 @@
+             "final_normal_exit_1": self.final_seen and self.normal_exit,
+             "exit_code_line_zero": self.exit_code_line == 0,
+             "eof": eof_seen,
++            "reader_ok": self.reader_error is None,
++            "log_ok": self.log_error is None,
++            "no_driver_exception": self.driver_exception is None,
+             "not_timed_out": not self.timed_out,
+             "not_forced": not self.forced_termination,
+             "no_tool_terminal_error": self.terminal_reason is None,
+@@ -523,6 +701,9 @@
+             "TIMED_OUT=%d" % (1 if result.timed_out else 0),
+             "FORCED_TERMINATION=%d"
+             % (1 if result.forced_termination else 0),
++            "READER_ERROR=%s" % (result.reader_error or ""),
++            "LOG_ERROR=%s" % (result.log_error or ""),
++            "DRIVER_EXCEPTION=%s" % (result.driver_exception or ""),
+             "ELAPSED_S=%.3f" % result.elapsed_s,
+             "LOG=%s" % result.log_path,
+         ]
+@@ -530,7 +711,17 @@
+             lines.append("CHECK %s=%d" % (name, 1 if ok else 0))
+         for note in self.notes:
+             lines.append("NOTE " + note)
+-        self.notes_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
++        try:
++            self.notes_path.write_text(
++                "\n".join(lines) + "\n", encoding="utf-8"
++            )
++        except OSError as exc:
++            # 结果仍返回给调用方；notes 写失败只报告到 stderr。
++            print(
++                "DRIVER: notes write failed: %s: %s"
++                % (type(exc).__name__, exc),
++                file=sys.stderr,
++            )
+ 
+ 
+ def run_driver(
+--- a/AircraftPoseSystem/tools/tests/fake_t2_tool.py
++++ b/AircraftPoseSystem/tools/tests/fake_t2_tool.py
+@@ -9,6 +9,8 @@
+   tail_output  quit 后延迟输出尾部记录（验证驱动会收集到 EOF）
+   exit_hang    quit 后不再输出也不退出（验证驱动超时强杀并判失败）
+   missing_final 退出码 0，但缺少 FINAL（验证不能误判成功）
++  invalid_tail  完整收尾行之后写入无法按 UTF-8 解码的字节（验证读取
++                异常不能被当成正常 EOF）
+ 
+ 假进程的输出行格式刻意与 tools/turntable_acceptance 的关键行一致，
+ 仅用于验证驱动状态机，不代表真实设备行为。
+@@ -142,6 +144,15 @@
+             if mode == "missing_final":
+                 emit_normal_exit(seq, 0, include_final=False)
+                 return 0
++            if mode == "invalid_tail":
++                # 收尾行本身完整；留出读取时间后写入非法 UTF-8，模拟读取
++                # 解码失败，确保驱动已经收到完整收尾行。
++                emit_normal_exit(seq, 0)
++                sys.stdout.flush()
++                time.sleep(0.10)
++                sys.stdout.buffer.write(b"\xff\xfeTAIL_NOT_UTF8\n")
++                sys.stdout.buffer.flush()
++                return 0
+             emit_normal_exit(seq, 0)
+             return 0
+         else:
+--- a/AircraftPoseSystem/tools/tests/test_t2_acceptance_driver.py
++++ b/AircraftPoseSystem/tools/tests/test_t2_acceptance_driver.py
+@@ -9,14 +9,21 @@
+   3. quit 后的尾部输出（必须持续收集到 EOF）
+   4. 退出卡住（必须强杀并判失败）
+ 另含两个对照：正常成功、缺少 FINAL 但退出码 0 不能误判成功。
++
++并覆盖独立复核提出的三处驱动缺陷：
++  5. 主线程调度停顿后，迟到到位仍须按接收时刻判超时，不得发送 P2；
++  6. 读取解码失败不能被当成正常 EOF；
++  7. 日志写入异常仍须执行有界停止/退出并回收子进程。
+ """
+ 
+ from __future__ import annotations
+ 
+ import sys
+ import tempfile
++import time
+ import unittest
+ from pathlib import Path
++from unittest import mock
+ 
+ TOOLS_DIR = Path(__file__).resolve().parents[1]
+ # 兼容仓库内 tools/tests/ 布局，也兼容把三个 .py 平铺到同一目录的复核包。
+@@ -30,13 +37,19 @@
+ 
+ 
+ class DriverCounterexampleTest(unittest.TestCase):
+-    def run_mode(self, mode: str, **kwargs):
++    def run_mode(self, mode: str, fake_args=(), **kwargs):
+         tmp = tempfile.TemporaryDirectory(prefix="t2-driver-test-")
+         self.addCleanup(tmp.cleanup)
+         root = Path(tmp.name)
+         log = root / "session.log"
+         notes = root / "notes.txt"
+-        command = [sys.executable, str(FAKE), "--mode", mode]
++        command = [
++            sys.executable,
++            str(FAKE),
++            "--mode",
++            mode,
++            *fake_args,
++        ]
+         result = driver.run_driver(
+             command=command,
+             log_path=log,
+@@ -133,6 +146,77 @@
+         self.assertIn("final_normal_exit_1", result.reason)
+         self.assertNotIn("FINAL initialized", text)
+ 
++    def test_late_arrival_after_scheduling_pause_does_not_release_timeout(self):
++        # P1 等待 50 ms；假工具 150 ms 才报到位；主线程处理
++        # MOVE_ACCEPTED 时停顿 300 ms。迟到行接收时刻必须按 reader
++        # 打点判断，不能因为主线程晚消费就解除超时或发送 P2。
++        original = driver._Session._handle_line
++        state = {"paused": False}
++
++        def paused_handle(session, line, *args, **kwargs):
++            if "MOVE_ACCEPTED" in line and not state["paused"]:
++                state["paused"] = True
++                time.sleep(0.30)
++            return original(session, line, *args, **kwargs)
++
++        with mock.patch.object(
++            driver._Session, "_handle_line", new=paused_handle
++        ):
++            result, text, notes = self.run_mode(
++                "late_arrival",
++                fake_args=("--late-delay", "0.15"),
++                move_timeout_s=0.05,
++                stop_timeout_s=1.0,
++                exit_timeout_s=2.0,
++            )
++        self.assertFalse(result.success)
++        self.assertTrue(result.timed_out)
++        self.assertEqual(result.arrivals, [])
++        self.assertIn("P1 timeout", result.reason)
++        self.assertNotIn('move el 0.0500', text)
++        self.assertIn("LATE_ARRIVAL seq=1", notes)
++
++    def test_reader_decode_error_is_not_normal_eof(self):
++        # 收尾行完整之后写入非法 UTF-8；读取失败必须单独报告，
++        # eof 判据不能因此变为通过。
++        result, text, _ = self.run_mode(
++            "invalid_tail", exit_timeout_s=2.0
++        )
++        self.assertFalse(result.success)
++        self.assertFalse(result.eof_seen)
++        self.assertIsNotNone(result.reader_error)
++        self.assertIn("UnicodeDecodeError", result.reader_error)
++        self.assertIn("reader failed", result.reason)
++        self.assertFalse(result.checks()["reader_ok"])
++        self.assertFalse(result.checks()["eof"])
++        self.assertIn("FINAL", text)
++
++    def test_log_write_exception_stops_and_reaps_child(self):
++        # P1 发出后，在处理 MOVE_ACCEPTED 时注入受控 OSError。
++        # 驱动必须仍尝试 stop/quit、回收子进程，并明确判失败。
++        original = driver._Session._write
++        state = {"raised": False}
++
++        def flaky_write(session, text):
++            if "MOVE_ACCEPTED" in text and not state["raised"]:
++                state["raised"] = True
++                raise OSError("injected log write failure")
++            return original(session, text)
++
++        with mock.patch.object(driver._Session, "_write", new=flaky_write):
++            result, text, notes = self.run_mode(
++                "normal", exit_timeout_s=2.0
++            )
++        self.assertFalse(result.success)
++        self.assertIn("driver exception", result.reason)
++        self.assertIn("injected log write failure", result.reason)
++        self.assertEqual(result.exit_code, 0)
++        self.assertIn('cmd="stop"', text)
++        self.assertIn('cmd="quit"', text)
++        self.assertNotIn('move el 0.0500', text)
++        self.assertIn("DRIVER_EXCEPTION", notes)
++        self.assertFalse(result.checks()["no_driver_exception"])
++
+ 
+ if __name__ == "__main__":
+     unittest.main(verbosity=2)

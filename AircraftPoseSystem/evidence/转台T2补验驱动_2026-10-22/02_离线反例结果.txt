@@ -1,0 +1,110 @@
+T2 补验执行驱动——离线反例结果（2026-10-22）
+
+环境：UOS Desktop 25，Python 3，仓库工作树
+测试入口：cd AircraftPoseSystem/tools && python3 -W error::ResourceWarning tests/test_t2_acceptance_driver.py -v
+测试范围：只启动 tests/fake_t2_tool.py 假子进程；不连接 UDP、不访问真实设备、不发送定位命令。
+
+一、unittest 汇总
+
+test_exit_hang_is_killed_and_fails ... ok
+test_late_arrival_times_out ... ok
+test_log_exit_nonzero_fails_even_with_real_exit_zero ... ok
+test_missing_final_is_not_success ... ok
+test_normal_success_control ... ok
+test_real_exit_nonzero_fails_even_with_log_exit_zero ... ok
+test_tail_output_is_collected_to_eof ... ok
+
+Ran 7 tests in 2.124s
+OK
+EXIT_CODE=0
+
+二、逐项判据（同一假进程接口，直接调用 run_driver）
+
+CASE normal
+  success=True reason=ok exit_code=0 arrivals=[1, 2]
+  eof=True timed_out=False forced=False
+  checks=arrival_seq1=1 arrival_seq2=1 exit_code_zero=1 exit_request=1 exit_stop=1 final_normal_exit_1=1 exit_code_line_zero=1 eof=1 not_timed_out=1 not_forced=1 no_tool_terminal_error=1
+  log_has_tail=False log_has_final=True log_has_exit0=True log_has_exit3=False
+
+CASE late_arrival
+  success=False reason=P1 timeout after 0.2s exit_code=0 arrivals=[1]
+  eof=True timed_out=True forced=False
+  checks=arrival_seq1=1 arrival_seq2=0 exit_code_zero=1 exit_request=1 exit_stop=1 final_normal_exit_1=1 exit_code_line_zero=1 eof=1 not_timed_out=0 not_forced=1 no_tool_terminal_error=1
+  log_has_tail=False log_has_final=True log_has_exit0=True log_has_exit3=False
+
+CASE real_exit_nonzero
+  success=False reason=success criteria failed: exit_code_zero exit_code=3 arrivals=[1, 2]
+  eof=True timed_out=False forced=False
+  checks=arrival_seq1=1 arrival_seq2=1 exit_code_zero=0 exit_request=1 exit_stop=1 final_normal_exit_1=1 exit_code_line_zero=1 eof=1 not_timed_out=1 not_forced=1 no_tool_terminal_error=1
+  log_has_tail=False log_has_final=True log_has_exit0=True log_has_exit3=False
+
+CASE log_exit_nonzero
+  success=False reason=success criteria failed: exit_code_line_zero exit_code=0 arrivals=[1, 2]
+  eof=True timed_out=False forced=False
+  checks=arrival_seq1=1 arrival_seq2=1 exit_code_zero=1 exit_request=1 exit_stop=1 final_normal_exit_1=1 exit_code_line_zero=0 eof=1 not_timed_out=1 not_forced=1 no_tool_terminal_error=1
+  log_has_tail=False log_has_final=True log_has_exit0=False log_has_exit3=True
+
+CASE tail_output
+  success=True reason=ok exit_code=0 arrivals=[1, 2]
+  eof=True timed_out=False forced=False
+  checks=arrival_seq1=1 arrival_seq2=1 exit_code_zero=1 exit_request=1 exit_stop=1 final_normal_exit_1=1 exit_code_line_zero=1 eof=1 not_timed_out=1 not_forced=1 no_tool_terminal_error=1
+  log_has_tail=True log_has_final=True log_has_exit0=True log_has_exit3=False
+
+CASE exit_hang
+  success=False reason=exit timeout after 0.3s exit_code=-9 arrivals=[1, 2]
+  eof=True timed_out=True forced=True
+  checks=arrival_seq1=1 arrival_seq2=1 exit_code_zero=0 exit_request=1 exit_stop=0 final_normal_exit_1=0 exit_code_line_zero=0 eof=1 not_timed_out=0 not_forced=0 no_tool_terminal_error=1
+  log_has_tail=False log_has_final=False log_has_exit0=False log_has_exit3=False
+
+CASE missing_final
+  success=False reason=success criteria failed: final_normal_exit_1 exit_code=0 arrivals=[1, 2]
+  eof=True timed_out=False forced=False
+  checks=arrival_seq1=1 arrival_seq2=1 exit_code_zero=1 exit_request=1 exit_stop=1 final_normal_exit_1=0 exit_code_line_zero=1 eof=1 not_timed_out=1 not_forced=1 no_tool_terminal_error=1
+  log_has_tail=False log_has_final=False log_has_exit0=True log_has_exit3=False
+
+三、对应关系
+
+* 迟到到位：late_arrival 在 0.2 s 后判 P1 timeout；迟到行仍在日志中，但
+  arrival_seq2=0、not_timed_out=0，不能判成功。
+* 真实退出码非 0：real_exit_nonzero 两次到位、收尾行齐全且
+  normal_exit=1、日志 EXIT_CODE 0，但真实进程退出码 3；只有
+  exit_code_zero=0，exit_code_line_zero=1 仍为通过。该用例单独证明驱动
+  检查了 proc.returncode，不能靠日志退出码兜底。
+* 日志退出码非 0：log_exit_nonzero 两次到位、收尾行齐全且
+  normal_exit=1、真实退出码 0，但日志 EXIT_CODE 3；只有
+  exit_code_line_zero=0，exit_code_zero=1 仍为通过。该用例单独证明驱动
+  检查了收尾行 EXIT_CODE，不能靠真实退出码兜底。
+* 尾部输出：tail_output 在 quit 后延迟 0.35 s 输出 TAIL_AFTER_QUIT，驱动
+  收集到 EOF，日志含 FINAL/EXIT_CODE 0，判成功。
+* 退出卡住：exit_hang 只输出 EXIT_REQUEST 后不退出；测试专用 0.3 s 后
+  强杀，exit_code=-9、timed_out=1、forced=1，判失败。
+* 对照：normal 全部判据为 1；missing_final 退出码 0 但缺少 FINAL，判失败。
+
+四、变异检查（证明两个退出码判据各自独立生效）
+
+基线 7/7 通过。分别把单个判据强制为 True，观察哪些用例变红：
+
+* 变异 1：`exit_code_zero` 强制为 True（移除真实退出码检查）
+  -> 仅 test_real_exit_nonzero_fails_even_with_log_exit_zero 变红，
+     AssertionError: True is not false；其余 6 个通过。
+* 变异 2：`exit_code_line_zero` 强制为 True（移除日志 EXIT_CODE 检查）
+  -> 仅 test_log_exit_nonzero_fails_even_with_real_exit_zero 变红，
+     AssertionError: True is not false；其余 6 个通过。
+* 恢复原实现 -> Ran 7 tests in 2.105s，OK。
+
+即：真实退出码检查缺失时，只有“真实退出码 3 / 日志 EXIT_CODE 0”的用例
+失败；日志退出码检查缺失时，只有“真实退出码 0 / 日志 EXIT_CODE 3”的
+用例失败。两者不能互相兜底。完整输出见
+验收证据/转台T2补验驱动_2026-10-22/04_变异检查.log。
+
+五、边界与限制
+
+* exit_hang 的 0.3 s 只是离线测试配置；实机 --exit-timeout 必须覆盖工具
+  自身退出路径的停止与观测预算，不能沿用测试值。
+* 强杀只表示驱动未取得正常退出结果，不表示设备已停止，也不能替代独立
+  停止措施。
+* 收尾行齐全、EOF 和退出码 0 只证明驱动完整收集了退出结果；“退出阶段
+  零补帧”仍需逐帧核对，normal_exit=1 本身不保证这一点。
+* 以上只验证驱动状态机与假子进程行为，不证明真实工具、真实退出阶段或
+  真实设备行为；本批没有重发任何实机定位命令。原始测试日志与退出码保存在
+  仓库根 验收证据/转台T2补验驱动_2026-10-22/。
