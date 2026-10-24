@@ -135,6 +135,21 @@ TEST(PelcoDCodec, SpeedControlPositionUsesTable365)
     expectFrame(vertical, {0xFF, 0x01, 0x4D, 0x08, 0xFA, 0x55, 0xA5});
 }
 
+TEST(PelcoDCodec, LowSpeedOnePointTwoEncodesFieldValueTwo)
+{
+    // 1.2 °/s = 0.2 r/min ⇒ 指令值 round(12/6) = 2。
+    EXPECT_EQ(aircraft::device::speedDegPerSecToRpm10(1.2),
+              static_cast<std::uint8_t>(2));
+
+    const auto horizontal = aircraft::device::encodePelcoD(
+        aircraft::device::makeAbsolutePositionWithSpeed(1, true, 4.72, 1.2));
+    expectFrame(horizontal, {0xFF, 0x01, 0x4B, 0x02, 0x01, 0xD8, 0x27});
+
+    const auto vertical = aircraft::device::encodePelcoD(
+        aircraft::device::makeAbsolutePositionWithSpeed(1, false, -14.51, 1.2));
+    expectFrame(vertical, {0xFF, 0x01, 0x4D, 0x02, 0xFA, 0x55, 0x9F});
+}
+
 TEST(PelcoDCodec, SpeedConversionUsesDivideBySix)
 {
     EXPECT_EQ(aircraft::device::speedDegPerSecToRpm10(5.0),

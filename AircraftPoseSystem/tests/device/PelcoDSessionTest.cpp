@@ -586,6 +586,35 @@ TEST(PelcoDSessionTest, SpeedControlUsesTable365AndRpm10)
     EXPECT_EQ(h.data2, 8);
 }
 
+TEST(PelcoDSessionTest, LowSpeedOnePointFiveDegreeUsesFieldValueTwo)
+{
+    // T3 预备：1.5° 位移在 >1.0° 分支选 coarse_speed。现场若要 1.2 °/s，
+    // coarse 与 fine 都必须配成 1.2；帧内转速字段应为 2，而不是 12。
+    data::TurntableConfig cfg = makeConfig(true);
+    cfg.useSpeedControl = true;
+    cfg.coarseSpeed     = 1.2;
+    cfg.fineSpeed       = 1.2;
+
+    Fixture f(cfg, true);
+    ASSERT_TRUE(f.init());
+    f.fake->sent.clear();
+
+    data::TurntableCommand command;
+    command.azimuthCommand   = 1.5;
+    command.elevationCommand = 0.0;
+
+    std::string error;
+    EXPECT_TRUE(f.session->move(command, error));
+    ASSERT_EQ(f.fake->sent.size(), 2u);
+
+    const PelcoDFrame h = FakePelcoTransport::decode(f.fake->sent[0]);
+    EXPECT_EQ(h.data1, 0x4B);
+    EXPECT_EQ(h.data2, 2);
+    const PelcoDFrame v = FakePelcoTransport::decode(f.fake->sent[1]);
+    EXPECT_EQ(v.data1, 0x4D);
+    EXPECT_EQ(v.data2, 2);
+}
+
 // ---------------------------------------------------------------------------
 //  C2：STABLE 撤销 / 样本过期
 // ---------------------------------------------------------------------------

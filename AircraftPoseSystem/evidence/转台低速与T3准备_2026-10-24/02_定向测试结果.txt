@@ -1,0 +1,35 @@
+低速定位定向测试结果（2026-10-24，离线，无设备、无 UDP 到真实设备）
+
+环境：UOS Desktop 25；构建树 build-native-on / build-native-off；GoogleTest。
+
+一、完整 test_pelco_d（build-native-on）
+
+[----------] Global test environment tear-down
+[==========] 117 tests from 5 test suites ran. (2294 ms total)
+[  PASSED  ] 117 tests.
+EXIT_CODE=0
+
+二、定向过滤 *LowSpeedOnePoint*
+[==========] Running 2 tests from 2 test suites.
+[ RUN      ] PelcoDCodec.LowSpeedOnePointTwoEncodesFieldValueTwo
+[       OK ] PelcoDCodec.LowSpeedOnePointTwoEncodesFieldValueTwo (0 ms)
+[ RUN      ] PelcoDSessionTest.LowSpeedOnePointFiveDegreeUsesFieldValueTwo
+[       OK ] PelcoDSessionTest.LowSpeedOnePointFiveDegreeUsesFieldValueTwo (0 ms)
+[==========] 2 tests from 2 test suites ran. (0 ms total)
+[  PASSED  ] 2 tests.
+EXIT_CODE=0
+
+三、build-native-off 完整 test_pelco_d
+117 tests from 5 test suites ran.
+[  PASSED  ] 117 tests.
+EXIT_CODE=0
+
+四、工具二进制速度提示字符串
+SPEED_NOTE use_speed_control=1
+SPEED_NOTE use_speed_control=0
+
+五、结论
+1. 1.2 °/s 换算为 r/min×10 字段值 2，两轴完整帧逐字节通过。
+2. 1.5° 位移在 coarse=1.2 时两轴 data2=2，未误发默认速度。
+3. 工具不再硬拒绝 use_speed_control=true；仍须许可才 MotionEnabled。
+4. 以上不证明设备固件执行速度字段，也不证明实际有效速度。

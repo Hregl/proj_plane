@@ -1,0 +1,127 @@
+diff --git a/AircraftPoseSystem/tests/device/PelcoDCodecTest.cpp b/AircraftPoseSystem/tests/device/PelcoDCodecTest.cpp
+index 0698c18..9f408b4 100644
+--- a/AircraftPoseSystem/tests/device/PelcoDCodecTest.cpp
++++ b/AircraftPoseSystem/tests/device/PelcoDCodecTest.cpp
+@@ -135,6 +135,21 @@ TEST(PelcoDCodec, SpeedControlPositionUsesTable365)
+     expectFrame(vertical, {0xFF, 0x01, 0x4D, 0x08, 0xFA, 0x55, 0xA5});
+ }
+ 
++TEST(PelcoDCodec, LowSpeedOnePointTwoEncodesFieldValueTwo)
++{
++    // 1.2 °/s = 0.2 r/min ⇒ 指令值 round(12/6) = 2。
++    EXPECT_EQ(aircraft::device::speedDegPerSecToRpm10(1.2),
++              static_cast<std::uint8_t>(2));
++
++    const auto horizontal = aircraft::device::encodePelcoD(
++        aircraft::device::makeAbsolutePositionWithSpeed(1, true, 4.72, 1.2));
++    expectFrame(horizontal, {0xFF, 0x01, 0x4B, 0x02, 0x01, 0xD8, 0x27});
++
++    const auto vertical = aircraft::device::encodePelcoD(
++        aircraft::device::makeAbsolutePositionWithSpeed(1, false, -14.51, 1.2));
++    expectFrame(vertical, {0xFF, 0x01, 0x4D, 0x02, 0xFA, 0x55, 0x9F});
++}
++
+ TEST(PelcoDCodec, SpeedConversionUsesDivideBySix)
+ {
+     EXPECT_EQ(aircraft::device::speedDegPerSecToRpm10(5.0),
+diff --git a/AircraftPoseSystem/tests/device/PelcoDSessionTest.cpp b/AircraftPoseSystem/tests/device/PelcoDSessionTest.cpp
+index 632bc2a..4d134ed 100644
+--- a/AircraftPoseSystem/tests/device/PelcoDSessionTest.cpp
++++ b/AircraftPoseSystem/tests/device/PelcoDSessionTest.cpp
+@@ -586,6 +586,35 @@ TEST(PelcoDSessionTest, SpeedControlUsesTable365AndRpm10)
+     EXPECT_EQ(h.data2, 8);
+ }
+ 
++TEST(PelcoDSessionTest, LowSpeedOnePointFiveDegreeUsesFieldValueTwo)
++{
++    // T3 预备：1.5° 位移在 >1.0° 分支选 coarse_speed。现场若要 1.2 °/s，
++    // coarse 与 fine 都必须配成 1.2；帧内转速字段应为 2，而不是 12。
++    data::TurntableConfig cfg = makeConfig(true);
++    cfg.useSpeedControl = true;
++    cfg.coarseSpeed     = 1.2;
++    cfg.fineSpeed       = 1.2;
++
++    Fixture f(cfg, true);
++    ASSERT_TRUE(f.init());
++    f.fake->sent.clear();
++
++    data::TurntableCommand command;
++    command.azimuthCommand   = 1.5;
++    command.elevationCommand = 0.0;
++
++    std::string error;
++    EXPECT_TRUE(f.session->move(command, error));
++    ASSERT_EQ(f.fake->sent.size(), 2u);
++
++    const PelcoDFrame h = FakePelcoTransport::decode(f.fake->sent[0]);
++    EXPECT_EQ(h.data1, 0x4B);
++    EXPECT_EQ(h.data2, 2);
++    const PelcoDFrame v = FakePelcoTransport::decode(f.fake->sent[1]);
++    EXPECT_EQ(v.data1, 0x4D);
++    EXPECT_EQ(v.data2, 2);
++}
++
+ // ---------------------------------------------------------------------------
+ //  C2：STABLE 撤销 / 样本过期
+ // ---------------------------------------------------------------------------
+diff --git a/AircraftPoseSystem/tools/turntable_acceptance.cpp b/AircraftPoseSystem/tools/turntable_acceptance.cpp
+index ea29676..5db33d9 100644
+--- a/AircraftPoseSystem/tools/turntable_acceptance.cpp
++++ b/AircraftPoseSystem/tools/turntable_acceptance.cpp
+@@ -24,9 +24,11 @@
+ //      协议层的单帧回显重试是生产会话既有行为，不是“重跑测试序列”；
+ //    · 许可只约束新的运动。停止/退出/故障收口不看许可期限。
+ //
+-//  ⚠ 速度：当前只允许 `use_speed_control=false`（设备默认速度）。
+-//    `fine_speed`/`coarse_speed` 不是受控速度；未经验证的转速控制协议
+-//    在本工具中直接拒绝。
++//  ⚠ 速度：`use_speed_control=false`（默认）= 表 3.5 设备默认速度；
++//    `use_speed_control=true` = 表 3.65，帧内携带转速。deg/s → r/min×10
++//    的换算由生产 codec 完成，本工具不另写一套。启用 3.65 必须在本轮
++//    书面授权中明确；配置仍须显式给出 coarse_speed/fine_speed
++//    （位移 >1.0° 用粗调，否则用精调）。
+ //
+ //  ⚠ 证据：
+ //    工具输出**不含设备地址原文**（只打印端口/地址号）。完整原始记录
+@@ -712,11 +714,20 @@ int main(int argc, char** argv)
+     {
+         std::printf("CONFIG_DEFAULT %s\n", f.c_str());
+     }
+-    std::printf(
+-        "SPEED_NOTE use_speed_control=%d：本轮%s转速控制协议；"
+-        "fine_speed/coarse_speed 不是受控速度，命令使用设备默认速度\n",
+-        cfg.useSpeedControl ? 1 : 0,
+-        cfg.useSpeedControl ? "拒绝启用" : "不启用");
++    if (cfg.useSpeedControl)
++    {
++        std::printf(
++            "SPEED_NOTE use_speed_control=1：表 3.65 转速控制；"
++            "位移 >1.0° 用 coarse_speed=%.3f °/s，否则 fine_speed=%.3f °/s；"
++            "仅限本轮书面授权范围\n",
++            cfg.coarseSpeed, cfg.fineSpeed);
++    }
++    else
++    {
++        std::printf(
++            "SPEED_NOTE use_speed_control=0：表 3.5 设备默认速度；"
++            "fine_speed/coarse_speed 不随命令发送\n");
++    }
+     std::fflush(stdout);
+ 
+     if (cfg.protocol != "pelco_d_udp")
+@@ -737,13 +748,8 @@ int main(int argc, char** argv)
+             std::printf("PERMIT_PARSE_FAILED \"%s\"\n", error.c_str());
+             return 2;
+         }
+-        if (cfg.useSpeedControl)
+-        {
+-            std::printf(
+-                "ABORT use_speed_control=true：未经验证的转速控制协议"
+-                "不得在本轮启用\n");
+-            return 2;
+-        }
++        // 表 3.65（use_speed_control=true）在提供许可时按本地配置启用；
++        // 速度值只来自配置，本工具没有命令行速度参数，也不会自动改配置。
+         // 代码内的显式选择：只有提供许可时，本验收工具才把会话设为
+         // MotionEnabled。config/ 没有这个键，生产装配也没有这条路径。
+         cfg.sendPolicy = TurntableSendPolicy::MotionEnabled;
