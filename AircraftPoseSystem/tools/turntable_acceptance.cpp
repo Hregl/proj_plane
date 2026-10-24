@@ -821,6 +821,10 @@ int main(int argc, char** argv)
 
         MoveTrack track;
         StopWatch stopWatch;
+        // 普通 stop 的工具日志关联号：每次 stop 唯一，仅用于把
+        // STOP_REQUEST 与本次 STOP_RESULT 配对；不替代控制器
+        // request_seq/completed_seq 的原义。
+        std::uint64_t stopId = 0;
         std::vector<double> arrivalAz;
         std::vector<double> arrivalEl;
         std::vector<double> arrivalTargetAz;
@@ -897,10 +901,14 @@ int main(int argc, char** argv)
                 {
                     const TurntableState before = controller.state();
                     const TurntableDiagnostics d0 = controller.diagnostics();
+                    ++stopId;
                     std::printf(
-                        "STOP_REQUEST t=%lldms at_motion=%s cycle=%llu "
+                        "STOP_REQUEST t=%lldms stop_id=%llu "
+                        "at_motion=%s cycle=%llu "
                         "az=%.4f el=%.4f fresh=%d txn=%llu stop_txn=%llu\n",
-                        elapsedMs(), motionName(before.motion),
+                        elapsedMs(),
+                        static_cast<unsigned long long>(stopId),
+                        motionName(before.motion),
                         static_cast<unsigned long long>(
                             d0.sample.cycleId),
                         before.azimuth, before.elevation,
@@ -933,12 +941,14 @@ int main(int argc, char** argv)
                         sendPath = "no_frame(no_motion_in_flight)";
                     }
                     std::printf(
-                        "STOP_RESULT t=%lldms request_seq=%llu "
+                        "STOP_RESULT t=%lldms stop_id=%llu "
+                        "request_seq=%llu "
                         "completed_seq=%llu stop_delivered=%d "
                         "stop_stationary=%d uncertain=%d "
                         "stop_txn=%llu motion_txn_before=%llu "
                         "send_path=%s\n",
                         elapsedMs(),
+                        static_cast<unsigned long long>(stopId),
                         static_cast<unsigned long long>(d1.stopRequestSeq),
                         static_cast<unsigned long long>(d1.stopCompletedSeq),
                         d1.stopFrameDelivered ? 1 : 0,

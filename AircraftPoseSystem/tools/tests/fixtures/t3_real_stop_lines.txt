@@ -1,0 +1,6 @@
+# 真实工具输出格式回放（离线，不连接设备）。
+# 原始行取自 验收证据/转台验收工具_2026-10-21/offline_G_permit_move_stop.log:184-186；
+# 2026-10-24 起 turntable_acceptance 在 t=...ms 后打印本次 stop 的 stop_id，
+# 因此回放行按该格式插入 stop_id=1。request_seq/completed_seq 保持控制器原义。
+STOP_REQUEST t=1850ms stop_id=1 at_motion=MOVING cycle=36 az=3.0000 el=0.0000 fresh=1 txn=2 stop_txn=0
+STOP_RESULT t=1850ms stop_id=1 request_seq=1 completed_seq=1 stop_delivered=1 stop_stationary=0 uncertain=0 stop_txn=2 motion_txn_before=2 send_path=stop_frame_delivered

@@ -8,8 +8,9 @@
   4. 触发前已到位：不得把收尾 stop 当作运动中的停止；
   5. 缺少 STOP_RESULT：不得把“stop 已发”当成“发送结果已知”，也不得
      用本次 stop 请求之前的旧 STOP_RESULT 解除等待。
-  6. 旧结果已排队、处理时 stop 已发：按接收时刻与请求编号拒绝。
+  6. 旧结果已排队、处理时 stop 已发：按接收时刻与工具 stop_id 拒绝。
   7. 先反向再连续正常方向：方向异常锁存，不得改回正常触发。
+  8. 真实工具输出格式回放：同一次 stop 的 stop_id 配对成功。
 """
 
 from __future__ import annotations
@@ -216,7 +217,7 @@ class T3DriverTest(unittest.TestCase):
         time.sleep(0.01)
         session._send_stop("queued_old")
         old_line = (
-            "STOP_RESULT t=5ms request_seq=1 completed_seq=1 "
+            "STOP_RESULT t=5ms stop_id=1 request_seq=1 completed_seq=1 "
             "stop_delivered=1 stop_stationary=1 uncertain=0 "
             "stop_txn=1 motion_txn_before=0 "
             "send_path=acceptance_stop")
@@ -227,14 +228,32 @@ class T3DriverTest(unittest.TestCase):
         self.assertIn("reason=received_before_stop",
                       "\n".join(session.notes))
 
-        # 接收时刻新，但请求编号不是本次 stop 的编号：同样拒绝。
-        session.stop_request_seq = 7
+        # 接收时刻新，但 stop_id 不是本次 stop 的编号：同样拒绝。
+        session.stop_id = 7
         session._handle_line(
-            old_line.replace("request_seq=1", "request_seq=6"),
+            old_line.replace("stop_id=1", "stop_id=6"),
             recv_at=time.monotonic())
         self.assertFalse(session.stop_result_seen)
-        self.assertEqual(session.stop_result_seq_mismatch, 1)
-        self.assertIn("reason=seq_mismatch expected=7",
+        self.assertEqual(session.stop_result_id_mismatch, 1)
+        self.assertIn("reason=stop_id_mismatch expected=7",
+                      "\n".join(session.notes))
+
+    def test_real_format_replay_pairs_by_stop_id(self):
+        session = self.make_session(fresh_s=5.0)
+        session._send_stop("replay")
+        fixture = (Path(__file__).resolve().with_name("fixtures")
+                   / "t3_real_stop_lines.txt")
+        recv = time.monotonic()
+        for line in fixture.read_text(encoding="utf-8").splitlines():
+            if line.strip() and not line.lstrip().startswith("#"):
+                session._handle_line(line, recv_at=recv)
+        self.assertTrue(session.stop_result_seen)
+        self.assertTrue(session.stop_delivered)
+        self.assertFalse(session.stop_stationary)
+        self.assertEqual(session.stop_send_path, "stop_frame_delivered")
+        self.assertEqual(session.stop_id, 1)
+        self.assertEqual(session.stop_result_id_mismatch, 0)
+        self.assertIn("STOP_RESULT stop_id=1 request_seq=1 completed_seq=1",
                       "\n".join(session.notes))
 
     def test_reverse_then_normal_cannot_trigger(self):

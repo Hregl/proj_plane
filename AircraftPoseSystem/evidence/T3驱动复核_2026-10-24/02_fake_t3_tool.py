@@ -80,15 +80,15 @@ def motion_thread(mode: str, az: float, start_raw: int, seq: int,
             return
 
 
-def emit_stop_result(mode: str, seq: int) -> None:
+def emit_stop_result(mode: str, seq: int, stop_id: int) -> None:
     global _EMITTED_STOP_RESULT
     delivered = 0 if mode == "fast_arrival" else 1
     stationary = 0 if mode == "not_observed" else 1
     path = "no_motion_in_flight" if delivered == 0 else "acceptance_stop"
-    out("STOP_RESULT t=300ms request_seq=%d completed_seq=%d "
+    out("STOP_RESULT t=300ms stop_id=%d request_seq=%d completed_seq=%d "
         "stop_delivered=%d stop_stationary=%d uncertain=%d "
         "stop_txn=%d motion_txn_before=1 send_path=%s"
-        % (seq, seq, delivered, stationary,
+        % (stop_id, seq, seq, delivered, stationary,
            1 if mode == "not_observed" else 0, seq + 1, path))
     if mode == "not_observed":
         out("STOP_NOT_OBSERVED stop_txn=%d uncertain=1 "
@@ -121,6 +121,7 @@ def main() -> int:
     az = -0.5200
     start_raw = 309
     seq = 0
+    stop_id = 0
     stopped = False
     delivered = 0
     worker = None
@@ -132,7 +133,7 @@ def main() -> int:
     emit_state(0, az, start_raw / 100.0, 1, "STABLE")
     if mode == "no_stop_result":
         # 会话开始时的无请求旧结果：驱动不得用它解除本次停止收尾等待。
-        out("STOP_RESULT t=5ms request_seq=0 completed_seq=0 "
+        out("STOP_RESULT t=5ms stop_id=0 request_seq=0 completed_seq=0 "
             "stop_delivered=1 stop_stationary=1 uncertain=0 "
             "stop_txn=0 motion_txn_before=0 "
             "send_path=stop_frame_delivered")
@@ -161,21 +162,23 @@ def main() -> int:
             worker.start()
         elif cmd == "stop":
             stopped = True
+            stop_id += 1
             _STOP.set()
             if worker is not None:
                 worker.join(timeout=0.5)
-            out("STOP_REQUEST t=290ms request_seq=%d at_motion=MOVING"
-                % seq)
+            out("STOP_REQUEST t=290ms stop_id=%d at_motion=MOVING "
+                "cycle=2 az=%.4f el=3.0100 fresh=1 txn=1 stop_txn=0"
+                % (stop_id, az))
             if mode == "no_stop_result":
                 continue
-            emit_stop_result(mode, seq)
+            emit_stop_result(mode, seq, stop_id)
             delivered = 0 if mode == "fast_arrival" else 1
         elif cmd in ("quit", "q"):
             _STOP.set()
             if worker is not None:
                 worker.join(timeout=0.5)
             if not _EMITTED_STOP_RESULT and mode != "no_stop_result":
-                emit_stop_result(mode, seq)
+                emit_stop_result(mode, seq, stop_id)
                 delivered = 0 if mode == "fast_arrival" else 1
             emit_exit(seq, stopped, delivered)
             return 0

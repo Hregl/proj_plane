@@ -47,9 +47,10 @@ RX_RE = re.compile(
 )
 STATE_RE = re.compile(r"\bSTATE\b.*\baz=([-+0-9.]+)\s+el=([-+0-9.]+)")
 MOVE_ACCEPTED_RE = re.compile(r"\bMOVE_ACCEPTED\s+accepted=(\d+)")
-STOP_REQUEST_RE = re.compile(r"\bSTOP_REQUEST\b.*?\brequest_seq=(\d+)")
+STOP_REQUEST_RE = re.compile(r"\bSTOP_REQUEST\b.*?\bstop_id=(\d+)")
 STOP_RESULT_RE = re.compile(
-    r"\bSTOP_RESULT\b.*?\brequest_seq=(\d+).*?\bcompleted_seq=(\d+).*?"
+    r"\bSTOP_RESULT\b.*?\bstop_id=(\d+).*?\brequest_seq=(\d+).*?"
+    r"\bcompleted_seq=(\d+).*?"
     r"\bstop_delivered=(\d).*?\bstop_stationary=(\d).*?\bsend_path=(\S+)"
 )
 EXIT_CODE_RE = re.compile(r"^\s*EXIT_CODE\s+(-?\d+)\s*$")
@@ -77,7 +78,7 @@ class T3Result:
     direction_fault: bool = False
     stop_result_seen: bool = False
     stop_result_before_request: int = 0
-    stop_result_seq_mismatch: int = 0
+    stop_result_id_mismatch: int = 0
     stop_delivered: Optional[bool] = None
     stop_stationary: Optional[bool] = None
     stop_send_path: Optional[str] = None
@@ -157,8 +158,8 @@ class _Session:
         self.stop_requested_at: Optional[float] = None
         self.stop_result_seen = False
         self.stop_result_before_request = 0
-        self.stop_result_seq_mismatch = 0
-        self.stop_request_seq: Optional[int] = None
+        self.stop_result_id_mismatch = 0
+        self.stop_id: Optional[int] = None
         self.stop_delivered: Optional[bool] = None
         self.stop_stationary: Optional[bool] = None
         self.stop_send_path: Optional[str] = None
@@ -288,16 +289,18 @@ class _Session:
 
         m = STOP_REQUEST_RE.search(line)
         if m:
-            self.stop_request_seq = int(m.group(1))
-            self._note("STOP_REQUEST seq=%d" % self.stop_request_seq)
+            self.stop_id = int(m.group(1))
+            self._note("STOP_REQUEST stop_id=%d" % self.stop_id)
             return
 
         m = STOP_RESULT_RE.search(line)
         if m:
-            seq = int(m.group(1))
-            delivered = int(m.group(3))
-            stationary = int(m.group(4))
-            path = m.group(5)
+            stop_id = int(m.group(1))
+            request_seq = int(m.group(2))
+            completed_seq = int(m.group(3))
+            delivered = int(m.group(4))
+            stationary = int(m.group(5))
+            path = m.group(6)
             reason = None
             if not self.stop_requested:
                 reason = "no_stop_request"
@@ -306,26 +309,30 @@ class _Session:
                 # 结果行虽在处理时 stop 已发出，但接收时刻早于本次请求：
                 # 它属于旧请求，不能解除本次收尾等待。
                 reason = "received_before_stop"
-            elif self.stop_request_seq is None:
-                reason = "stop_request_seq_unknown"
-            elif seq != self.stop_request_seq:
-                reason = "seq_mismatch expected=%d" % self.stop_request_seq
+            elif self.stop_id is None:
+                reason = "stop_id_unknown"
+            elif stop_id != self.stop_id:
+                reason = "stop_id_mismatch expected=%d" % self.stop_id
             if reason is not None:
-                if (reason.startswith("seq_mismatch")
-                        or reason == "stop_request_seq_unknown"):
-                    self.stop_result_seq_mismatch += 1
+                if (reason.startswith("stop_id_mismatch")
+                        or reason == "stop_id_unknown"):
+                    self.stop_result_id_mismatch += 1
                 else:
                     self.stop_result_before_request += 1
-                self._note("STOP_RESULT_REJECTED reason=%s seq=%d path=%s"
-                           % (reason, seq, path))
+                self._note("STOP_RESULT_REJECTED reason=%s stop_id=%d "
+                           "path=%s" % (reason, stop_id, path))
                 return
             self.stop_result_seen = True
             self.stop_delivered = delivered == 1
             self.stop_stationary = stationary == 1
             self.stop_send_path = path
+            # request_seq/completed_seq 保留控制器原义，仅记录，不用于
+            # 猜号或配对。
             self._note(
-                "STOP_RESULT seq=%d delivered=%d stationary=%d path=%s"
-                % (seq, delivered, stationary, path)
+                "STOP_RESULT stop_id=%d request_seq=%d completed_seq=%d "
+                "delivered=%d stationary=%d path=%s"
+                % (stop_id, request_seq, completed_seq,
+                   delivered, stationary, path)
             )
             return
 
@@ -725,7 +732,7 @@ class _Session:
                 direction_fault=self.direction_fault,
                 stop_result_seen=self.stop_result_seen,
                 stop_result_before_request=self.stop_result_before_request,
-                stop_result_seq_mismatch=self.stop_result_seq_mismatch,
+                stop_result_id_mismatch=self.stop_result_id_mismatch,
                 stop_delivered=self.stop_delivered,
                 stop_stationary=self.stop_stationary,
                 stop_send_path=self.stop_send_path,
@@ -802,8 +809,8 @@ class _Session:
             "STOP_RESULT_SEEN=%d" % (1 if result.stop_result_seen else 0),
             "STOP_RESULT_BEFORE_REQUEST=%d"
             % result.stop_result_before_request,
-            "STOP_RESULT_SEQ_MISMATCH=%d"
-            % result.stop_result_seq_mismatch,
+            "STOP_RESULT_ID_MISMATCH=%d"
+            % result.stop_result_id_mismatch,
             "STOP_DELIVERED=%s" % result.stop_delivered,
             "STOP_STATIONARY=%s" % result.stop_stationary,
             "STOP_SEND_PATH=%s" % result.stop_send_path,
