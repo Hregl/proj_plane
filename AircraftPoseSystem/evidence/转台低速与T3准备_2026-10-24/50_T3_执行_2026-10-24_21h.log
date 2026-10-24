@@ -1,0 +1,107 @@
+TOOL turntable_acceptance version=1.0.4-C24
+CONFIG dir="验收证据/转台低速与T3准备_2026-10-24/config_lowspeed" summary="验收证据/转台低速与T3准备_2026-10-24/config_lowspeed：7 文件 / 3 相机 / 12 项取默认值 / 4 项告警" protocol=pelco_d_udp port=6666 pelco_address=1 host=masked azimuth=[-180.000,180.000] elevation=[-60.000,60.000] use_speed_control=1 fine_speed=1.200 coarse_speed=1.200 sample_stale_ms=500 stop_timeout_ms=3000 stop_retry_count=2 stop_retry_window_ms=2000
+CONFIG_WARN optical_rig.calibration_mode = "synthetic"：标定文件缺失时改用合成内参，**结果不具测量意义**（仅用于 M1 合成闭环）
+CONFIG_WARN measurement：取帧预算无余量 —— capture_frame_count(5) × 3 路 × grab_timeout_ms(500) = 7500 ms ≥ capture_timeout_ns(1500 ms)，且未计入复制/格式转换/评分 ⇒ CAPTURE 在真实相机上可能被时限截断（取值余量见《待裁决问题汇总》Q-D2）
+CONFIG_WARN measurement.sigma_a/b/c 全为 0：E 项未生效（未标定），评分退化为 Q/F/M —— 结果包中的 predictedErrorCalibrated 将为 false
+CONFIG_WARN measurement.illum_band_edges 均为 0：光照分带未标定，所有光照条件落入同一桶，M_hist 的光照维度暂不可用
+CONFIG_DEFAULT system.run_mode
+CONFIG_DEFAULT turntable.reply_timeout_ms
+CONFIG_DEFAULT turntable.poll_interval_ms
+CONFIG_DEFAULT turntable.stable_read_count
+CONFIG_DEFAULT turntable.stable_threshold_deg
+CONFIG_DEFAULT turntable.arrival_tolerance_deg
+CONFIG_DEFAULT turntable.comm_failure_threshold
+CONFIG_DEFAULT turntable.sample_stale_ms
+CONFIG_DEFAULT turntable.stop_timeout_ms
+CONFIG_DEFAULT turntable.stop_retry_count
+CONFIG_DEFAULT turntable.stop_retry_window_ms
+CONFIG_DEFAULT turntable.stop_backoff_ms
+SPEED_NOTE use_speed_control=1：表 3.65 转速控制；位移 >1.0° 用 coarse_speed=1.200 °/s，否则 fine_speed=1.200 °/s；仅限本轮书面授权范围
+PERMIT scope="TURNTABLE_ACCEPT_20261024_T3_ONLY_3" op=absolute_position allow_stop_at_rest=0 az=[-0.580,-0.460] el=[1.560,3.240] max_displacement=2.000 max_executions=1 valid_from_ms=1792848600000 valid_until_ms=1792855800000 file="验收证据/转台低速与T3准备_2026-10-24/permit_T3_20261024_3.txt"
+SEND_POLICY motion_enabled(acceptance_permit)
+PERMIT_INSTALLED scope="TURNTABLE_ACCEPT_20261024_T3_ONLY_3"
+INITIALIZE...
+NET_OPEN t=0ms port=6666 host=masked
+TX t=0ms n=7 kind=query bytes FF 01 00 51 00 00 52
+RX t=0ms n=7 kind=unknown bytes FF 01 00 59 8C 6A 50
+TX t=0ms n=7 kind=query bytes FF 01 00 53 00 00 54
+RX t=9ms n=7 kind=unknown bytes FF 01 00 5B 01 3F 9C
+TX t=9ms n=7 kind=query bytes FF 01 E0 00 00 00 E1
+RX t=19ms n=7 kind=unknown bytes FF 01 E0 00 00 00 E1
+INIT_OK
+STATE t=19ms az=-0.5400 el=3.1900 motion=IDLE valid=1 fresh=1 cycle=1 txn=0 permit_remaining=1
+DRIVER_SEND cmd="move -0.5200 1.5600"
+USER t=19ms cmd="move -0.5200 1.5600"
+MOVE_REQUEST t=19ms az=-0.5200 el=1.5600 reference_cycle=1 reference_az=-0.5400 reference_el=3.1900 reference_fresh=1 at_motion=IDLE speed_control=1
+MOVE_ACCEPTED accepted=1 seq=1 （true 仅表示已受理，不表示交付或到位）
+DRIVER_NOTE MOVE_ACCEPTED seq=1 trigger_window_reset=1
+STATE t=19ms az=-0.5400 el=3.1900 motion=IDLE valid=1 fresh=1 cycle=1 txn=0 permit_remaining=1
+TX t=19ms n=7 kind=control bytes FF 01 4B 02 8C 6C 46
+RX t=29ms n=7 kind=unknown bytes FF 01 4B 02 8C 6C 46
+TX t=29ms n=7 kind=control bytes FF 01 4D 02 00 9C EC
+RX t=39ms n=7 kind=unknown bytes FF 01 4D 02 00 9C EC
+TX t=89ms n=7 kind=query bytes FF 01 00 51 00 00 52
+RX t=90ms n=7 kind=unknown bytes FF 01 00 59 8C 6A 50
+TX t=90ms n=7 kind=query bytes FF 01 00 53 00 00 54
+RX t=99ms n=7 kind=unknown bytes FF 01 00 5B 01 37 94
+TX t=149ms n=7 kind=query bytes FF 01 00 51 00 00 52
+RX t=150ms n=7 kind=unknown bytes FF 01 00 59 8C 6A 50
+TX t=150ms n=7 kind=query bytes FF 01 00 53 00 00 54
+RX t=159ms n=7 kind=unknown bytes FF 01 00 5B 01 2D 8A
+TX t=209ms n=7 kind=query bytes FF 01 00 51 00 00 52
+RX t=210ms n=7 kind=unknown bytes FF 01 00 59 8C 6A 50
+TX t=210ms n=7 kind=query bytes FF 01 00 53 00 00 54
+RX t=219ms n=7 kind=unknown bytes FF 01 00 5B 01 23 80
+MOTION_CHANGE t=220ms IDLE -> MOVING az=-0.5400 el=2.9100 cycle=4
+CMD_RESULT seq=1 outcome=Delivered msg="两轴指令已交付" delivered_is_arrival=0
+TX t=269ms n=7 kind=query bytes FF 01 00 51 00 00 52
+RX t=270ms n=7 kind=unknown bytes FF 01 00 59 8C 6A 50
+TX t=270ms n=7 kind=query bytes FF 01 00 53 00 00 54
+RX t=279ms n=7 kind=unknown bytes FF 01 00 5B 01 19 76
+DRIVER_NOTE T3_TRIGGER samples=3 tool_t=279ms angle=2.8100 deltas=-0.1000,-0.1000,-0.1000
+DRIVER_NOTE T3_STOP_REQUEST reason=trigger
+DRIVER_SEND cmd="stop"
+DRIVER_NOTE T3_STOP_WRITE write_ok=1
+USER t=279ms cmd="stop"
+STOP_REQUEST t=279ms stop_id=1 at_motion=MOVING cycle=5 az=-0.5400 el=2.8100 fresh=1 txn=1 stop_txn=0
+DRIVER_NOTE STOP_REQUEST stop_id=1
+TX t=279ms n=7 kind=control bytes FF 01 00 00 00 00 01
+STOP_RESULT t=279ms stop_id=1 request_seq=1 completed_seq=1 stop_delivered=1 stop_stationary=0 uncertain=0 stop_txn=1 motion_txn_before=1 send_path=stop_frame_delivered
+DRIVER_NOTE STOP_RESULT stop_id=1 request_seq=1 completed_seq=1 delivered=1 stationary=0 path=stop_frame_delivered
+TX t=329ms n=7 kind=query bytes FF 01 00 51 00 00 52
+RX t=329ms n=7 kind=unknown bytes FF 01 00 00 00 00 01
+RX t=330ms n=7 kind=unknown bytes FF 01 00 59 8C 6A 50
+TX t=330ms n=7 kind=query bytes FF 01 00 53 00 00 54
+RX t=339ms n=7 kind=unknown bytes FF 01 00 5B 01 14 71
+TX t=389ms n=7 kind=query bytes FF 01 00 51 00 00 52
+RX t=390ms n=7 kind=unknown bytes FF 01 00 59 8C 6A 50
+TX t=390ms n=7 kind=query bytes FF 01 00 53 00 00 54
+RX t=399ms n=7 kind=unknown bytes FF 01 00 5B 01 14 71
+TX t=449ms n=7 kind=query bytes FF 01 00 51 00 00 52
+RX t=450ms n=7 kind=unknown bytes FF 01 00 59 8C 6A 50
+TX t=450ms n=7 kind=query bytes FF 01 00 53 00 00 54
+RX t=459ms n=7 kind=unknown bytes FF 01 00 5B 01 14 71
+TX t=509ms n=7 kind=query bytes FF 01 00 51 00 00 52
+RX t=510ms n=7 kind=unknown bytes FF 01 00 59 8C 6A 50
+TX t=510ms n=7 kind=query bytes FF 01 00 53 00 00 54
+RX t=519ms n=7 kind=unknown bytes FF 01 00 5B 01 14 71
+TX t=569ms n=7 kind=query bytes FF 01 00 51 00 00 52
+RX t=570ms n=7 kind=unknown bytes FF 01 00 59 8C 6A 50
+TX t=570ms n=7 kind=query bytes FF 01 00 53 00 00 54
+RX t=579ms n=7 kind=unknown bytes FF 01 00 5B 01 14 71
+TX t=629ms n=7 kind=query bytes FF 01 00 51 00 00 52
+RX t=630ms n=7 kind=unknown bytes FF 01 00 59 8C 6A 50
+TX t=630ms n=7 kind=query bytes FF 01 00 53 00 00 54
+RX t=639ms n=7 kind=unknown bytes FF 01 00 5B 01 13 70
+MOTION_CHANGE t=680ms MOVING -> IDLE az=-0.5400 el=2.7500 cycle=11
+STOP_OBSERVED_STATIONARY stop_txn=1 cycle=11 az=-0.5400 el=2.7500 elapsed_ms=401 （系统观测到反馈角在观测窗口内不变；不是设备 ACK，也不是独立实测静止）
+DRIVER_NOTE STOP_OBSERVED_STATIONARY seen
+DRIVER_SEND cmd="quit"
+USER t=680ms cmd="quit"
+EXIT_REQUEST t=680ms reason=user_or_observe_done
+EXIT_STOP stop_req=2 stop_done=2 delivered=1 stationary=1 uncertain=0 waited_ms=0
+NET_CLOSE t=680ms
+NET_CLOSE t=681ms
+FINAL initialized=1 normal_exit=1 control_frames=3 query_frames=23 unknown_frames=0 stop_delivered=1 stop_stationary=1 uncertain=0 latched=0 first_fault=0
+EXIT_CODE 0
+T3_DRIVER_RESULT ok=1 outcome=triggered exit_code=0 stop_requested=1 stop_write_ok=1 stop_send_count=1 trigger_samples=3 stop_result_seen=1 stop_delivered=True stop_stationary=False eof=1 timed_out=0 forced=0
