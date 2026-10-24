@@ -1,0 +1,15 @@
+test_arrival_before_trigger_is_not_a_motion_stop (__main__.T3DriverTest.test_arrival_before_trigger_is_not_a_motion_stop) ... ok
+test_gap_resets_run_before_trigger (__main__.T3DriverTest.test_gap_resets_run_before_trigger) ... ok
+test_missing_stop_result_is_not_reported_as_delivered (__main__.T3DriverTest.test_missing_stop_result_is_not_reported_as_delivered) ... ok
+test_no_motion_timeout_enters_stop_closeout (__main__.T3DriverTest.test_no_motion_timeout_enters_stop_closeout) ... ok
+test_normal_trigger_sends_exactly_one_stop (__main__.T3DriverTest.test_normal_trigger_sends_exactly_one_stop) ... ok
+test_not_observed_is_reported_as_such (__main__.T3DriverTest.test_not_observed_is_reported_as_such) ... ok
+test_opposite_direction_does_not_trigger (__main__.T3DriverTest.test_opposite_direction_does_not_trigger) ... ok
+test_stale_sample_is_not_used (__main__.T3DriverTest.test_stale_sample_is_not_used) ... ok
+test_wrong_address_is_ignored (__main__.T3DriverTest.test_wrong_address_is_ignored) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 2.723s
+
+OK
+EXIT_CODE 0
