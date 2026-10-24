@@ -8,12 +8,21 @@
   等待工具对每条命令给出 ``ARRIVAL_OBSERVED`` 后才发下一条；
 * 到位判据只采用工具的 ``ARRIVAL_OBSERVED``（设备反馈稳定，
   ``feedback_only=1``）；驱动校验 seq、目标值、fresh 反馈轮次（cycle）
-  不得重复，防止旧样本或错目标被当作本次到位；
+  不得重复，防止旧样本或错目标被当作本次到位；到位等待与事件处理
+  共用同一截止时刻，截止后到达的行不得释放下一条命令；
 * 按目标分组统计：反馈偏差（feedback - target）、均值、总体标准差、
   极差、最大绝对偏差；**不把 A/B 混合统计**；
 * 同时解析工具退出时的 ``REPEAT`` 行做交叉核对；不一致即判失败；
-* 任一步骤失败/超时：不重试定位、不自动回零、不补发运动；若命令已
-  受理且未到位，只发一次 ``stop`` 收尾，再 ``quit`` 收集至 EOF；
+* 任一步骤失败/超时：不重试定位、不自动回零、不补发运动；只要
+  ``move`` 已写入 stdin（即使未收到 ``MOVE_ACCEPTED``，受理状态未知，
+  按可能在途处理）且未到位，只发一次 ``stop`` 收尾，再 ``quit``
+  收集至 EOF；
+* 成功要求工具日志 ``EXIT_CODE 0``、``normal_exit=1`` 且子进程真实
+  ``Popen.returncode == 0``，三者独立核对；
+* 驱动日志写入失败（``OSError``）立即阻止后续定位命令；已发出的
+  运动按“可能在途”进入停止收尾，本次不得报告成功；
+* A/B 至少一个轴上的间距必须严格大于两倍到位容差（默认 τ=0.2°，
+  即 >0.4°），两个目标的到位区间不得在两条轴上同时重叠；
 * 不把设备反馈重复性写成绝对精度、独立物理位置或 1′ 验收。
 
 时间戳为驱动进程读到该行时的 ``time.monotonic()``；工具日志里的
@@ -42,7 +51,7 @@ MOVE_TIMEOUT_S = 20.0
 STOP_WAIT_S = 3.0
 EXIT_TIMEOUT_S = 10.0
 CROSSCHECK_TOL = 5e-4
-DEFAULT_MIN_SEPARATION_DEG = 0.2
+DEFAULT_ARRIVAL_TOLERANCE_DEG = 0.2
 
 STATE_RE = re.compile(r"\bSTATE\b.*\baz=([-+0-9.]+)\s+el=([-+0-9.]+)")
 MOVE_ACCEPTED_RE = re.compile(r"\bMOVE_ACCEPTED\s+accepted=(\d+)\s+seq=(\d+)")
@@ -111,6 +120,7 @@ class T4Result:
     outcome: str
     reason: str
     exit_code: Optional[int]
+    process_returncode: Optional[int]
     log_path: str
     notes_path: str
     visits: List[Visit] = field(default_factory=list)
@@ -141,8 +151,10 @@ class _Pending:
     target_az: float
     target_el: float
     seq: Optional[int] = None
+    sent_at: Optional[float] = None
     accepted_at: Optional[float] = None
     arrival: Optional[Tuple[int, float, float, int, int]] = None
+    sent: bool = False
     rejected: bool = False
     cmd_failed: bool = False
 
@@ -160,6 +172,7 @@ class _Session:
         move_timeout_s: float,
         stop_wait_s: float,
         exit_timeout_s: float,
+        arrival_tolerance_deg: float = DEFAULT_ARRIVAL_TOLERANCE_DEG,
     ) -> None:
         self.command = list(command)
         self.log_path = Path(log_path)
@@ -171,14 +184,18 @@ class _Session:
         self.move_timeout_s = move_timeout_s
         self.stop_wait_s = stop_wait_s
         self.exit_timeout_s = exit_timeout_s
+        self.arrival_tolerance_deg = arrival_tolerance_deg
 
         self.proc: Optional[subprocess.Popen] = None
+        self.process_returncode: Optional[int] = None
         self.log = None
         self.q: "queue.Queue[Tuple[float, str]]" = queue.Queue()
         self.eof = threading.Event()
         self.reader_done = threading.Event()
         self.reader_error: Optional[str] = None
         self.log_error: Optional[str] = None
+        self.arrival_window_open = False
+        self.arrival_deadline: Optional[float] = None
         self.driver_exception: Optional[str] = None
         self.reader: Optional[threading.Thread] = None
 
@@ -240,8 +257,27 @@ class _Session:
                 self.eof.set()
             self.reader_done.set()
 
-    def _handle_line(self, line: str, recv_at: Optional[float] = None) -> None:
+    def _handle_line(self, line: str, recv_at: Optional[float] = None,
+                     cutoff: Optional[float] = None,
+                     apply_state: bool = True) -> None:
         self._write(line)
+        if self.log_error is not None:
+            return
+        if not apply_state:
+            tag = ("LATE_EVENT"
+                   if (cutoff is not None and recv_at is not None and
+                       recv_at > cutoff)
+                   else "DRAINED_AFTER_DEADLINE")
+            self.notes.append(
+                "%s recv_at=%s cutoff=%s line=%r"
+                % (tag, recv_at, cutoff, line.strip()))
+            return
+        if (cutoff is not None and recv_at is not None and
+                recv_at > cutoff):
+            self.notes.append(
+                "LATE_EVENT recv_at=%.6f cutoff=%.6f line=%r"
+                % (recv_at, cutoff, line.strip()))
+            return
 
         m = STATE_RE.search(line)
         if m:
@@ -292,7 +328,12 @@ class _Session:
             elapsed_ms = int(m.group(7))
             feedback_only = int(m.group(8)) == 1
             reason = None
-            if self.pending is None:
+            if not self.arrival_window_open:
+                reason = "after_arrival_window"
+            elif (self.arrival_deadline is None or recv_at is None or
+                  recv_at > self.arrival_deadline):
+                reason = "received_after_deadline"
+            elif self.pending is None:
                 reason = "no_pending_move"
             elif self.pending.arrival is not None:
                 reason = "duplicate_arrival"
@@ -393,11 +434,16 @@ class _Session:
             self.exit_code_line = int(m.group(1))
 
     # ---- 子进程交互 ------------------------------------------------------
-    def _send(self, text: str) -> bool:
+    def _send(self, text: str, require_log: bool = False) -> bool:
         if self.proc is None or self.proc.stdin is None:
             return False
+        self._write('DRIVER_SEND cmd="%s"\n' % text)
+        if require_log and self.log_error is not None:
+            self.notes.append(
+                "LOG_ERROR_BLOCK_SEND cmd=%r %s"
+                % (text, self.log_error))
+            return False
         try:
-            self._write('DRIVER_SEND cmd="%s"\n' % text)
             self.proc.stdin.write(text + "\n")
             self.proc.stdin.flush()
             return True
@@ -406,24 +452,51 @@ class _Session:
                        % (text, type(exc).__name__, exc))
             return False
 
+    def _drain_late(self, cutoff: float) -> None:
+        while True:
+            try:
+                recv_at, line = self.q.get_nowait()
+            except queue.Empty:
+                return
+            self._handle_line(line, recv_at, cutoff=cutoff,
+                              apply_state=False)
+
     def _wait(self, pred: Callable[[], bool], timeout_s: float,
               label: str) -> bool:
         deadline = time.monotonic() + timeout_s
         while True:
+            if self.log_error is not None:
+                self.notes.append(
+                    "LOG_ERROR_WAIT label=%s %s" % (label, self.log_error))
+                return False
+            now = time.monotonic()
+            if now >= deadline:
+                self._drain_late(deadline)
+                self._note("WAIT_TIMEOUT label=%s" % label)
+                return False
             if pred():
                 return True
             if self.eof.is_set() and self.q.empty():
                 self._note("WAIT_EOF label=%s" % label)
                 return pred()
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                self._note("WAIT_TIMEOUT label=%s" % label)
-                return False
+            remaining = deadline - now
             try:
                 recv_at, line = self.q.get(timeout=min(remaining, 0.05))
             except queue.Empty:
                 continue
-            self._handle_line(line, recv_at)
+            processed_at = time.monotonic()
+            self._handle_line(
+                line, recv_at, cutoff=deadline,
+                apply_state=(processed_at <= deadline))
+            # 处理也在截止内完成，才允许本事件满足谓词/释放下一条命令。
+            if processed_at <= deadline and pred():
+                return True
+
+    def _move_remaining(self, timeout_s: float) -> float:
+        p = self.pending
+        if p is None or p.sent_at is None:
+            return timeout_s
+        return max(0.0, p.sent_at + timeout_s - time.monotonic())
 
     def _wait_ack(self, timeout_s: float, label: str) -> bool:
         def pred() -> bool:
@@ -432,7 +505,7 @@ class _Session:
                     (p.seq is not None or p.rejected or p.cmd_failed or
                      self.permit_rejected or self.motion_error or
                      self.fatal_reason is not None))
-        return self._wait(pred, timeout_s, label)
+        return self._wait(pred, self._move_remaining(timeout_s), label)
 
     def _wait_arrival(self, timeout_s: float, label: str) -> bool:
         def pred() -> bool:
@@ -441,7 +514,19 @@ class _Session:
                     (p.arrival is not None or p.rejected or p.cmd_failed or
                      self.permit_rejected or self.motion_error or
                      self.fatal_reason is not None))
-        return self._wait(pred, timeout_s, label)
+
+        # 截止时刻从 move 写入 stdin 起算，不因主线程暂停、事件排队
+        # 或进入等待的早晚而顺延。
+        remaining = self._move_remaining(timeout_s)
+        p = self.pending
+        base = (p.sent_at if p is not None and p.sent_at is not None
+                else time.monotonic())
+        self.arrival_window_open = True
+        self.arrival_deadline = base + timeout_s
+        try:
+            return self._wait(pred, remaining, label)
+        finally:
+            self.arrival_window_open = False
 
     def _pending_failure_reason(self) -> Optional[str]:
         p = self.pending
@@ -489,6 +574,11 @@ class _Session:
                     self.proc.kill()
                 except OSError:
                     pass
+                try:
+                    self.proc.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    pass
+            self.process_returncode = self.proc.returncode
             if self.reader is not None:
                 self.reader.join(timeout=1.0)
             for stream in (self.proc.stdin, self.proc.stdout):
@@ -583,7 +673,8 @@ class _Session:
         reason = ""
         result = T4Result(
             driver_ok=False, outcome="not_started", reason="",
-            exit_code=None, log_path=str(self.log_path),
+            exit_code=None, process_returncode=None,
+            log_path=str(self.log_path),
             notes_path=str(self.notes_path))
 
         try:
@@ -599,17 +690,23 @@ class _Session:
                 daemon=True)
             self.reader.start()
 
-            if not self._wait(
-                    lambda: self.init_ok or self.permit_rejected or
-                    (self.eof.is_set() and self.q.empty()),
-                    self.init_timeout_s, "INIT"):
+            init_seen = self._wait(
+                lambda: self.init_ok or self.permit_rejected or
+                (self.eof.is_set() and self.q.empty()),
+                self.init_timeout_s, "INIT")
+            if self.log_error is not None:
+                outcome, reason = "log_error", self.log_error
+            elif not init_seen:
                 outcome, reason = "init_timeout", "no INIT_OK"
             elif self.permit_rejected:
                 outcome, reason = "permit_rejected", "permit rejected"
             elif not self._wait(lambda: self.state_seen or
                                 (self.eof.is_set() and self.q.empty()),
                                 self.state_timeout_s, "STATE"):
-                outcome, reason = "state_timeout", "no STATE"
+                if self.log_error is not None:
+                    outcome, reason = "log_error", self.log_error
+                else:
+                    outcome, reason = "state_timeout", "no STATE"
 
             if outcome == "complete":
                 sep = max(
@@ -618,24 +715,40 @@ class _Session:
                     abs(self.plan[0][2] - self.plan[1][2]))
                 self._note(
                     "T4_PLAN pattern=%s moves=%d A=(%.4f,%.4f) "
-                    "B=(%.4f,%.4f) separation=%.4f"
+                    "B=(%.4f,%.4f) separation=%.4f "
+                    "arrival_tolerance=%.4f two_tau=%.4f"
                     % ("".join(name for name, _, _ in self.plan),
                        len(self.plan), self.plan[0][1], self.plan[0][2],
-                       self.plan[1][1], self.plan[1][2], sep))
+                       self.plan[1][1], self.plan[1][2], sep,
+                       self.arrival_tolerance_deg,
+                       2.0 * self.arrival_tolerance_deg))
 
             for index, (name, az, el) in enumerate(self.plan, start=1):
                 if outcome != "complete":
+                    break
+                if self.log_error is not None:
+                    outcome, reason = "log_error", self.log_error
                     break
                 self.pending = _Pending(index, name, az, el)
                 self._note(
                     "T4_MOVE index=%d target=%s request=(%.4f,%.4f)"
                     % (index, name, az, el))
-                if not self._send("move %.4f %.4f" % (az, el)):
-                    outcome, reason = "send_failed", "stdin write failed"
+                if not self._send("move %.4f %.4f" % (az, el),
+                                  require_log=True):
+                    if self.log_error is not None:
+                        outcome, reason = "log_error", self.log_error
+                    else:
+                        outcome, reason = "send_failed", "stdin write failed"
                     break
+                self.pending.sent = True
+                self.pending.sent_at = time.monotonic()
                 if not self._wait_ack(self.move_ack_timeout_s,
                                       "MOVE_ACK"):
-                    outcome, reason = "move_ack_timeout", "no MOVE_ACCEPTED"
+                    if self.log_error is not None:
+                        outcome, reason = "log_error", self.log_error
+                    else:
+                        outcome, reason = ("move_ack_timeout",
+                                           "no MOVE_ACCEPTED")
                     break
                 fail = self._pending_failure_reason()
                 if fail is not None:
@@ -643,7 +756,11 @@ class _Session:
                     break
                 if not self._wait_arrival(self.move_timeout_s,
                                           "ARRIVAL"):
-                    outcome, reason = "arrival_timeout", "no ARRIVAL_OBSERVED"
+                    if self.log_error is not None:
+                        outcome, reason = "log_error", self.log_error
+                    else:
+                        outcome, reason = ("arrival_timeout",
+                                           "no ARRIVAL_OBSERVED")
                     break
                 fail = self._pending_failure_reason()
                 if fail is not None:
@@ -669,18 +786,25 @@ class _Session:
 
             if outcome != "complete":
                 p = self.pending
-                if (p is not None and p.seq is not None and
+                if (p is not None and p.sent and not p.rejected and
                         p.arrival is None):
                     self._send_stop_once()
                     self._wait_stop_result()
                 self._quit_and_wait_exit()
             else:
                 self._quit_and_wait_exit()
-                if not self.normal_exit:
+                if self.log_error is not None:
+                    outcome, reason = "log_error", self.log_error
+                elif not self.normal_exit:
                     outcome, reason = "abnormal_exit", "normal_exit!=1"
                 elif self.exit_code_line != 0:
                     outcome = "exit_code"
                     reason = "exit_code=%s" % self.exit_code_line
+                elif self.process_returncode != 0:
+                    outcome = "process_exit_code"
+                    reason = ("Popen.returncode=%s log_exit_code=%s"
+                              % (self.process_returncode,
+                                 self.exit_code_line))
                 elif not self.eof.is_set():
                     outcome, reason = "exit_timeout", "no EOF"
 
@@ -712,6 +836,7 @@ class _Session:
                 driver_ok=(outcome == "complete"),
                 outcome=outcome, reason=reason,
                 exit_code=self.exit_code_line,
+                process_returncode=self.process_returncode,
                 log_path=str(self.log_path), notes_path=str(self.notes_path),
                 visits=list(self.visits), stats=stats,
                 repeat_crosscheck=crosscheck,
@@ -739,6 +864,7 @@ class _Session:
             result = T4Result(
                 driver_ok=False, outcome=outcome, reason=reason,
                 exit_code=self.exit_code_line,
+                process_returncode=self.process_returncode,
                 log_path=str(self.log_path), notes_path=str(self.notes_path),
                 visits=list(self.visits),
                 start_state=self.start_state, init_ok=self.init_ok,
@@ -768,9 +894,11 @@ class _Session:
         lines: List[str] = []
         lines.append("# T4 往返重复定位驱动结果")
         lines.append("")
-        lines.append("driver_ok=%d outcome=%s reason=%s exit_code=%s"
+        lines.append("driver_ok=%d outcome=%s reason=%s exit_code=%s "
+                     "process_returncode=%s"
                      % (int(result.driver_ok), result.outcome,
-                        result.reason or "-", result.exit_code))
+                        result.reason or "-", result.exit_code,
+                        result.process_returncode))
         lines.append("elapsed_s=%.3f init_ok=%d state_seen=%d "
                      "move_accepted=%d visits=%d"
                      % (result.elapsed_s, int(result.init_ok),
@@ -835,15 +963,23 @@ class _Session:
 
 def build_plan(a_az: float, a_el: float, b_az: float, b_el: float,
                round_trips: int,
-               min_separation_deg: float = DEFAULT_MIN_SEPARATION_DEG
+               arrival_tolerance_deg: float = DEFAULT_ARRIVAL_TOLERANCE_DEG,
+               min_separation_deg: Optional[float] = None
                ) -> List[Tuple[str, float, float]]:
     if round_trips < 2:
         raise ValueError("round_trips must be >= 2 (A and B each >= 2)")
+    if not math.isfinite(arrival_tolerance_deg) or arrival_tolerance_deg < 0:
+        raise ValueError("arrival_tolerance must be finite and >= 0")
     separation = max(abs(circular_delta_deg(a_az, b_az)), abs(a_el - b_el))
-    if separation <= min_separation_deg:
+    required = 2.0 * arrival_tolerance_deg
+    if min_separation_deg is not None:
+        required = max(required, min_separation_deg)
+    # 严格“大于”：吸收浮点表示误差，恰好等于 2τ 仍视为区间重叠。
+    if separation <= required + 1e-9:
         raise ValueError(
-            "A/B separation %.4f deg <= min_separation %.4f deg"
-            % (separation, min_separation_deg))
+            "A/B separation %.4f deg <= required %.4f deg "
+            "(2*arrival_tolerance=%s)"
+            % (separation, required, arrival_tolerance_deg))
     plan: List[Tuple[str, float, float]] = [("A", a_az, a_el)]
     for _ in range(round_trips):
         plan.append(("B", b_az, b_el))
@@ -862,6 +998,7 @@ def run_driver(
     move_timeout_s: float = MOVE_TIMEOUT_S,
     stop_wait_s: float = STOP_WAIT_S,
     exit_timeout_s: float = EXIT_TIMEOUT_S,
+    arrival_tolerance_deg: float = DEFAULT_ARRIVAL_TOLERANCE_DEG,
 ) -> T4Result:
     session = _Session(
         command=command, log_path=log_path, notes_path=notes_path,
@@ -869,7 +1006,8 @@ def run_driver(
         state_timeout_s=state_timeout_s,
         move_ack_timeout_s=move_ack_timeout_s,
         move_timeout_s=move_timeout_s, stop_wait_s=stop_wait_s,
-        exit_timeout_s=exit_timeout_s)
+        exit_timeout_s=exit_timeout_s,
+        arrival_tolerance_deg=arrival_tolerance_deg)
     result = session.run()
     session.write_notes(result)
     return result
@@ -887,9 +1025,11 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--b-el", type=float, required=True, help="B 俯仰")
     parser.add_argument("--round-trips", type=int, default=2,
                         help="A→B→A 往返次数；2 表示 A,B,A,B,A（默认 2）")
-    parser.add_argument("--min-separation", type=float,
-                        default=DEFAULT_MIN_SEPARATION_DEG,
-                        help="A/B 最小间距（默认 0.2°，应不小于到位容差）")
+    parser.add_argument("--arrival-tolerance", type=float,
+                        default=DEFAULT_ARRIVAL_TOLERANCE_DEG,
+                        help="单目标到位容差 τ（默认 0.2°）；A/B 间距须 >2τ")
+    parser.add_argument("--min-separation", type=float, default=None,
+                        help="额外最小间距下限（默认不设；不得低于 2τ）")
     parser.add_argument("--expect-az-min", type=float, default=None)
     parser.add_argument("--expect-az-max", type=float, default=None)
     parser.add_argument("--expect-el-min", type=float, default=None)
@@ -936,7 +1076,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 2
     try:
         plan = build_plan(args.a_az, args.a_el, args.b_az, args.b_el,
-                          args.round_trips, args.min_separation)
+                          args.round_trips, args.arrival_tolerance,
+                          args.min_separation)
     except ValueError as exc:
         print("T4_DRIVER_RESULT ok=0 outcome=invalid_plan reason=%s" % exc)
         return 2
@@ -951,13 +1092,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         move_ack_timeout_s=args.ack_timeout,
         move_timeout_s=args.move_timeout,
         stop_wait_s=args.stop_timeout,
-        exit_timeout_s=args.exit_timeout)
+        exit_timeout_s=args.exit_timeout,
+        arrival_tolerance_deg=args.arrival_tolerance)
     counts = " ".join("%s_n=%d" % (name, st.n)
                       for name, st in sorted(result.stats.items()))
-    print("T4_DRIVER_RESULT ok=%d outcome=%s exit_code=%s visits=%d %s "
+    print("T4_DRIVER_RESULT ok=%d outcome=%s exit_code=%s "
+          "process_returncode=%s visits=%d %s "
           "stop_send_count=%d crosscheck=%d"
           % (int(result.driver_ok), result.outcome, result.exit_code,
-             len(result.visits), counts, result.stop_send_count,
+             result.process_returncode, len(result.visits), counts,
+             result.stop_send_count,
              int(all(result.repeat_crosscheck.values())
                  if result.repeat_crosscheck else 0)))
     return 0 if result.driver_ok else 1

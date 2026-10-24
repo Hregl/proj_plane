@@ -13,14 +13,21 @@
   9. 工具 REPEAT 与驱动统计不一致时判失败；
   10. 工具退出码非 0 判失败；
   11. 目标超出预期包络：不启动工具；
-  12. A/B 相同：不启动工具（避免混合统计）。
+  12. A/B 相同：不启动工具（避免混合统计）；
+  13. 日志 EXIT_CODE 0 但子进程真实退出 3：判失败；
+  14. 日志写入持续 OSError：不发送任何 move，也不报告成功；
+  15. 主线程暂停、到位行在截止后到达：不得接受，也不释放下一条；
+  16. move 已写入但未收到 MOVE_ACCEPTED：按可能在途执行一次 stop；
+  17. A/B 间距不足以区分两个 ±τ 到位区间：不启动工具。
 """
 
 from __future__ import annotations
 
 import os
+import queue
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -156,6 +163,100 @@ class T4DriverTest(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         self.assertEqual(len(result.visits), 5)
 
+    def test_real_process_exit_code_mismatch_fails(self):
+        result, text, notes = self.run_mode("real_exit_3")
+        self.assertFalse(result.driver_ok)
+        self.assertEqual(result.outcome, "process_exit_code")
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.process_returncode, 3)
+        self.assertEqual(len(result.visits), 5)
+        self.assertIn("Popen.returncode=3", notes)
+
+    def test_log_write_error_blocks_all_moves(self):
+        tmp = tempfile.TemporaryDirectory(prefix="t4-driver-test-")
+        self.addCleanup(tmp.cleanup)
+        notes = Path(tmp.name) / "notes.txt"
+        command = [sys.executable, str(FAKE), "--mode", "normal"]
+        result = driver.run_driver(
+            command=command, log_path=Path("/dev/full"),
+            notes_path=notes, plan=PLAN,
+            init_timeout_s=1.0, state_timeout_s=1.0,
+            move_ack_timeout_s=1.0, move_timeout_s=0.5,
+            stop_wait_s=1.0, exit_timeout_s=3.0)
+        self.assertFalse(result.driver_ok)
+        self.assertEqual(result.outcome, "log_error")
+        self.assertEqual(result.move_accepted_count, 0)
+        self.assertEqual(result.stop_send_count, 0)
+        self.assertEqual(len(result.visits), 0)
+        note_text = notes.read_text(encoding="utf-8")
+        self.assertIn("LOG_ERROR", note_text)
+        self.assertIn("move_accepted=0", note_text)
+
+    def test_late_arrival_after_deadline_is_not_accepted(self):
+        tmp = tempfile.TemporaryDirectory(prefix="t4-driver-test-")
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        log = root / "session.log"
+        notes = root / "notes.txt"
+        session = driver._Session(
+            command=[], log_path=log, notes_path=notes,
+            plan=[("A", 0.0, 0.0)], init_timeout_s=1.0,
+            state_timeout_s=1.0, move_ack_timeout_s=1.0,
+            move_timeout_s=1.0, stop_wait_s=1.0,
+            exit_timeout_s=1.0)
+        session.log = log.open("w", encoding="utf-8")
+        self.addCleanup(session.log.close)
+        session.pending = driver._Pending(1, "A", 0.0, 0.0, seq=1)
+
+        class PausedQueue(queue.Queue):
+            def get(self, block=True, timeout=None):
+                time.sleep(0.25)
+                return super().get(block=False)
+
+        session.q = PausedQueue()
+        start = time.monotonic()
+        line = ("ARRIVAL_OBSERVED seq=1 cycle=11 az=0.0000 el=0.0000 "
+                "target=[0.0000,0.0000] elapsed_ms=150 feedback_only=1")
+        session.q.put((start + 0.15, line))
+
+        ok = session._wait(
+            lambda: session.pending.arrival is not None,
+            0.05, "ARRIVAL")
+        self.assertFalse(ok)
+        self.assertIsNone(session.pending.arrival)
+        self.assertTrue(any("LATE_EVENT" in n for n in session.notes))
+
+        # 主线程在进入等待前已暂停：截止时刻仍从 move 写入起算。
+        session.pending.arrival = None
+        session.pending.sent_at = time.monotonic() - 0.20
+        late_recv = session.pending.sent_at + 0.15
+        session.q.put((late_recv, line))
+        ok = session._wait_arrival(0.05, "ARRIVAL")
+        self.assertFalse(ok)
+        self.assertIsNone(session.pending.arrival)
+
+        # 行在截止前收到，但主线程直到截止后才处理：同样不得接受。
+        session.pending.arrival = None
+        session.pending.sent_at = time.monotonic()
+        session.q.put((time.monotonic(), line))
+        ok = session._wait_arrival(0.05, "ARRIVAL")
+        self.assertFalse(ok)
+        self.assertIsNone(session.pending.arrival)
+        self.assertTrue(any("DRAINED_AFTER_DEADLINE" in n
+                            for n in session.notes))
+
+    def test_missing_ack_sends_stop_because_move_may_be_in_flight(self):
+        result, text, notes = self.run_mode(
+            "no_ack", move_ack_timeout_s=0.3)
+        self.assertFalse(result.driver_ok)
+        self.assertEqual(result.outcome, "move_ack_timeout")
+        self.assertEqual(result.stop_send_count, 1)
+        self.assertTrue(result.stop_requested)
+        self.assertTrue(result.stop_result_seen)
+        self.assertEqual(text.count('DRIVER_SEND cmd="move '), 1)
+        self.assertEqual(text.count('DRIVER_SEND cmd="stop"'), 1)
+        self.assertEqual(text.count('DRIVER_SEND cmd="quit"'), 1)
+
     def test_target_outside_expected_envelope_does_not_launch(self):
         tmp = tempfile.TemporaryDirectory(prefix="t4-driver-test-")
         self.addCleanup(tmp.cleanup)
@@ -199,11 +300,38 @@ class T4DriverTest(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertFalse(log.exists())
         self.assertFalse(notes.exists())
-        # 间距 0.03° 小于默认 0.2°：无法从反馈区分两点，也不启动。
+        # 间距 0.03° 小于 2τ=0.4°：无法从反馈区分两点，也不启动。
         rc = driver.main([
             "--tool", sys.executable, "--config", "cfg", "--permit", "p",
             "--a-az", "-0.1500", "--a-el", "0.0500",
             "--b-az", "-0.1200", "--b-el", "0.0500",
+            "--log", str(log), "--notes", str(notes)])
+        self.assertEqual(rc, 2)
+        self.assertFalse(log.exists())
+        self.assertFalse(notes.exists())
+
+    def test_arrival_interval_overlap_does_not_launch(self):
+        tmp = tempfile.TemporaryDirectory(prefix="t4-driver-test-")
+        self.addCleanup(tmp.cleanup)
+        log = Path(tmp.name) / "session.log"
+        notes = Path(tmp.name) / "notes.txt"
+        # τ=0.2° 时两个到位区间各为 ±0.2°；间距 0.3° 与 0.4° 都仍有重叠。
+        for b_az in ("0.3000", "0.4000"):
+            rc = driver.main([
+                "--tool", sys.executable, "--config", "cfg", "--permit", "p",
+                "--a-az", "0.0000", "--a-el", "0.0500",
+                "--b-az", b_az, "--b-el", "0.0500",
+                "--arrival-tolerance", "0.2",
+                "--log", str(log), "--notes", str(notes)])
+            self.assertEqual(rc, 2)
+            self.assertFalse(log.exists())
+            self.assertFalse(notes.exists())
+        # 显式给出更小的 min-separation 也不能放宽 2τ。
+        rc = driver.main([
+            "--tool", sys.executable, "--config", "cfg", "--permit", "p",
+            "--a-az", "0.0000", "--a-el", "0.0500",
+            "--b-az", "0.3000", "--b-el", "0.0500",
+            "--arrival-tolerance", "0.2", "--min-separation", "0.1",
             "--log", str(log), "--notes", str(notes)])
         self.assertEqual(rc, 2)
         self.assertFalse(log.exists())

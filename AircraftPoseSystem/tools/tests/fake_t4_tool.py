@@ -6,6 +6,9 @@
 
 * ``FAKE_T4_OFFSETS_A`` / ``FAKE_T4_OFFSETS_B``：每次到位的反馈偏差，
   逗号分隔，按该目标的访问顺序取用（不足则循环）。
+
+额外反例模式：``no_ack`` 只回 ``MOVE_REQUEST`` 不回 ``MOVE_ACCEPTED``；
+``real_exit_3`` 打印 ``EXIT_CODE 0`` 后以真实退出码 3 退出。
 """
 
 from __future__ import annotations
@@ -87,6 +90,8 @@ class Fake:
         out("MOVE_REQUEST t=10ms az=%.4f el=%.4f reference_cycle=%d "
             "reference_az=-0.1200 reference_el=0.0500 reference_fresh=1 "
             "at_motion=IDLE speed_control=1" % (az, el, self.cycle - 1))
+        if self.mode == "no_ack":
+            return
         out("MOVE_ACCEPTED accepted=1 seq=%d" % self.seq)
         if self.mode == "no_arrival":
             return
@@ -154,6 +159,13 @@ class Fake:
                 % self.seq)
             out("EXIT_CODE 1")
             return 1
+        if self.mode == "real_exit_3":
+            out("FINAL initialized=1 normal_exit=1 control_frames=%d "
+                "query_frames=20 unknown_frames=0 stop_delivered=0 "
+                "stop_stationary=1 uncertain=0 latched=0 first_fault=0"
+                % self.seq)
+            out("EXIT_CODE 0")
+            return 3
         out("FINAL initialized=1 normal_exit=1 control_frames=%d "
             "query_frames=20 unknown_frames=0 stop_delivered=0 "
             "stop_stationary=1 uncertain=0 latched=0 first_fault=0"
