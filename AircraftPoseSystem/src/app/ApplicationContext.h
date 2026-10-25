@@ -363,13 +363,14 @@ public:
 
     /// 关闭转台前是否还需要调用**公开** `stop()`。
     ///
-    /// 内部退出不是新的外部停止请求：若当前运动事务已经有过停止请求/结果
-    /// （包括停止失败、预算已耗尽），再调用公开 `stop()` 会被控制器当作
-    /// 一次新的外部停止并重新武装重试预算，导致“用户停止 3 次 + 退出清理
-    /// 又 3 次”。此时返回 false，交给控制器析构里的 `stop(false)` 沿用
-    /// 既有预算（它不会重新武装，也不会在 socket 关闭后补发）。
+    /// 内部退出不是新的外部停止请求：若当前运动事务已经有过**任何**停止
+    /// 处理（公开 `stop()` 或会话内部的故障收口；含停止失败、预算已耗尽），
+    /// 再调用公开 `stop()` 会被控制器当作一次新的外部停止并重新武装重试
+    /// 预算，导致“停止 3 次 + 退出清理又 3 次”。此时返回 false，交给控制器
+    /// 析构里的 `stop(false)` 沿用既有预算（它不会重新武装，也不会在
+    /// socket 关闭后补发）。
     ///
-    /// 若确有**尚未停止**的活动命令（当前事务尚无任何停止请求），仍返回
+    /// 若确有**尚未停止**的活动命令（当前事务尚无任何停止处理），仍返回
     /// true —— 退出必须收口，不能简单跳过所有停止。虚拟后端等没有并列
     /// 诊断的实现保持既有 `stop()` 契约（返回 true）。
     bool turntableNeedsShutdownStop() const
@@ -385,10 +386,23 @@ public:
             return true;
         }
         const data::TurntableDiagnostics d = diagnostics->diagnostics();
-        const bool stopBelongsToCurrentMotion =
-            d.stopRequestSeq > 0 &&
-            d.stopFactsTransactionId == d.motionTransactionId;
-        return !stopBelongsToCurrentMotion;
+
+        // 判据不能用公开请求序号作唯一前提：故障收口（第一轴已交付、
+        // 第二轴被拒）由会话内部发起停止，`stopRequestSeq` 始终为 0，
+        // 但停止事实已归属当前运动事务；只看序号会让退出再发一轮，
+        // 把已耗尽的停止预算重新武装。
+        //
+        // 有运动事务时：看两类停止（公开 stop() 与故障收口）共用的归属
+        // 戳 —— 它们都在 `performStop()` 入口把 stopFacts 打成当前
+        // motionTransactionId，失败也算。
+        // 尚无运动事务时：只有“确曾请求过公开 stop()”才算已处理；
+        // 初始化默认的 0 == 0 不是停止事实。
+        const bool hasMotionTransaction = d.motionTransactionId > 0;
+        const bool stopAlreadyHandled =
+            hasMotionTransaction
+                ? d.stopFactsTransactionId == d.motionTransactionId
+                : d.stopRequestSeq > 0;
+        return !stopAlreadyHandled;
     }
 
     /// **公开、幂等**的设备关闭契约（C-23 / A3）。

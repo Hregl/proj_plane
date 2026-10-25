@@ -29,6 +29,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -83,6 +84,17 @@ public:
     /// @param measurementActive 测量任务是否正在运行（运行中禁止手动定位）。
     ui::TurntableControlView view(bool measurementActive = false) const;
 
+    /// 仅测试：在“已取得状态快照、尚未用交付事实判定到位”的窗口调用。
+    ///
+    /// 生产代码不设置它。用例在这里注入“worker 恰好于两次读取之间完成
+    /// 本条命令交付”的时序，验证交付不能与提前取得的旧 STABLE 拼接成到位。
+    /// ⚠ 只能在 `poll()` 之前设置；钩子在 `poll()` 持锁期间被调用，**不得**
+    ///   回调本类的 `poll()/view()/requestMove()/requestStop()`（会自锁）。
+    void setStateSnapshotReadHookForTest(std::function<void()> hook)
+    {
+        stateSnapshotReadHookForTest_ = std::move(hook);
+    }
+
 private:
     bool precheckLocked(double azimuthDeg, double elevationDeg,
                         std::string& error) const;
@@ -96,13 +108,18 @@ private:
     const data::TurntableConfig   config_;
     device::ITurntableDiagnostics* diagnostics_ = nullptr;
 
+    /// 仅测试用的读端钩子（见 setStateSnapshotReadHookForTest）。
+    std::function<void()> stateSnapshotReadHookForTest_;
+
     mutable std::mutex mutex_;
 
     // ---- 定位命令 ----
     bool        commandActive_ = false;
     /// 当前命令的两轴是否已由控制器报告 Delivered。
-    /// 到位必须同时满足“当前命令已交付 + 反馈 STABLE + 在容差内”；
-    /// 只看 STABLE 会把上一条命令留下的稳定读数借给尚未发送的新命令。
+    /// 到位必须同时满足“当前命令已交付 + 同一份快照里的 motion 为 STABLE +
+    /// 该快照角度在容差内”；只看 STABLE 会把上一条命令留下的稳定读数借给
+    /// 尚未发送的新命令。交付事实必须**先读**，状态快照必须**后取**，
+    /// 两者的先后顺序不能交换。
     bool        commandDelivered_ = false;
     bool        arrived_       = false;
     bool        leftTolerance_ = false;

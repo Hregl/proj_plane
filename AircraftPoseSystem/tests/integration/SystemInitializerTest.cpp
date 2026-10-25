@@ -2094,6 +2094,103 @@ TEST(SystemInitializerTest, 场景A3e_退出清理收口真实控制器的活动
     EXPECT_EQ(fake->stopSendsAfterClose.load(), 0);
 }
 
+// ---------------------------------------------------------------------------
+// A3f. 故障收口不是公开 stop()：第一轴交付、第二轴被拒，故障停止的
+//      三次发送全部失败。stopRequestSeq 始终为 0，但停止事实已归属
+//      当前运动事务 —— 退出清理不得据此再发一轮（累计 3，不是 6）。
+// ---------------------------------------------------------------------------
+TEST(SystemInitializerTest, 场景A3f_故障收口的停止不得在退出时重新获得预算)
+{
+    using aircraft::device::PelcoDTurntableController;
+    using aircraft::device::test::FakePelcoDevice;
+    using aircraft::device::test::FakePelcoTransport;
+
+    auto fake = std::make_shared<FakePelcoTransport>();
+    FakePelcoDevice dev;
+    dev.transport     = fake.get();
+    dev.snapToTarget  = false;
+    dev.rejectMoveAxis = 2;   // 水平轴交付、垂直轴被拒（部分轴失败）
+    dev.install();
+
+    const auto cfg = pelcoShutdownConfig();
+    auto controller = std::make_unique<PelcoDTurntableController>(cfg, fake);
+    std::string error;
+    ASSERT_TRUE(controller->enableAcceptancePermit(
+        pelcoShutdownPermit(cfg), error)) << error;
+    ASSERT_TRUE(controller->initialize());
+    ASSERT_TRUE(waitForPelco(*controller,
+                             [](const auto& d) { return d.sampleFresh; }))
+        << "未取得新鲜双轴样本";
+
+    // 故障收口的停止发送全部失败：1 次首发 + 2 次重试 = 3 次预算用尽。
+    fake->failStopSends.store(100);
+    aircraft::data::TurntableCommand command;
+    command.azimuthCommand   = 1.0;
+    command.elevationCommand = 1.0;
+    ASSERT_TRUE(controller->move(command));
+
+    const bool faultClosed = waitForPelco(
+        *controller,
+        [](const auto& d) { return d.errorLatched || d.motionUncertain; },
+        5000);
+    ASSERT_TRUE(faultClosed) << "第二轴被拒后没有进入故障收口";
+    EXPECT_TRUE(waitForPelco(
+        *controller,
+        [](const auto& d) { return d.sampleFresh; }))
+        << "故障收口后未继续取得新鲜样本";
+
+    const auto d = controller->diagnostics();
+    EXPECT_EQ(d.stopRequestSeq, 0u)
+        << "故障收口不是公开 stop()，停止请求序号必须仍是 0";
+    EXPECT_GT(d.motionTransactionId, 0u);
+    EXPECT_EQ(d.stopFactsTransactionId, d.motionTransactionId)
+        << "故障收口的停止事实必须归属当前运动事务（失败也算）";
+    EXPECT_EQ(fake->stopSendAttempts.load(), 3)
+        << "故障收口应恰好尝试 1 + stop_retry_count 次";
+
+    {
+        ApplicationContext ctx;
+        ctx.turntable = std::move(controller);
+        EXPECT_FALSE(ctx.turntableNeedsShutdownStop())
+            << "故障收口已经处理过停止，内部退出不应再调用公开 stop()";
+        ctx.shutdownDevices();
+    }
+
+    EXPECT_EQ(fake->stopSendAttempts.load(), 3)
+        << "退出清理重新武装了已耗尽的停止预算（应为 3，不是 6）";
+    EXPECT_EQ(fake->stopSendsAfterClose.load(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// A3g. 初始化默认的事务号（0 == 0）不是停止事实：从未运动过的转台在
+//      退出时仍按既有契约调用一次 stop()（只读下为无帧 no-op）。
+// ---------------------------------------------------------------------------
+TEST(SystemInitializerTest, 场景A3g_默认事务号不得当成停止事实)
+{
+    std::string err;
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    Harness h;
+    auto shared = std::make_shared<ShutdownBudgetState>();
+    // 全部保持默认零值：motionTransactionId = stopFactsTransactionId = 0。
+    h.ctx.turntableFactory =
+        [shared](const aircraft::data::TurntableConfig&,
+                 std::string&) -> std::unique_ptr<
+            aircraft::device::ITurntableController> {
+            auto t = std::make_unique<BudgetAwareTurntable>();
+            t->shared = shared;
+            return t;
+        };
+
+    ASSERT_TRUE(h.build()) << h.init->errorText();
+    EXPECT_TRUE(h.ctx.turntableNeedsShutdownStop())
+        << "0 == 0 只是初始默认值，不能当成“本事务已停止”";
+    h.init->shutdown();
+    EXPECT_EQ(shared->stopCalls, 1)
+        << "从未运动过也不得跳过既有 stop() 契约";
+    EXPECT_TRUE(h.ctx.turntable == nullptr);
+}
+
 // ===========================================================================
 //  场景 S：run_mode=simulation —— 同一合成场景贯穿生产链
 //

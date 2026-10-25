@@ -387,10 +387,14 @@ void TurntableControlService::updateCommandLocked(bool& needStop)
         return;
     }
 
-    const data::TurntableState state = controller_.state();
-
     if (diagnostics_ != nullptr)
     {
+        // ---- 先读交付/故障事实，再读状态快照（顺序不可交换）----
+        //
+        // 反序（先 `state()` 后 `diagnostics()`）时，worker 可能正好在两
+        // 次读取之间完成本条命令的交付：提前取得的**上一条命令留下的
+        // STABLE** 会被后取到的 Delivered 认证成一次假的“反馈已到位”，
+        // 而此时控制器实际上已经在 MOVING。
         const data::TurntableDiagnostics d = diagnostics_->diagnostics();
         if (d.errorLatched || d.motionUncertain)
         {
@@ -464,11 +468,22 @@ void TurntableControlService::updateCommandLocked(bool& needStop)
             }
         }
 
-        const bool fresh = d.sampleFresh && d.sample.valid;
+        // 交付事实确认之后再取状态快照：这份 `state` 不会早于它所依赖的
+        // 交付结果。到位判据里的 motion 与角度必须来自**同一份**快照 ——
+        // 不能一边用 `state` 的 motion、一边用另一次读取的样本角度。
+        const data::TurntableState state = controller_.state();
+        if (stateSnapshotReadHookForTest_)
+        {
+            // 仅测试：把读端停在“已取到状态快照、尚未用交付事实判定”的
+            // 窗口，由用例在此注入“worker 恰于此处完成交付”，验证交付
+            // 不得与提前取得的旧 STABLE 拼接到位。
+            stateSnapshotReadHookForTest_();
+        }
+
         const bool inTolerance =
-            fresh && withinTolerance(d.sample.azimuth, d.sample.elevation,
-                                     targetAz_, targetEl_,
-                                     config_.arrivalToleranceDeg);
+            withinTolerance(state.azimuth, state.elevation,
+                            targetAz_, targetEl_,
+                            config_.arrivalToleranceDeg);
         if (commandActive_ && commandDelivered_ &&
             state.motion == data::TurntableMotionState::STABLE &&
             inTolerance)
@@ -478,9 +493,10 @@ void TurntableControlService::updateCommandLocked(bool& needStop)
             commandStage_ = ui::TurntableCommandStage::Arrived;
             commandStageText_ = commandStageName(commandStage_);
             commandDetail_ =
-                "新鲜双轴样本满足到位容差与 STABLE；仅设备反馈，非独立物理位置";
+                "同一份新鲜双轴样本满足到位容差与 STABLE；仅设备反馈，非独立物理位置";
         }
-        else if (!commandActive_ && arrived_ && !leftTolerance_ && fresh &&
+        else if (!commandActive_ && arrived_ && !leftTolerance_ &&
+                 state.motion != data::TurntableMotionState::ERROR &&
                  !inTolerance)
         {
             leftTolerance_ = true;
@@ -492,6 +508,9 @@ void TurntableControlService::updateCommandLocked(bool& needStop)
     else
     {
         // 虚拟后端：move() 受理即执行，state() 是唯一反馈。
+        // 无并列诊断接口 ⇒ 不存在“交付事实”可读，运动与角度都取自
+        // 同一份 state 快照（本分支判据不变）。
+        const data::TurntableState state = controller_.state();
         if (state.motion == data::TurntableMotionState::ERROR)
         {
             commandActive_ = false;

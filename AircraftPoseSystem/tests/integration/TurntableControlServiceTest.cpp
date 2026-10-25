@@ -20,7 +20,9 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <string>
@@ -341,6 +343,86 @@ TEST(TurntableControlServiceTest, 排队中的新命令不得借用上一条STAB
     EXPECT_FALSE(arrived.busy);
     EXPECT_TRUE(arrived.positioningEnabled);
     EXPECT_NEAR(arrived.azimuth, 1.1, kAngleEpsilon);
+}
+
+// ---------------------------------------------------------------------------
+// 2c. 交付恰好在“取得状态快照之后、读取交付结果之前”完成时，
+//     不得把旧 STABLE 与刚出现的 Delivered 拼接成“反馈已到位”。
+//
+//     这是 2b 的另一个窗口：2b 挡的是“始终未交付”，本用例挡的是
+//     “两次读取之间完成交付”。修法是先读交付事实、后取状态快照，
+//     并用同一份快照的 motion 与角度判定。
+// ---------------------------------------------------------------------------
+TEST(TurntableControlServiceTest, 两次读取之间完成的交付不得与旧STABLE拼接到位)
+{
+    Fixture f(/*snapToTarget=*/true, /*commFailureThreshold=*/1000,
+              /*sampleStaleMs=*/5000);
+    ASSERT_TRUE(f.waitConnected());
+
+    std::string error;
+    ASSERT_TRUE(f.moveAndWait(1.0, 0.0, Stage::Arrived, error)) << error;
+
+    // 把 worker 停在下一帧发送上：第二条命令只进命令槽，反馈仍是
+    // 第一条留下的 STABLE（1.0°），且它距新目标 1.1° 在 0.2° 容差内。
+    f.fake->holdSends();
+    const int heldBefore = f.fake->heldSendEntries.load();
+    const auto holdDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (f.fake->heldSendEntries.load() == heldBefore &&
+           std::chrono::steady_clock::now() < holdDeadline)
+    {
+        f.service->poll();
+        sleepMs(2);
+    }
+    ASSERT_GT(f.fake->heldSendEntries.load(), heldBefore)
+        << "worker 没有停在发送上，无法构造排队窗口";
+
+    ASSERT_TRUE(f.service->requestMove(1.1, 0.0, error)) << error;
+    f.service->poll();
+    ASSERT_EQ(f.service->view().commandStage, Stage::Accepted);
+
+    // 在“已取得状态快照、尚未用交付事实判定”的窗口里放行 worker，
+    // 并等它真正把第二条命令报告为 Delivered。
+    std::atomic<int> injections{0};
+    f.service->setStateSnapshotReadHookForTest([&] {
+        if (injections.fetch_add(1) != 0)
+        {
+            return;
+        }
+        f.fake->releaseSends();
+        const auto deliveredDeadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (std::chrono::steady_clock::now() < deliveredDeadline)
+        {
+            const data::TurntableDiagnostics d = f.controller->diagnostics();
+            if (d.lastCommandSeq >= 2 &&
+                d.lastCommandOutcome == data::TurntableCommandOutcome::Delivered)
+            {
+                return;
+            }
+            sleepMs(1);
+        }
+        ADD_FAILURE() << "注入窗口内第二条命令没有被报告为 Delivered";
+    });
+
+    f.service->poll();   // 状态是旧的 STABLE；交付在这之后才完成
+    f.service->setStateSnapshotReadHookForTest(nullptr);
+
+    const ui::TurntableControlView during = f.service->view();
+    EXPECT_NE(during.commandStage, Stage::Arrived)
+        << "把旧 STABLE（1.0°）与两次读取之间才完成的交付拼成了到位："
+        << during.commandDetail;
+    EXPECT_TRUE(during.busy) << "交付刚完成、尚未观测到位，必须保持 busy";
+    EXPECT_FALSE(during.positioningEnabled);
+
+    // 正常对照：交付被观察到之后，本条命令仍应正常到位。
+    ASSERT_TRUE(f.pump(
+        [](const ui::TurntableControlView& v) {
+            return v.commandStage == Stage::Arrived &&
+                   std::fabs(v.azimuth - 1.1) < 1e-6;
+        },
+        3000)) << f.service->view().commandDetail;
+    EXPECT_FALSE(f.service->view().busy);
 }
 
 // ---------------------------------------------------------------------------
