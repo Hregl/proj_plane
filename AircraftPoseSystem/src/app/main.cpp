@@ -62,6 +62,8 @@
 #include "app/ApplicationContext.h"
 #include "app/SystemInitializer.h"
 #include "data/MonotonicClock.h"
+#include "data/TurntableAcceptancePermit.h"
+#include "infrastructure/config/TurntablePermitFile.h"
 #include "ui/MainWindow.h"
 #include "ui/MeasurementView.h"
 
@@ -70,6 +72,23 @@ namespace
 
 /// 界面刷新节拍，ms。取值理由见文件头。
 constexpr int kTickIntervalMs = 16;
+
+/// 受控转台面板刷新节拍，ms。比测量节拍慢，避免每 16 ms 取诊断快照；
+/// 但仍远小于停止观测窗口，操作者能看到阶段推进。
+constexpr int kTurntableViewIntervalMs = 100;
+
+void logWarning(aircraft::app::ApplicationContext& ctx,
+                const std::string& message)
+{
+    if (ctx.logger)
+    {
+        ctx.logger->warn("app", message);
+    }
+    else
+    {
+        std::fprintf(stderr, "[WARN ] [app] %s\n", message.c_str());
+    }
+}
 
 }  // namespace
 
@@ -89,14 +108,47 @@ int main(int argc, char* argv[])
     QApplication::setApplicationName(QStringLiteral("AircraftPoseSystem"));
     QApplication::setApplicationVersion(QStringLiteral("2.1"));
 
-    // ---- 配置目录 ----
-    // 允许 `AircraftPoseSystem /path/to/config` 指定，默认相对当前目录的
-    // "config"。现场部署时用绝对路径（见 config/system.yaml 的书写约定：
-    // 从不同目录启动会让日志落到不同地方，排障前先要花时间找文件）。
+    // ---- 命令行 ----
+    //   AircraftPoseSystem [配置目录] [--permit <许可文件>]
+    //
+    // 配置目录默认相对当前目录的 "config"。现场部署时用绝对路径
+    // （见 config/system.yaml 的书写约定：从不同目录启动会让日志落到
+    // 不同地方，排障前先要花时间找文件）。
+    //
+    // `--permit` 是**显式的操作员动作**：只有给出该参数时才会安装
+    // 实机验收运动许可。config/ 里没有任何键能打开运动门禁。
     std::string configDir = "config";
-    if (argc > 1 && argv[1] != nullptr && argv[1][0] != '\0')
+    std::string permitPath;
+    bool configDirGiven = false;
+    for (int i = 1; i < argc; ++i)
     {
-        configDir = argv[1];
+        const std::string arg = (argv[i] != nullptr) ? argv[i] : "";
+        if (arg == "--permit")
+        {
+            if (i + 1 >= argc || argv[i + 1] == nullptr ||
+                argv[i + 1][0] == '\0')
+            {
+                std::fprintf(stderr, "错误：--permit 需要一个许可文件路径\n");
+                return 2;
+            }
+            permitPath = argv[++i];
+        }
+        else if (arg.rfind("--", 0) == 0)
+        {
+            std::fprintf(stderr, "错误：未知选项 %s\n", arg.c_str());
+            return 2;
+        }
+        else if (!configDirGiven)
+        {
+            configDir = arg;
+            configDirGiven = true;
+        }
+        else
+        {
+            std::fprintf(stderr, "错误：只能指定一个配置目录（多余参数 %s）\n",
+                         arg.c_str());
+            return 2;
+        }
     }
 
     // ---- 装配 ----
@@ -105,6 +157,29 @@ int main(int argc, char* argv[])
     // 按依赖方向安排好，免得将来加了清理逻辑才发现反了）。
     aircraft::app::ApplicationContext ctx;
     aircraft::app::SystemInitializer  init(ctx);
+
+    if (!permitPath.empty())
+    {
+        aircraft::data::TurntableAcceptancePermit permit;
+        std::string permitError;
+        if (!aircraft::infrastructure::loadTurntablePermitFile(
+                permitPath, permit, permitError))
+        {
+            std::fprintf(stderr,
+                         "\n启动失败：运动许可文件读取失败：%s\n  文件：%s\n\n",
+                         permitError.c_str(), permitPath.c_str());
+            return 1;
+        }
+        if (!init.enableTurntableMotion(permit, permitError))
+        {
+            std::fprintf(stderr, "\n启动失败：%s\n\n", permitError.c_str());
+            return 1;
+        }
+        // 不打印设备 host；只打印许可范围编号与次数。
+        std::fprintf(stderr,
+                     "已安装验收运动许可：scope=%s，允许绝对定位次数 %d\n",
+                     permit.scopeId.c_str(), permit.maxExecutions);
+    }
 
     if (!init.initialize(configDir))
     {
@@ -143,6 +218,25 @@ int main(int argc, char* argv[])
                      });
     QObject::connect(&window, &aircraft::ui::MainWindow::stopRequested,
                      [&init]() { init.stopMeasurement(); });
+
+    // 受控转台操作：判断与发令都在 app 层，界面只发意图。
+    QObject::connect(
+        &window, &aircraft::ui::MainWindow::turntablePositionRequested,
+        [&ctx, &init, &window](double azimuthDeg, double elevationDeg) {
+            std::string error;
+            if (!init.requestTurntableMove(azimuthDeg, elevationDeg, error))
+            {
+                logWarning(ctx, "转台定位未受理：" + error);
+            }
+            // 立即刷新，避免"按了没反应"——阶段/原因由快照显示。
+            window.setTurntableControlView(init.turntableControlView());
+        });
+    QObject::connect(
+        &window, &aircraft::ui::MainWindow::turntableStopRequested,
+        [&init, &window]() {
+            init.requestTurntableStop();
+            window.setTurntableControlView(init.turntableControlView());
+        });
 
     QTimer ticker;
 
@@ -193,9 +287,19 @@ int main(int argc, char* argv[])
     });
     ticker.start(kTickIntervalMs);
 
+    // 受控转台面板刷新（连接/样本/阶段/停止结果）。
+    QTimer turntableViewTimer;
+    QObject::connect(&turntableViewTimer, &QTimer::timeout,
+                     [&init, &window]() {
+                         window.setTurntableControlView(
+                             init.turntableControlView());
+                     });
+    turntableViewTimer.start(kTurntableViewIntervalMs);
+
     // 首屏：立刻把"就绪 / 特征库缺失 / 降级"这些启动结论显示出来，
     // 而不是等第一拍（16 ms 后）—— 启动告警越早可见越好。
     window.setMeasurementView(init.view());
+    window.setTurntableControlView(init.turntableControlView());
 
     // ---- 启动结论（终端侧）----
     // 与日志文件双写：现场可能没有终端，开发期可能不看日志文件。

@@ -59,6 +59,7 @@
 #include "algorithm/model/TargetModelManager.h"
 #include "algorithm/pipeline/PosePipeline.h"
 #include "algorithm/scale/TargetScaleEstimator.h"
+#include "app/TurntableControlService.h"
 #include "application/MeasurementController.h"
 #include "device/camera/ICameraBackend.h"
 #include "device/camera/MultiCameraManager.h"
@@ -379,6 +380,13 @@ public:
         }
         devicesShutdown_ = true;
 
+        // 控制服务持有转台引用且可能有一个停止线程；必须先于转台销毁。
+        if (turntableControl)
+        {
+            turntableControl->shutdown();
+            turntableControl.reset();
+        }
+
         // 转台：停止（只读下为无帧 no-op）后销毁 —— 析构 join worker、
         // 关闭 socket。必须在相机之前：它持有独立的 worker 线程。
         if (turntable)
@@ -480,6 +488,11 @@ public:
     /// 5. 触发与转台。
     std::unique_ptr<device::VirtualTriggerController> trigger;
     std::unique_ptr<device::ITurntableController>     turntable;
+
+    /// 5b. 主程序受控转台操作入口（预检 + 阶段呈现 + 停止收口）。
+    ///     **不是**第二套控制器：发送/门禁/停止屏障仍全部在 turntable 内。
+    ///     声明在 turntable 之后 ⇒ 析构时先于 turntable 销毁。
+    std::unique_ptr<TurntableControlService> turntableControl;
 
     /// 6. 预览（注入 rig 用于显示焦段与校验可用性）。
     std::unique_ptr<preview::PreviewManager> preview;

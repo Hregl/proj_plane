@@ -139,6 +139,20 @@ struct TurntableDiagnostics
     /// 许可的验收范围编号（空 = 未安装）。“,”不参与任何判据，
     /// 只用于现场记录与证据归属。
     std::string acceptancePermitScope;
+
+    /// 许可允许的目标范围与单条位移上限（未安装时为 0）。
+    ///
+    /// ⚠ 这些字段只是**许可内容的只读快照**，不改变任何判据：
+    ///    真正放行/拒绝仍由 `PelcoDSession::acceptancePermitAllows()`
+    ///    在发送前核对。主程序用它们做“按下定位前的即时预检”，
+    ///    让越界目标在进入命令槽之前就被拒绝，而不是先显示“已受理”
+    ///    再异步显示“失败”。两者不一致时以会话判据为准。
+    bool acceptancePermitHasAbsolutePosition = false;
+    double acceptancePermitAzimuthMinDeg = 0.0;
+    double acceptancePermitAzimuthMaxDeg = 0.0;
+    double acceptancePermitElevationMinDeg = 0.0;
+    double acceptancePermitElevationMaxDeg = 0.0;
+    double acceptancePermitMaxDisplacementDeg = 0.0;
 };
 
 }  // namespace data

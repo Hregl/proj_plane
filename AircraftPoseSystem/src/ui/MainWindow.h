@@ -52,6 +52,7 @@
 #include "widgets/ImageViewer.h"
 #include "widgets/PosePanel.h"
 #include "widgets/StatusPanel.h"
+#include "widgets/TurntableControlPanel.h"
 #include "widgets/TurntablePanel.h"
 
 class QTimer;
@@ -98,11 +99,19 @@ public:
     /// 重复传入相同内容无副作用（各面板都是 setText，Qt 自身会短路重绘）。
     void setMeasurementView(const MeasurementView& view);
 
+    /// 显示一份受控转台操作快照（由 app 层的控制服务生成）。
+    /// ui 只显示“受理/交付/到位/故障”等已判定结果，不自行判断。
+    void setTurntableControlView(const TurntableControlView& view);
+
     // ---- 控件访问器（供 009/010 接线）----
     ImageViewer*    viewer()         { return viewer_; }
     PosePanel*      posePanel()      { return posePanel_; }
     StatusPanel*    statusPanel()    { return statusPanel_; }
     TurntablePanel* turntablePanel() { return turntablePanel_; }
+    TurntableControlPanel* turntableControlPanel()
+    {
+        return turntableControlPanel_;
+    }
 
 signals:
     /// 操作者请求开始 / 停止一次测量。
@@ -118,6 +127,11 @@ signals:
     /// 新依赖的连接方式。
     void startRequested();
     void stopRequested();
+
+    /// 操作者请求一次转台绝对定位 / 停止。
+    /// 与 startRequested 同一原则：UI 只表达意图，是否受理由 app 层决定。
+    void turntablePositionRequested(double azimuthDeg, double elevationDeg);
+    void turntableStopRequested();
 
 protected:
     /// 窗口可见性变化时启停取帧（理由见 startPreviewTimer 的注释）。
@@ -156,6 +170,7 @@ private:
     PosePanel*      posePanel_      = nullptr;
     StatusPanel*    statusPanel_    = nullptr;
     TurntablePanel* turntablePanel_ = nullptr;
+    TurntableControlPanel* turntableControlPanel_ = nullptr;
 };
 
 }  // namespace ui

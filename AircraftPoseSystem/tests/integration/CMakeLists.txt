@@ -124,6 +124,7 @@ aps_add_test(test_system_initializer
     SOURCES
         SystemInitializerTest.cpp
         ../../src/app/SystemInitializer.cpp
+        ../../src/app/TurntableControlService.cpp
     DEPENDS
         data
         optical
@@ -163,6 +164,7 @@ aps_add_test(test_qt_simulation_ui
     SOURCES
         QtSimulationUiTest.cpp
         ../../src/app/SystemInitializer.cpp
+        ../../src/app/TurntableControlService.cpp
     DEPENDS
         data
         optical
@@ -176,4 +178,35 @@ aps_add_test(test_qt_simulation_ui
 
 target_compile_definitions(test_qt_simulation_ui PRIVATE
     APS_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
+
+# ----------------------------------------------------------------------------
+#  受控转台操作入口（主程序定位/停止/连续操作）
+#
+#  依据：本批要求“主程序受控连接、定位、停止、报告到位与故障，并完成
+#        连续操作”，以及“剩余故障路径在离线环境补齐”。
+#
+#  ⚠ test_turntable_control_service 用既有 FakePelcoTransport 覆盖
+#    受理/交付/到位、重复命令、许可预检、运动中停止、回显超时、错误
+#    回包、样本过期与退出收尾；**不连接真实 UDP 地址**。
+#  ⚠ test_turntable_control_ui 用 VirtualTurntable + MainWindow 演示
+#    面板输入路径与显示语义；它不是实机证据，停止结果明确显示“无协议帧”。
+# ----------------------------------------------------------------------------
+aps_add_test(test_turntable_control_service
+    SOURCES
+        TurntableControlServiceTest.cpp
+        ../../src/app/TurntableControlService.cpp
+    DEPENDS
+        data
+        device
+)
+
+aps_add_test(test_turntable_control_ui
+    SOURCES
+        TurntableControlUiTest.cpp
+        ../../src/app/TurntableControlService.cpp
+    DEPENDS
+        data
+        device
+        ui
 )

@@ -55,6 +55,12 @@ MainWindow::MainWindow(preview::PreviewManager* preview, QWidget* parent)
     posePanel_      = new PosePanel(this);
     statusPanel_    = new StatusPanel(this);
     turntablePanel_ = new TurntablePanel(this);
+    turntableControlPanel_ = new TurntableControlPanel(this);
+    connect(turntableControlPanel_,
+            &TurntableControlPanel::positionRequested,
+            this, &MainWindow::turntablePositionRequested);
+    connect(turntableControlPanel_, &TurntableControlPanel::stopRequested,
+            this, &MainWindow::turntableStopRequested);
 
     // ---- 布局 ----
     // 左侧图像 + 右侧三块信息面板。9.md §九 的示例是把三个控件平铺进
@@ -67,6 +73,7 @@ MainWindow::MainWindow(preview::PreviewManager* preview, QWidget* parent)
     sideLayout->setContentsMargins(0, 0, 0, 0);
     sideLayout->addWidget(posePanel_);
     sideLayout->addWidget(turntablePanel_);
+    sideLayout->addWidget(turntableControlPanel_);
     sideLayout->addWidget(statusPanel_);
     sideLayout->addStretch(1);
 
@@ -174,6 +181,11 @@ void MainWindow::setMeasurementView(const MeasurementView& view)
     {
         turntablePanel_->clear();
     }
+}
+
+void MainWindow::setTurntableControlView(const TurntableControlView& view)
+{
+    turntableControlPanel_->setView(view);
 }
 
 void MainWindow::startPreviewTimer()

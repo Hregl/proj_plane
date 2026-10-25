@@ -1722,6 +1722,16 @@ data::TurntableDiagnostics PelcoDSession::diagnostics() const
                                       acceptancePermit_.validUntilEpochMs;
         d.acceptancePermitRemaining =
             acceptancePermitRemaining_.load();
+        d.acceptancePermitHasAbsolutePosition =
+            acceptancePermit_.allowAbsolutePosition;
+        d.acceptancePermitAzimuthMinDeg      = acceptancePermit_.azimuthMinDeg;
+        d.acceptancePermitAzimuthMaxDeg      = acceptancePermit_.azimuthMaxDeg;
+        d.acceptancePermitElevationMinDeg =
+            acceptancePermit_.elevationMinDeg;
+        d.acceptancePermitElevationMaxDeg =
+            acceptancePermit_.elevationMaxDeg;
+        d.acceptancePermitMaxDisplacementDeg =
+            acceptancePermit_.maxDisplacementDeg;
     }
 
     {

@@ -75,12 +75,16 @@
 // ============================================================================
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "app/ApplicationContext.h"
 #include "data/ErrorInfo.h"
+#include "data/TurntableAcceptancePermit.h"
+#include "data/TurntableConfig.h"
 #include "ui/MeasurementView.h"
+#include "ui/TurntableControlView.h"
 
 namespace aircraft
 {
@@ -120,6 +124,35 @@ public:
     ///   · 标定文件缺失（calibrationMode == "file" 时）；
     ///   · 相机与标定的图像尺寸不一致（见 .cpp 的说明，此条**只告警不失败**）。
     bool initialize(const std::string& configDir);
+
+    /// 在 `initialize()` **之前**安装实机验收运动许可。
+    ///
+    /// ⚠ 这是显式的操作员动作（主程序 `--permit <file>`），不是配置键：
+    ///   生产 config/ 里没有、也不能有任何键走到这里。
+    /// ⚠ 安装许可只允许发生在启动之前；启动完成后再调用返回 false。
+    ///   许可内容是否与设备/范围一致，仍由 `PelcoDSession` 在安装时
+    ///   逐项校验（本函数不复制那套判据）。
+    bool enableTurntableMotion(
+        const data::TurntableAcceptancePermit& permit, std::string& error);
+
+    /// 请求手动绝对定位。返回 false 表示**未受理**（原因见 error），
+    /// 此时不会调用控制器、不会消耗许可次数。
+    ///
+    /// 测量任务进行中、或上一条定位/停止未结束时拒绝；是否放行由
+    /// `TurntableControlService` 预检与既有会话门禁共同决定。
+    bool requestTurntableMove(double azimuthDeg, double elevationDeg,
+                              std::string& error);
+
+    /// 请求停止：
+    ///   · 测量任务进行中 → 走既有 `stopMeasurement()` 收口；
+    ///   · 否则 → 走受控操作入口的停止（异步调用既有 `stop()`）。
+    void requestTurntableStop();
+
+    /// 生成受控操作面板快照（纯读）。
+    ui::TurntableControlView turntableControlView() const;
+
+    /// 上一条手动定位或停止是否尚未结束。
+    bool turntableControlBusy() const;
 
     /// 推进一拍。返回 false 表示本次无需刷新界面（无变化）。
     ///
@@ -293,6 +326,9 @@ private:
     /// 启动后自检：目录可写、相机数、标定与分辨率是否自洽。
     void selfCheck();
 
+    /// 测量状态机是否处于活动态（IDLE/COMPLETE/FAILED 之外）。
+    bool measurementActive() const;
+
     /// 空闲态补一帧给预览（见文件头说明）。返回是否真的提交了。
     bool pumpIdlePreview(uint64_t nowNs);
 
@@ -314,6 +350,13 @@ private:
 
     /// 上一拍是否已把 recorder 的结果路径报给界面。
     bool lastSaveReported_ = false;
+
+    /// `initialize()` 之前安装的验收运动许可（无则 std::nullopt）。
+    std::optional<data::TurntableAcceptancePermit> turntablePermit_;
+
+    /// 本次装配实际交给转台控制器的配置（可能因许可改为 MotionEnabled）。
+    /// 控制服务必须使用**同一份**配置做预检，不能回头再读 config/。
+    data::TurntableConfig turntableConfig_;
 };
 
 }  // namespace app

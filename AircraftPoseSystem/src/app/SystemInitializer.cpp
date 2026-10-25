@@ -305,9 +305,17 @@ void SystemInitializer::shutdown()
         ctx_.controller->stopMeasurement();
     }
 
-    // 3. 转台：stop()（只读下无帧 no-op）后销毁 —— 析构 join worker、
-    //    关闭 socket。必须早于相机吗？不，但必须早于它自己的 sink
-    //    所依赖的 Logger 与传输对象。
+    // 3a. 控制服务：join 其停止线程（若有），再释放对转台的引用。
+    //     必须先于转台销毁。
+    if (ctx_.turntableControl)
+    {
+        ctx_.turntableControl->shutdown();
+        ctx_.turntableControl.reset();
+    }
+
+    // 3b. 转台：stop()（只读下无帧 no-op）后销毁 —— 析构 join worker、
+    //     关闭 socket。必须早于相机吗？不，但必须早于它自己的 sink
+    //     所依赖的 Logger 与传输对象。
     if (ctx_.turntable)
     {
         ctx_.turntable->stop();
@@ -932,11 +940,44 @@ bool SystemInitializer::buildDevices()
     //
     // ⚠ 未知/未实现协议必须**显式失败**。静默回落 VirtualTurntable 会让
     //   操作者以为在控制真实转台，实际整个测量跑在一台不存在的设备上。
+    //
+    // ⚠ 验收运动许可（`--permit`）只改变本次装配的**副本**：
+    //   配置结构里的 `sendPolicy` 仍是 ReadOnly，ConfigManager 也没有
+    //   任何键能打开它。许可只允许 Pelco-D 真实后端（虚拟转台没有
+    //   协议帧，安装许可没有意义），且必须显式指定。
+    turntableConfig_ = ctx_.config->turntable();
+    if (turntablePermit_)
+    {
+        if (ctx_.turntableFactory)
+        {
+            errorText_ =
+                "验收运动许可不能与注入的转台工厂同时使用："
+                "工厂提供的对象可能不是 Pelco-D 控制器，许可无法被其校验";
+            return false;
+        }
+        if (turntableConfig_.protocol != "pelco_d_udp")
+        {
+            errorText_ =
+                "验收运动许可要求 turntable.protocol=\"pelco_d_udp\"，当前为 \"" +
+                turntableConfig_.protocol +
+                "\"。虚拟转台不发送协议帧，安装许可没有意义；拒绝启动。";
+            return false;
+        }
+        if (turntableConfig_.host.empty())
+        {
+            errorText_ =
+                "验收运动许可要求配置转台 host，但 turntable.yaml 中 host 为空";
+            return false;
+        }
+        // 仅本次进程副本生效；不写回 ConfigManager。
+        turntableConfig_.sendPolicy = data::TurntableSendPolicy::MotionEnabled;
+    }
+
     if (ctx_.turntableFactory)
     {
         std::string factoryError;
         ctx_.turntable =
-            ctx_.turntableFactory(ctx_.config->turntable(), factoryError);
+            ctx_.turntableFactory(turntableConfig_, factoryError);
         if (!ctx_.turntable)
         {
             errorText_ = "转台装配失败：" +
@@ -946,7 +987,7 @@ bool SystemInitializer::buildDevices()
     }
     else
     {
-        const data::TurntableConfig& tcfg = ctx_.config->turntable();
+        const data::TurntableConfig& tcfg = turntableConfig_;
         if (tcfg.protocol == "sdk")
         {
             ctx_.turntable = std::make_unique<device::VirtualTurntable>(tcfg);
@@ -973,6 +1014,21 @@ bool SystemInitializer::buildDevices()
                         logger->warn("device", message);
                     }
                 });
+            }
+            if (turntablePermit_)
+            {
+                // 许可与设备/范围的逐项校验在会话内完成；这里只装。
+                std::string permitError;
+                if (!pelco->enableAcceptancePermit(*turntablePermit_,
+                                                  permitError))
+                {
+                    errorText_ = "验收运动许可安装失败：" + permitError;
+                    return false;
+                }
+                log("app", "转台验收运动许可已安装：scope=" +
+                               turntablePermit_->scopeId + "，次数=" +
+                               std::to_string(turntablePermit_->maxExecutions) +
+                               "（sendPolicy 仅本进程为 MotionEnabled）");
             }
             ctx_.turntable = std::move(pelco);
         }
@@ -1002,6 +1058,24 @@ bool SystemInitializer::buildDevices()
             }
         }
         return false;
+    }
+
+    // ---- 受控操作入口（不新增控制器）-------------------------------------
+    //
+    // 服务只持有同一控制器的引用与同一份配置；真实发送、门禁、停止
+    // 屏障仍在 `ctx_.turntable` 内。诊断接口按可选接收：虚拟后端没有。
+    {
+        device::ITurntableDiagnostics* diagnostics =
+            dynamic_cast<device::ITurntableDiagnostics*>(
+                ctx_.turntable.get());
+        ctx_.turntableControl =
+            std::make_unique<TurntableControlService>(
+                *ctx_.turntable, turntableConfig_, diagnostics);
+        if (!turntablePermit_ &&
+            turntableConfig_.protocol == "pelco_d_udp")
+        {
+            log("app", "转台控制入口：只读模式（无 --permit，运动门禁拒绝定位）");
+        }
     }
 
     // 装配摘要的两个数由**实际对象与设备回报**推出，不写常数（§3.4）：
@@ -1650,6 +1724,13 @@ bool SystemInitializer::tick(uint64_t nowNs)
     }
     ++summary_.ticks;
 
+    // 0) 受控操作入口：推进“受理/交付/到位”阶段与界面期限。
+    //    超时只进入既有停止入口（stop()），不重试、不回零。
+    if (ctx_.turntableControl)
+    {
+        ctx_.turntableControl->poll();
+    }
+
     // 1) 推进状态机。返回值 = 本次是否改变了状态。
     const bool stateAdvanced = ctx_.controller->tick(nowNs);
 
@@ -1734,6 +1815,21 @@ bool SystemInitializer::startMeasurement()
     {
         return false;
     }
+
+    // 连续操作边界：上一条手动定位/停止未结束、或转台仍在运动时，
+    // 不启动测量 —— 否则状态机会与手动命令争同一条命令槽。
+    if (turntableControlBusy())
+    {
+        warn("测量未启动：上一条转台定位或停止尚未结束");
+        return false;
+    }
+    if (ctx_.turntable &&
+        ctx_.turntable->state().motion == data::TurntableMotionState::MOVING)
+    {
+        warn("测量未启动：转台仍在运动（可能有未结束的命令）");
+        return false;
+    }
+
     lastSaveReported_ = false;
 
     const data::MeasurementState before = ctx_.controller->state();
@@ -1761,6 +1857,92 @@ void SystemInitializer::stopMeasurement()
         ctx_.controller->stopMeasurement();
         log("app", "收到测量停止请求（已同时发出转台停止命令）");
     }
+}
+
+// ---------------------------------------------------------------------------
+//  受控转台操作入口
+// ---------------------------------------------------------------------------
+
+bool SystemInitializer::enableTurntableMotion(
+    const data::TurntableAcceptancePermit& permit, std::string& error)
+{
+    error.clear();
+    if (ready_)
+    {
+        error = "启动已完成，不能再安装运动许可";
+        return false;
+    }
+    if (turntablePermit_.has_value())
+    {
+        error = "本次启动已安装过运动许可";
+        return false;
+    }
+    turntablePermit_ = permit;
+    return true;
+}
+
+bool SystemInitializer::measurementActive() const
+{
+    if (!ctx_.controller)
+    {
+        return false;
+    }
+    const data::MeasurementState state = ctx_.controller->state();
+    return state != data::MeasurementState::IDLE &&
+           state != data::MeasurementState::COMPLETE &&
+           state != data::MeasurementState::FAILED;
+}
+
+bool SystemInitializer::requestTurntableMove(double azimuthDeg,
+                                             double elevationDeg,
+                                             std::string& error)
+{
+    error.clear();
+    if (!ready_ || !ctx_.turntableControl)
+    {
+        error = "转台控制入口未就绪";
+        return false;
+    }
+    if (measurementActive())
+    {
+        error = "测量任务进行中，禁止手动定位（先停止测量）";
+        return false;
+    }
+    return ctx_.turntableControl->requestMove(azimuthDeg, elevationDeg, error);
+}
+
+void SystemInitializer::requestTurntableStop()
+{
+    if (!ready_)
+    {
+        return;
+    }
+    if (measurementActive())
+    {
+        // 测量中的停止必须走既有任务收口（SYS-08 的取消路径），
+        // 而不是在它旁边再发一条独立停止。
+        stopMeasurement();
+        return;
+    }
+    if (ctx_.turntableControl)
+    {
+        ctx_.turntableControl->requestStop();
+    }
+}
+
+ui::TurntableControlView SystemInitializer::turntableControlView() const
+{
+    ui::TurntableControlView v;
+    if (!ready_ || !ctx_.turntableControl)
+    {
+        return v;   // available = false → 面板显示占位
+    }
+    return ctx_.turntableControl->view(measurementActive());
+}
+
+bool SystemInitializer::turntableControlBusy() const
+{
+    return ctx_.turntableControl && ctx_.turntableControl->busy();
 }
 
 // ---------------------------------------------------------------------------

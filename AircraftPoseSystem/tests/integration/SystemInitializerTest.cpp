@@ -64,6 +64,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -73,6 +74,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -94,6 +96,7 @@
 #include "data/SyntheticTargetGeometry.h"
 #include "data/TargetModel.h"
 #include "data/TurntableConfig.h"
+#include "data/TurntableMotionState.h"
 #include "device/camera/ICameraBackend.h"
 #include "device/camera/SyntheticTargetScene.h"
 #include "device/camera/VirtualCameraBackend.h"
@@ -2746,6 +2749,88 @@ TEST(SystemInitializerTest, 场景S_机型库不是合成几何时拒绝启动)
     EXPECT_NE(h.init->errorText().find("画面与模型点表不同源"),
               std::string::npos)
         << h.init->errorText();
+}
+
+
+// ===========================================================================
+//  主程序受控转台入口（app 层）
+//
+//  ⚠ 本用例走**真实装配**：config/ 的 virtual 转台 + 本批新增的
+//    SystemInitializer::requestTurntableMove/Stop/View。
+//    它证明“面板背后的 app 入口 → 既有控制器”的接线，不证明实机运动。
+// ===========================================================================
+TEST(SystemInitializerTest, 受控转台入口_受理交付到位与测量互斥)
+{
+    std::string envErr;
+    ASSERT_TRUE(prepareWorkspace(envErr)) << envErr;
+
+    Harness h;
+    ASSERT_TRUE(h.build()) << "真实装配失败：" << h.init->errorText();
+
+    const aircraft::ui::TurntableControlView start =
+        h.init->turntableControlView();
+    ASSERT_TRUE(start.available);
+    EXPECT_EQ(start.connection,
+              aircraft::ui::TurntableConnectionState::Connected);
+    EXPECT_TRUE(start.positioningEnabled);
+    EXPECT_NE(start.permitText.find("虚拟转台"), std::string::npos);
+
+    std::string error;
+    ASSERT_TRUE(h.init->requestTurntableMove(1.0, 0.5, error)) << error;
+    EXPECT_TRUE(h.init->turntableControlBusy());
+    EXPECT_FALSE(h.init->turntableControlView().positioningEnabled);
+
+    auto pumpToArrived = [&h]() {
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            h.init->tick(aircraft::data::monotonicNowNs());
+            if (h.init->turntableControlView().commandStage ==
+                aircraft::ui::TurntableCommandStage::Arrived)
+            {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return false;
+    };
+
+    ASSERT_TRUE(pumpToArrived())
+        << h.init->turntableControlView().commandDetail;
+    EXPECT_EQ(h.init->turntableControlView().commandStage,
+              aircraft::ui::TurntableCommandStage::Arrived);
+    EXPECT_EQ(h.ctx.turntable->state().motion,
+              aircraft::data::TurntableMotionState::STABLE);
+    EXPECT_NEAR(h.ctx.turntable->state().azimuth, 1.0, 1e-6);
+    EXPECT_FALSE(h.init->turntableControlBusy());
+
+    // 连续操作：到位后第二条命令必须受理。
+    ASSERT_TRUE(h.init->requestTurntableMove(-1.0, -0.5, error)) << error;
+    ASSERT_TRUE(pumpToArrived())
+        << h.init->turntableControlView().commandDetail;
+    EXPECT_NEAR(h.ctx.turntable->state().azimuth, -1.0, 1e-6);
+
+    // 手动定位未结束时，测量启动必须被拒（不允许两条链路同时驱动转台）。
+    ASSERT_TRUE(h.init->requestTurntableMove(20.0, 0.0, error)) << error;
+    const std::size_t warningsBefore = h.init->warnings().size();
+    EXPECT_FALSE(h.init->startMeasurement());
+    ASSERT_GT(h.init->warnings().size(), warningsBefore)
+        << "拒绝启动测量没有留下可见原因";
+    EXPECT_NE(h.init->warnings().back().find("转台"), std::string::npos)
+        << h.init->warnings().back();
+
+    // 停止请求走既有入口；虚拟转台无协议帧，结果必须如实标注。
+    h.init->requestTurntableStop();
+    // 与主程序一致：停止请求当拍只显示“已发出”，由下一拍 tick() 收口。
+    EXPECT_EQ(h.init->turntableControlView().stopStage,
+              aircraft::ui::TurntableStopStage::Requested);
+    h.init->tick(aircraft::data::monotonicNowNs());
+    EXPECT_FALSE(h.init->turntableControlBusy());
+    EXPECT_EQ(h.init->turntableControlView().stopStage,
+              aircraft::ui::TurntableStopStage::NoFrame);
+    EXPECT_NE(h.init->turntableControlView().stopDetail.find("不是设备 ACK"),
+              std::string::npos);
 }
 
 }  // namespace
