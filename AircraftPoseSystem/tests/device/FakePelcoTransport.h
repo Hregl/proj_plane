@@ -14,10 +14,12 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -62,6 +64,12 @@ public:
     /// 内部清理（worker 退出、析构）不得在 close() 之后重发停止。
     std::atomic<int> stopSendsAfterClose{0};
 
+    /// 确定性闸门：置位后，`send()` 会停在 `releaseSends()` 之前。
+    /// 用于把 worker 稳定停在一个“尚未处理命令槽”的时刻，
+    /// 同时保留上一轮有效样本与 STABLE，验证排队中的新命令
+    /// 不得借用上一条命令的 STABLE。
+    std::atomic<int> heldSendEntries{0};
+
     std::vector<std::vector<std::uint8_t>> sent;
     std::deque<std::vector<std::uint8_t>> inbox;
 
@@ -91,6 +99,15 @@ public:
     bool send(const std::uint8_t* data, std::size_t size,
               std::string& error) override
     {
+        {
+            std::unique_lock<std::mutex> lock(holdMutex_);
+            if (holdSends_)
+            {
+                ++heldSendEntries;
+                holdCv_.wait(lock, [this] { return !holdSends_; });
+            }
+        }
+
         ++sendCalls;
         const std::vector<std::uint8_t> bytes(data, data + size);
         const bool stopFrame = isStopFrame(bytes);
@@ -192,6 +209,22 @@ public:
         return count;
     }
 
+    /// 让 worker 停在下一帧发送上，直到 release。
+    void holdSends()
+    {
+        std::lock_guard<std::mutex> lock(holdMutex_);
+        holdSends_ = true;
+    }
+
+    void releaseSends()
+    {
+        {
+            std::lock_guard<std::mutex> lock(holdMutex_);
+            holdSends_ = false;
+        }
+        holdCv_.notify_all();
+    }
+
     /// 停止帧：标准指令 Data2=0x00，且 Data1/Data3/Data4 均为 0。
     static bool isStopFrame(const std::vector<std::uint8_t>& bytes)
     {
@@ -219,6 +252,9 @@ public:
 
 private:
     bool opened_ = false;
+    std::mutex              holdMutex_;
+    std::condition_variable holdCv_;
+    bool                    holdSends_ = false;
 };
 
 /// 模拟一台正常转台：查询有回复、定位回显、停止不回显。

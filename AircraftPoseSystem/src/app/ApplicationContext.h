@@ -361,6 +361,36 @@ public:
     ApplicationContext(const ApplicationContext&)            = delete;
     ApplicationContext& operator=(const ApplicationContext&) = delete;
 
+    /// 关闭转台前是否还需要调用**公开** `stop()`。
+    ///
+    /// 内部退出不是新的外部停止请求：若当前运动事务已经有过停止请求/结果
+    /// （包括停止失败、预算已耗尽），再调用公开 `stop()` 会被控制器当作
+    /// 一次新的外部停止并重新武装重试预算，导致“用户停止 3 次 + 退出清理
+    /// 又 3 次”。此时返回 false，交给控制器析构里的 `stop(false)` 沿用
+    /// 既有预算（它不会重新武装，也不会在 socket 关闭后补发）。
+    ///
+    /// 若确有**尚未停止**的活动命令（当前事务尚无任何停止请求），仍返回
+    /// true —— 退出必须收口，不能简单跳过所有停止。虚拟后端等没有并列
+    /// 诊断的实现保持既有 `stop()` 契约（返回 true）。
+    bool turntableNeedsShutdownStop() const
+    {
+        if (!turntable)
+        {
+            return false;
+        }
+        auto* diagnostics =
+            dynamic_cast<device::ITurntableDiagnostics*>(turntable.get());
+        if (diagnostics == nullptr)
+        {
+            return true;
+        }
+        const data::TurntableDiagnostics d = diagnostics->diagnostics();
+        const bool stopBelongsToCurrentMotion =
+            d.stopRequestSeq > 0 &&
+            d.stopFactsTransactionId == d.motionTransactionId;
+        return !stopBelongsToCurrentMotion;
+    }
+
     /// **公开、幂等**的设备关闭契约（C-23 / A3）。
     ///
     /// 顺序：转台（stop → 析构 join worker）→ 触发器（disable → 析构）
@@ -389,9 +419,15 @@ public:
 
         // 转台：停止（只读下为无帧 no-op）后销毁 —— 析构 join worker、
         // 关闭 socket。必须在相机之前：它持有独立的 worker 线程。
+        //
+        // ⚠ 只有当前事务尚无停止请求时才调用公开 stop()：内部退出不得
+        //   重新武装已经耗尽的停止预算（见 turntableNeedsShutdownStop）。
         if (turntable)
         {
-            turntable->stop();
+            if (turntableNeedsShutdownStop())
+            {
+                turntable->stop();
+            }
             turntable.reset();
         }
 

@@ -1,0 +1,86 @@
+Internal ctest changing into directory: /media/hjm/uosData1/proj/proj_plane_control/build-dev
+Test project /media/hjm/uosData1/proj/proj_plane_control/build-dev
+      Start 338: test_system_initializer.SystemInitializerTest.场景A_逐状态采集归属与空闲补帧
+ 1/40 Test #338: test_system_initializer.SystemInitializerTest.场景A_逐状态采集归属与空闲补帧 ....................................   Passed    0.93 sec
+      Start 339: test_system_initializer.SystemInitializerTest.场景B_ALIGN越程当拍FAILED且当拍不补帧
+ 2/40 Test #339: test_system_initializer.SystemInitializerTest.场景B_ALIGN越程当拍FAILED且当拍不补帧 ...............................   Passed    0.10 sec
+      Start 340: test_system_initializer.SystemInitializerTest.场景C_取帧预算键被读到
+ 3/40 Test #340: test_system_initializer.SystemInitializerTest.场景C_取帧预算键被读到 ................................................   Passed    0.01 sec
+      Start 341: test_system_initializer.SystemInitializerTest.场景C_仓库现值的零余量事实必须可见
+ 4/40 Test #341: test_system_initializer.SystemInitializerTest.场景C_仓库现值的零余量事实必须可见 ..............................   Passed    0.01 sec
+      Start 342: test_system_initializer.SystemInitializerTest.场景C_取帧预算余量充足时不告警
+ 5/40 Test #342: test_system_initializer.SystemInitializerTest.场景C_取帧预算余量充足时不告警 ....................................   Passed    0.01 sec
+      Start 343: test_system_initializer.SystemInitializerTest.场景C_grab_timeout_ms为零即启动失败
+ 6/40 Test #343: test_system_initializer.SystemInitializerTest.场景C_grab_timeout_ms为零即启动失败 ....................................   Passed    0.01 sec
+      Start 344: test_system_initializer.SystemInitializerTest.场景C_grab_group_budget_ns为零即启动失败
+ 7/40 Test #344: test_system_initializer.SystemInitializerTest.场景C_grab_group_budget_ns为零即启动失败 ...............................   Passed    0.01 sec
+      Start 345: test_system_initializer.SystemInitializerTest.场景D_全虚拟启动时每个后端恰好初始化一次
+ 8/40 Test #345: test_system_initializer.SystemInitializerTest.场景D_全虚拟启动时每个后端恰好初始化一次 .....................   Passed    0.01 sec
+      Start 346: test_system_initializer.SystemInitializerTest.场景D_显式请求真实后端不可用即启动失败且不静默换虚拟
+ 9/40 Test #346: test_system_initializer.SystemInitializerTest.场景D_显式请求真实后端不可用即启动失败且不静默换虚拟 ...   Passed    0.31 sec
+      Start 347: test_system_initializer.SystemInitializerTest.场景D_缺backend键即启动失败
+10/40 Test #347: test_system_initializer.SystemInitializerTest.场景D_缺backend键即启动失败 ............................................   Passed    0.02 sec
+      Start 348: test_system_initializer.SystemInitializerTest.场景D_启动失败时已建立资源逐路回滚
+11/40 Test #348: test_system_initializer.SystemInitializerTest.场景D_启动失败时已建立资源逐路回滚 ..............................   Passed    0.31 sec
+      Start 349: test_system_initializer.SystemInitializerTest.场景D_真实CAM25取流启动失败即整次启动失败
+12/40 Test #349: test_system_initializer.SystemInitializerTest.场景D_真实CAM25取流启动失败即整次启动失败 ......................   Passed    0.02 sec
+      Start 350: test_system_initializer.SystemInitializerTest.场景D_注入工厂返回空即装配失败且不回落内置工厂
+13/40 Test #350: test_system_initializer.SystemInitializerTest.场景D_注入工厂返回空即装配失败且不回落内置工厂 ............   Passed    0.01 sec
+      Start 351: test_system_initializer.SystemInitializerTest.场景D_注入工厂返回空但不给说明时文本仍可执行
+14/40 Test #351: test_system_initializer.SystemInitializerTest.场景D_注入工厂返回空但不给说明时文本仍可执行 ...............   Passed    0.02 sec
+      Start 352: test_system_initializer.SystemInitializerTest.场景T_未实现协议显式失败不回落虚拟后端
+15/40 Test #352: test_system_initializer.SystemInitializerTest.场景T_未实现协议显式失败不回落虚拟后端 ........................   Passed    0.01 sec
+      Start 353: test_system_initializer.SystemInitializerTest.场景T_pelco_d_udp装配真实后端并如实报告连不上
+16/40 Test #353: test_system_initializer.SystemInitializerTest.场景T_pelco_d_udp装配真实后端并如实报告连不上 ...................   Passed    0.01 sec
+      Start 354: test_system_initializer.SystemInitializerTest.场景T_pekod旧取值给出迁移提示
+17/40 Test #354: test_system_initializer.SystemInitializerTest.场景T_pekod旧取值给出迁移提示 ........................................   Passed    0.01 sec
+      Start 355: test_system_initializer.SystemInitializerTest.场景T_广播地址被配置层拒绝
+18/40 Test #355: test_system_initializer.SystemInitializerTest.场景T_广播地址被配置层拒绝 ..........................................   Passed    0.01 sec
+      Start 356: test_system_initializer.SystemInitializerTest.场景T_注入转台工厂返回空即失败且不回落
+19/40 Test #356: test_system_initializer.SystemInitializerTest.场景T_注入转台工厂返回空即失败且不回落 ........................   Passed    0.01 sec
+      Start 357: test_system_initializer.SystemInitializerTest.场景T_注入工厂优先于协议且对象被实际装配
+20/40 Test #357: test_system_initializer.SystemInitializerTest.场景T_注入工厂优先于协议且对象被实际装配 .....................   Passed    0.01 sec
+      Start 358: test_system_initializer.SystemInitializerTest.场景A3_shutdown停止转台释放触发与相机且幂等
+21/40 Test #358: test_system_initializer.SystemInitializerTest.场景A3_shutdown停止转台释放触发与相机且幂等 .....................   Passed    0.01 sec
+      Start 359: test_system_initializer.SystemInitializerTest.场景A3b_退出清理不把自身当成新的外部停止请求
+22/40 Test #359: test_system_initializer.SystemInitializerTest.场景A3b_退出清理不把自身当成新的外部停止请求 ................   Passed    0.01 sec
+      Start 360: test_system_initializer.SystemInitializerTest.场景A3c_退出清理仍收口尚未停止的活动命令
+23/40 Test #360: test_system_initializer.SystemInitializerTest.场景A3c_退出清理仍收口尚未停止的活动命令 ......................   Passed    0.01 sec
+      Start 361: test_system_initializer.SystemInitializerTest.场景A3d_退出清理不重新武装已耗尽的停止预算
+24/40 Test #361: test_system_initializer.SystemInitializerTest.场景A3d_退出清理不重新武装已耗尽的停止预算 ...................   Passed    0.01 sec
+      Start 362: test_system_initializer.SystemInitializerTest.场景A3e_退出清理收口真实控制器的活动命令
+25/40 Test #362: test_system_initializer.SystemInitializerTest.场景A3e_退出清理收口真实控制器的活动命令 ......................   Passed    0.01 sec
+      Start 363: test_system_initializer.SystemInitializerTest.场景S_合成靶标六点非共面性可复核
+26/40 Test #363: test_system_initializer.SystemInitializerTest.场景S_合成靶标六点非共面性可复核 .................................   Passed    0.01 sec
+      Start 364: test_system_initializer.SystemInitializerTest.场景S_仿真运行模式走通生产链并落盘真值对照
+27/40 Test #364: test_system_initializer.SystemInitializerTest.场景S_仿真运行模式走通生产链并落盘真值对照 ..................   Passed    0.28 sec
+      Start 365: test_system_initializer.SystemInitializerTest.场景S_模型标识相同但点表不同源时拒绝启动
+28/40 Test #365: test_system_initializer.SystemInitializerTest.场景S_模型标识相同但点表不同源时拒绝启动 .....................   Passed    0.01 sec
+      Start 366: test_system_initializer.SystemInitializerTest.场景S_仿真模式拒绝混入真实部件
+29/40 Test #366: test_system_initializer.SystemInitializerTest.场景S_仿真模式拒绝混入真实部件 ....................................   Passed    0.02 sec
+      Start 367: test_system_initializer.SystemInitializerTest.场景S_机型库不是合成几何时拒绝启动
+30/40 Test #367: test_system_initializer.SystemInitializerTest.场景S_机型库不是合成几何时拒绝启动 ..............................   Passed    0.01 sec
+      Start 368: test_system_initializer.SystemInitializerTest.受控转台入口_受理交付到位与测量互斥
+31/40 Test #368: test_system_initializer.SystemInitializerTest.受控转台入口_受理交付到位与测量互斥 ............................   Passed    1.32 sec
+      Start 370: test_turntable_control_service.TurntableControlServiceTest.定位按受理交付到位推进并可连续操作
+32/40 Test #370: test_turntable_control_service.TurntableControlServiceTest.定位按受理交付到位推进并可连续操作 ................   Passed    0.04 sec
+      Start 371: test_turntable_control_service.TurntableControlServiceTest.上一条未结束时拒绝第二条命令
+33/40 Test #371: test_turntable_control_service.TurntableControlServiceTest.上一条未结束时拒绝第二条命令 .........................   Passed    0.01 sec
+      Start 372: test_turntable_control_service.TurntableControlServiceTest.排队中的新命令不得借用上一条STABLE提前到位
+34/40 Test #372: test_turntable_control_service.TurntableControlServiceTest.排队中的新命令不得借用上一条STABLE提前到位 .......   Passed    0.04 sec
+      Start 373: test_turntable_control_service.TurntableControlServiceTest.超出许可范围在发送前被拒且不消耗次数
+35/40 Test #373: test_turntable_control_service.TurntableControlServiceTest.超出许可范围在发送前被拒且不消耗次数 .............   Passed    0.01 sec
+      Start 374: test_turntable_control_service.TurntableControlServiceTest.运动中停止显示帧交付与观测静止
+36/40 Test #374: test_turntable_control_service.TurntableControlServiceTest.运动中停止显示帧交付与观测静止 ......................   Passed    0.03 sec
+      Start 375: test_turntable_control_service.TurntableControlServiceTest.回显超时失败且不自动重试
+37/40 Test #375: test_turntable_control_service.TurntableControlServiceTest.回显超时失败且不自动重试 ...............................   Passed    0.37 sec
+      Start 376: test_turntable_control_service.TurntableControlServiceTest.错误回包失败且不自动重试
+38/40 Test #376: test_turntable_control_service.TurntableControlServiceTest.错误回包失败且不自动重试 ...............................   Passed    0.31 sec
+      Start 377: test_turntable_control_service.TurntableControlServiceTest.样本过期时拒绝定位且不补发定位帧
+39/40 Test #377: test_turntable_control_service.TurntableControlServiceTest.样本过期时拒绝定位且不补发定位帧 ...................   Passed    0.05 sec
+      Start 378: test_turntable_control_service.TurntableControlServiceTest.退出收尾join停止线程且不在close后补发
+40/40 Test #378: test_turntable_control_service.TurntableControlServiceTest.退出收尾join停止线程且不在close后补发 ................   Passed    0.00 sec
+
+100% tests passed, 0 tests failed out of 40
+
+Total Test time (real) =   4.44 sec

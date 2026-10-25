@@ -284,9 +284,10 @@ bool TurntableControlService::requestMove(double azimuthDeg,
     stopStageText_ = stopStageName(stopStage_);
     stopDetail_.clear();
 
-    commandActive_ = true;
-    arrived_       = false;
-    leftTolerance_ = false;
+    commandActive_    = true;
+    commandDelivered_ = false;
+    arrived_          = false;
+    leftTolerance_    = false;
     hasTarget_     = true;
     targetAz_      = azimuthDeg;
     targetEl_      = elevationDeg;
@@ -348,7 +349,8 @@ void TurntableControlService::requestStop()
         stopDetail_ = "停止请求已交给控制器，等待处理结果";
         if (commandActive_)
         {
-            commandActive_ = false;
+            commandActive_    = false;
+            commandDelivered_ = false;
             commandStage_ = ui::TurntableCommandStage::Cancelled;
             commandStageText_ = commandStageName(commandStage_);
             commandDetail_ = "定位命令被停止请求取消";
@@ -437,6 +439,10 @@ void TurntableControlService::updateCommandLocked(bool& needStop)
                 case data::TurntableCommandOutcome::Delivered:
                     if (commandActive_)
                     {
+                        // 只有控制器明确把**本条命令**报告为 Delivered，
+                        // 后续的 STABLE 才能算作它的反馈；否则状态栏可能
+                        // 借用上一条命令留下的稳定读数。
+                        commandDelivered_ = true;
                         commandStage_ =
                             ui::TurntableCommandStage::Delivered;
                         commandStageText_ =
@@ -463,7 +469,8 @@ void TurntableControlService::updateCommandLocked(bool& needStop)
             fresh && withinTolerance(d.sample.azimuth, d.sample.elevation,
                                      targetAz_, targetEl_,
                                      config_.arrivalToleranceDeg);
-        if (commandActive_ && state.motion == data::TurntableMotionState::STABLE &&
+        if (commandActive_ && commandDelivered_ &&
+            state.motion == data::TurntableMotionState::STABLE &&
             inTolerance)
         {
             commandActive_ = false;

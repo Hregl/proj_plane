@@ -58,7 +58,8 @@ void sleepMs(int ms)
 }
 
 data::TurntableConfig makeConfig(bool snapToTarget,
-                                 int commFailureThreshold = 2)
+                                 int commFailureThreshold = 2,
+                                 int sampleStaleMs = 500)
 {
     data::TurntableConfig cfg;
     cfg.protocol         = "pelco_d_udp";
@@ -78,7 +79,7 @@ data::TurntableConfig makeConfig(bool snapToTarget,
     cfg.arrivalToleranceDeg  = 0.2;
     cfg.commFailureThreshold = commFailureThreshold;
     cfg.useSpeedControl      = false;
-    cfg.sampleStaleMs        = 500;
+    cfg.sampleStaleMs        = sampleStaleMs;
     cfg.stopTimeoutMs        = 300;
     cfg.stopRetryCount       = 2;
     cfg.stopRetryWindowMs    = 300;
@@ -143,8 +144,9 @@ struct Fixture
     std::unique_ptr<PelcoDTurntableController> controller;
     std::unique_ptr<TurntableControlService> service;
 
-    explicit Fixture(bool snapToTarget, int commFailureThreshold = 2)
-        : cfg(makeConfig(snapToTarget, commFailureThreshold))
+    explicit Fixture(bool snapToTarget, int commFailureThreshold = 2,
+                     int sampleStaleMs = 500)
+        : cfg(makeConfig(snapToTarget, commFailureThreshold, sampleStaleMs))
     {
         dev.transport = fake.get();
         dev.snapToTarget = snapToTarget;
@@ -270,6 +272,75 @@ TEST(TurntableControlServiceTest, 上一条未结束时拒绝第二条命令)
     EXPECT_EQ(positioningFrames(*f.fake), framesBefore)
         << "被拒的第二条命令不得产生任何定位帧";
     EXPECT_EQ(f.service->view().commandStage, Stage::Rejected);
+}
+
+// ---------------------------------------------------------------------------
+// 2b. 排队中的新命令不得借用上一条命令的 STABLE 提前显示“反馈已到位”
+// ---------------------------------------------------------------------------
+TEST(TurntableControlServiceTest, 排队中的新命令不得借用上一条STABLE提前到位)
+{
+    // commFailureThreshold 调高：空收件箱窗口里不得先锁存通信故障。
+    // sampleStaleMs 调宽：窗口内样本仍须可用于新命令的发送前核对。
+    Fixture f(/*snapToTarget=*/true, /*commFailureThreshold=*/1000,
+              /*sampleStaleMs=*/5000);
+    ASSERT_TRUE(f.waitConnected());
+
+    std::string error;
+    ASSERT_TRUE(f.moveAndWait(1.0, 0.0, Stage::Arrived, error)) << error;
+
+    // 把 worker 确定性停在下一帧发送上：此时第二条命令只进命令槽，
+    // 尚未发送；反馈仍是第一条命令留下的 STABLE（1.0°）。
+    f.fake->holdSends();
+    const int heldBefore = f.fake->heldSendEntries.load();
+    const auto holdDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (f.fake->heldSendEntries.load() == heldBefore &&
+           std::chrono::steady_clock::now() < holdDeadline)
+    {
+        f.service->poll();
+        sleepMs(2);
+    }
+    ASSERT_GT(f.fake->heldSendEntries.load(), heldBefore)
+        << "worker 没有停在发送上，无法构造排队窗口";
+
+    // 新目标 1.1° 距上一条到位值 1.0° 只有 0.1°，在上一条的 0.2°
+    // 到位容差内 —— 这正是“借用上一条 STABLE”会误判的场景。
+    ASSERT_TRUE(f.service->requestMove(1.1, 0.0, error)) << error;
+    f.service->poll();
+
+    const ui::TurntableControlView queued = f.service->view();
+    EXPECT_EQ(queued.commandStage, Stage::Accepted)
+        << "新命令尚未交付，却显示了 " << queued.commandStageText
+        << "（借用了上一条命令的 STABLE）";
+    EXPECT_TRUE(queued.busy) << "未交付/未到位前必须保持 busy";
+    EXPECT_FALSE(queued.positioningEnabled);
+
+    // 下一条定位必须被拒绝；测量启动同样被 busy 拦住。
+    EXPECT_FALSE(f.service->requestMove(1.2, 0.0, error));
+    EXPECT_NE(error.find("上一条定位尚未结束"), std::string::npos) << error;
+    const ui::TurntableControlView measuring =
+        f.service->view(/*measurementActive=*/true);
+    EXPECT_FALSE(measuring.positioningEnabled);
+    EXPECT_NE(measuring.gateText.find("测量任务进行中"), std::string::npos)
+        << measuring.gateText;
+
+    // 正常对照：放行 worker 后，新命令应正常交付并到位。
+    f.fake->releaseSends();
+
+    ASSERT_TRUE(f.pump(
+        [](const ui::TurntableControlView& v) {
+            return v.commandStage == Stage::Delivered;
+        },
+        3000)) << f.service->view().commandDetail;
+    ASSERT_TRUE(f.pump(
+        [](const ui::TurntableControlView& v) {
+            return v.commandStage == Stage::Arrived;
+        },
+        3000)) << f.service->view().commandDetail;
+    const ui::TurntableControlView arrived = f.service->view();
+    EXPECT_FALSE(arrived.busy);
+    EXPECT_TRUE(arrived.positioningEnabled);
+    EXPECT_NEAR(arrived.azimuth, 1.1, kAngleEpsilon);
 }
 
 // ---------------------------------------------------------------------------

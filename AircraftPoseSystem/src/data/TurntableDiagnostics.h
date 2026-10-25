@@ -127,7 +127,8 @@ struct TurntableDiagnostics
     // ⚠ 这些字段只描述“许可本身”，不改变 `workModeTrust`：
     //    安装了许可、甚至成功运动过，`EchoOnly` 仍然如实显示为
     //    `EchoOnly`。许可不把任何观察升级为“协议确认正常”。
-    /// 是否已安装许可（仅验收工具会安装；生产装配不安装）。
+    /// 是否已安装许可（独立验收工具，或主程序显式 `--permit <file>` 的
+    /// 验收入口会安装；默认生产启动与 `config/` 没有安装路径）。
     bool acceptancePermitInstalled = false;
 
     /// 许可是否已过期（按读取该快照时的墙钟判断）。
@@ -136,7 +137,7 @@ struct TurntableDiagnostics
     /// 许可剩余可执行次数（已进入发送阶段即扣减）。
     int acceptancePermitRemaining = 0;
 
-    /// 许可的验收范围编号（空 = 未安装）。“,”不参与任何判据，
+    /// 许可的验收范围编号（空 = 未安装）。它不参与任何判据，
     /// 只用于现场记录与证据归属。
     std::string acceptancePermitScope;
 

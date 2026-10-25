@@ -99,8 +99,9 @@ public:
     std::uint64_t lastAcceptedCommandSeq() const;
 
     /// 安装**仅限本次验收**的运动许可（委托给 session）。
-    /// 必须在 `initialize()` 之前调用；只由独立验收工具使用。
-    /// 生产装配与 `config/` 没有任何路径调用它。
+    /// 必须在 `initialize()` 之前调用；由独立验收工具，或主程序显式
+    /// `--permit <file>` 的验收入口（经 `SystemInitializer`）使用。
+    /// 默认生产启动（不带 `--permit`）与 `config/` 没有调用路径。
     /// ⚠ 安装许可不改变 `sendPolicy`，也不改变 `WorkModeTrust`。
     bool enableAcceptancePermit(
         const data::TurntableAcceptancePermit& permit, std::string& error);

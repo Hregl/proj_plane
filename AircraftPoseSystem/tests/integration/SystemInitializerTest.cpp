@@ -95,17 +95,20 @@
 #include "data/MonotonicClock.h"
 #include "data/SyntheticTargetGeometry.h"
 #include "data/TargetModel.h"
+#include "data/TurntableAcceptancePermit.h"
 #include "data/TurntableConfig.h"
 #include "data/TurntableMotionState.h"
 #include "device/camera/ICameraBackend.h"
 #include "device/camera/SyntheticTargetScene.h"
 #include "device/camera/VirtualCameraBackend.h"
 #include "device/turntable/ITurntableController.h"
+#include "device/turntable/ITurntableDiagnostics.h"
 #include "device/turntable/PelcoDTurntableController.h"
 #include "device/turntable/VirtualTurntable.h"
 #include "infrastructure/FileUtil.h"
 #include "infrastructure/config/ConfigManager.h"
 #include "preview/PreviewQueue.h"
+#include "../device/FakePelcoTransport.h"
 
 #ifndef APS_SOURCE_DIR
 #error "APS_SOURCE_DIR 未定义：本套件需要它定位仓库的 config/ 目录（CMake: target_compile_definitions；shim: DEFS 里的 -D）。"
@@ -1718,6 +1721,115 @@ struct ShutdownTrackingTurntable : aircraft::device::ITurntableController
     }
 };
 
+/// A3b：既计数 stop()，又能给出“停止事实是否属于当前运动事务”。
+/// 用于验证 `SystemInitializer::shutdown()` 的真实调用点。
+struct ShutdownBudgetState
+{
+    int           stopCalls                 = 0;
+    std::uint64_t stopRequestSeq            = 0;
+    std::uint64_t stopFactsTransactionId    = 0;
+    std::uint64_t motionTransactionId       = 0;
+};
+
+struct BudgetAwareTurntable
+    : aircraft::device::ITurntableController,
+      aircraft::device::ITurntableDiagnostics
+{
+    std::shared_ptr<ShutdownBudgetState> shared;
+
+    bool initialize() override { return true; }
+    bool move(const aircraft::data::TurntableCommand&) override { return true; }
+    aircraft::data::TurntableState state() override { return {}; }
+    void stop() override
+    {
+        if (shared)
+        {
+            ++shared->stopCalls;
+        }
+    }
+    aircraft::data::TurntableDiagnostics diagnostics() const override
+    {
+        aircraft::data::TurntableDiagnostics d;
+        if (shared)
+        {
+            d.stopRequestSeq         = shared->stopRequestSeq;
+            d.stopFactsTransactionId = shared->stopFactsTransactionId;
+            d.motionTransactionId    = shared->motionTransactionId;
+        }
+        return d;
+    }
+};
+
+/// 退出清理用例的真实 Pelco 配置：只连 fake transport，不发真实网络帧。
+aircraft::data::TurntableConfig pelcoShutdownConfig()
+{
+    using namespace aircraft::data;
+    TurntableConfig cfg;
+    cfg.protocol             = "pelco_d_udp";
+    cfg.host                 = "127.0.0.1";
+    cfg.port                 = 6666;
+    cfg.pelcoAddress         = 1;
+    cfg.azimuthMin           = -180.0;
+    cfg.azimuthMax           = 180.0;
+    cfg.elevationMin         = -60.0;
+    cfg.elevationMax         = 60.0;
+    cfg.coarseSpeed          = 5.0;
+    cfg.fineSpeed            = 1.2;
+    cfg.replyTimeoutMs       = 20;
+    cfg.pollIntervalMs       = 5;
+    cfg.stableReadCount      = 2;
+    cfg.stableThresholdDeg   = 0.02;
+    cfg.arrivalToleranceDeg  = 0.2;
+    cfg.commFailureThreshold = 1000;
+    cfg.useSpeedControl      = false;
+    cfg.sampleStaleMs        = 500;
+    cfg.stopTimeoutMs        = 300;
+    cfg.stopRetryCount       = 2;     // 1 次首发 + 2 次重试 = 3 次
+    cfg.stopRetryWindowMs    = 300;
+    cfg.stopBackoffMs        = 0;
+    cfg.sendPolicy = aircraft::data::TurntableSendPolicy::MotionEnabled;
+    return cfg;
+}
+
+aircraft::data::TurntableAcceptancePermit pelcoShutdownPermit(
+    const aircraft::data::TurntableConfig& cfg)
+{
+    using namespace aircraft::data;
+    TurntableAcceptancePermit permit;
+    permit.scopeId               = "shutdown-test";
+    permit.deviceHost            = cfg.host;
+    permit.devicePort            = cfg.port;
+    permit.pelcoAddress          = cfg.pelcoAddress;
+    permit.allowAbsolutePosition = true;
+    permit.azimuthMinDeg         = -5.0;
+    permit.azimuthMaxDeg         = 5.0;
+    permit.elevationMinDeg       = -5.0;
+    permit.elevationMaxDeg       = 5.0;
+    permit.maxDisplacementDeg    = 10.0;
+    permit.maxExecutions         = 5;
+    permit.validFromEpochMs      = 1;
+    permit.validUntilEpochMs     = 4102444800000LL;   // 2100-01-01
+    return permit;
+}
+
+/// 等真实控制器进入某个诊断状态；返回 false 表示超时。
+template <typename Predicate>
+bool waitForPelco(aircraft::device::PelcoDTurntableController& controller,
+                  Predicate predicate, int timeoutMs = 2000)
+{
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (predicate(controller.diagnostics()))
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return predicate(controller.diagnostics());
+}
+
 }  // namespace
 
 TEST(SystemInitializerTest, 场景T_注入工厂优先于协议且对象被实际装配)
@@ -1810,6 +1922,176 @@ TEST(SystemInitializerTest, 场景A3_shutdown停止转台释放触发与相机�
     }
 
     // 6. 析构兜底也不得再触发一次（Harness 负责销毁 init 与 ctx）。
+}
+
+// ---------------------------------------------------------------------------
+// A3b. 退出清理沿用停止事实：已有停止请求/结果时不得再调用公开 stop()；
+//      只有“当前事务尚未停止”的活动命令才需要收口。
+// ---------------------------------------------------------------------------
+TEST(SystemInitializerTest, 场景A3b_退出清理不把自身当成新的外部停止请求)
+{
+    std::string err;
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    Harness h;
+    auto shared = std::make_shared<ShutdownBudgetState>();
+    // 当前运动事务已经有停止请求与结果（可能是失败/预算耗尽）。
+    shared->stopRequestSeq         = 1;
+    shared->stopFactsTransactionId = 1;
+    shared->motionTransactionId    = 1;
+    h.ctx.turntableFactory =
+        [shared](const aircraft::data::TurntableConfig&,
+                 std::string&) -> std::unique_ptr<
+            aircraft::device::ITurntableController> {
+            auto t = std::make_unique<BudgetAwareTurntable>();
+            t->shared = shared;
+            return t;
+        };
+
+    ASSERT_TRUE(h.build()) << h.init->errorText();
+    h.init->shutdown();
+
+    EXPECT_EQ(shared->stopCalls, 0)
+        << "内部退出重新调用了公开 stop()（会重新武装已耗尽的预算）";
+    EXPECT_TRUE(h.ctx.turntable == nullptr);
+}
+
+TEST(SystemInitializerTest, 场景A3c_退出清理仍收口尚未停止的活动命令)
+{
+    std::string err;
+    ASSERT_TRUE(prepareWorkspace(err)) << err;
+
+    Harness h;
+    auto shared = std::make_shared<ShutdownBudgetState>();
+    // 停止请求属于更早的运动事务；当前事务（1）没有任何停止结果。
+    shared->stopRequestSeq         = 1;
+    shared->stopFactsTransactionId = 0;
+    shared->motionTransactionId    = 1;
+    h.ctx.turntableFactory =
+        [shared](const aircraft::data::TurntableConfig&,
+                 std::string&) -> std::unique_ptr<
+            aircraft::device::ITurntableController> {
+            auto t = std::make_unique<BudgetAwareTurntable>();
+            t->shared = shared;
+            return t;
+        };
+
+    ASSERT_TRUE(h.build()) << h.init->errorText();
+    h.init->shutdown();
+
+    EXPECT_EQ(shared->stopCalls, 1)
+        << "尚未停止的活动命令必须在退出时收口，不能简单跳过所有停止";
+    EXPECT_TRUE(h.ctx.turntable == nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// A3d. 真实控制器 + fake 传输：用户停止失败已用满 3 次预算，
+//      应用清理不得再发 3 次（累计必须停在 3，不是 6）。
+// ---------------------------------------------------------------------------
+TEST(SystemInitializerTest, 场景A3d_退出清理不重新武装已耗尽的停止预算)
+{
+    using aircraft::device::PelcoDTurntableController;
+    using aircraft::device::test::FakePelcoDevice;
+    using aircraft::device::test::FakePelcoTransport;
+
+    auto fake = std::make_shared<FakePelcoTransport>();
+    FakePelcoDevice dev;
+    dev.transport    = fake.get();
+    dev.snapToTarget = false;
+    dev.install();
+
+    const auto cfg = pelcoShutdownConfig();
+    auto controller = std::make_unique<PelcoDTurntableController>(cfg, fake);
+    std::string error;
+    ASSERT_TRUE(controller->enableAcceptancePermit(
+        pelcoShutdownPermit(cfg), error)) << error;
+    ASSERT_TRUE(controller->initialize());
+
+    ASSERT_TRUE(waitForPelco(*controller,
+                             [](const auto& d) { return d.sampleFresh; }))
+        << "未取得新鲜双轴样本";
+    aircraft::data::TurntableCommand command;
+    command.azimuthCommand   = 1.0;
+    command.elevationCommand = 0.0;
+    ASSERT_TRUE(controller->move(command));
+    ASSERT_TRUE(waitForPelco(
+        *controller, [](const auto& d) {
+            return d.lastCommandOutcome ==
+                   aircraft::data::TurntableCommandOutcome::Delivered;
+        }))
+        << "命令未交付";
+
+    // 用户停止：三次发送全部失败，预算耗尽。
+    fake->failStopSends.store(100);
+    controller->stop();
+    EXPECT_EQ(fake->stopSendAttempts.load(), 3)
+        << "用户停止应恰好尝试 1 + stop_retry_count 次";
+    const auto stopped = controller->diagnostics();
+    EXPECT_TRUE(stopped.motionUncertain);
+    EXPECT_EQ(stopped.stopFactsTransactionId, stopped.motionTransactionId)
+        << "停止失败也属于当前运动事务，退出清理必须识别这一点";
+    EXPECT_GT(stopped.stopRequestSeq, 0u);
+
+    {
+        ApplicationContext ctx;
+        ctx.turntable = std::move(controller);
+        EXPECT_FALSE(ctx.turntableNeedsShutdownStop())
+            << "当前事务已有停止结果，内部退出不应再调用公开 stop()";
+        ctx.shutdownDevices();
+    }
+
+    EXPECT_EQ(fake->stopSendAttempts.load(), 3)
+        << "应用清理重新武装了已耗尽的停止预算（应为 3，不是 6）";
+    EXPECT_EQ(fake->stopSendsAfterClose.load(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// A3e. 正常对照：当前命令从未停止过，退出清理必须调用一次 stop()。
+// ---------------------------------------------------------------------------
+TEST(SystemInitializerTest, 场景A3e_退出清理收口真实控制器的活动命令)
+{
+    using aircraft::device::PelcoDTurntableController;
+    using aircraft::device::test::FakePelcoDevice;
+    using aircraft::device::test::FakePelcoTransport;
+
+    auto fake = std::make_shared<FakePelcoTransport>();
+    FakePelcoDevice dev;
+    dev.transport    = fake.get();
+    dev.snapToTarget = false;
+    dev.install();
+
+    const auto cfg = pelcoShutdownConfig();
+    auto controller = std::make_unique<PelcoDTurntableController>(cfg, fake);
+    std::string error;
+    ASSERT_TRUE(controller->enableAcceptancePermit(
+        pelcoShutdownPermit(cfg), error)) << error;
+    ASSERT_TRUE(controller->initialize());
+    ASSERT_TRUE(waitForPelco(*controller,
+                             [](const auto& d) { return d.sampleFresh; }));
+
+    aircraft::data::TurntableCommand command;
+    command.azimuthCommand   = 1.0;
+    command.elevationCommand = 0.0;
+    ASSERT_TRUE(controller->move(command));
+    ASSERT_TRUE(waitForPelco(
+        *controller, [](const auto& d) {
+            return d.lastCommandOutcome ==
+                   aircraft::data::TurntableCommandOutcome::Delivered;
+        }));
+    ASSERT_EQ(fake->stopSendAttempts.load(), 0)
+        << "尚未请求停止时不应有停止帧";
+
+    {
+        ApplicationContext ctx;
+        ctx.turntable = std::move(controller);
+        EXPECT_TRUE(ctx.turntableNeedsShutdownStop())
+            << "当前事务没有停止结果，退出必须收口";
+        ctx.shutdownDevices();
+    }
+
+    EXPECT_EQ(fake->stopSendAttempts.load(), 1)
+        << "退出清理应对未停止的活动命令发送一次停止帧";
+    EXPECT_EQ(fake->stopSendsAfterClose.load(), 0);
 }
 
 // ===========================================================================

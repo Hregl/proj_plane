@@ -316,9 +316,16 @@ void SystemInitializer::shutdown()
     // 3b. 转台：stop()（只读下无帧 no-op）后销毁 —— 析构 join worker、
     //     关闭 socket。必须早于相机吗？不，但必须早于它自己的 sink
     //     所依赖的 Logger 与传输对象。
+    //
+    // ⚠ 内部退出不是新的外部停止请求：当前事务已经有过停止请求/结果
+    //   （含失败）时不得再调用公开 stop()，否则会重新武装已耗尽的
+    //   停止预算。尚未停止的活动命令仍必须收口。
     if (ctx_.turntable)
     {
-        ctx_.turntable->stop();
+        if (ctx_.turntableNeedsShutdownStop())
+        {
+            ctx_.turntable->stop();
+        }
         ctx_.turntable.reset();
     }
 

@@ -100,6 +100,10 @@ private:
 
     // ---- 定位命令 ----
     bool        commandActive_ = false;
+    /// 当前命令的两轴是否已由控制器报告 Delivered。
+    /// 到位必须同时满足“当前命令已交付 + 反馈 STABLE + 在容差内”；
+    /// 只看 STABLE 会把上一条命令留下的稳定读数借给尚未发送的新命令。
+    bool        commandDelivered_ = false;
     bool        arrived_       = false;
     bool        leftTolerance_ = false;
     bool        hasTarget_     = false;
